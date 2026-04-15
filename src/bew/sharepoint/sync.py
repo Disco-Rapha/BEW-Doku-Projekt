@@ -63,6 +63,11 @@ class SnapshotResult:
     files_failed: int = 0
     errors: list[str] = field(default_factory=list)
 
+    # Einheitliche Property für UI/CLI — Snapshot kennt nur Meta-Updates.
+    @property
+    def files_updated(self) -> int:
+        return self.files_updated_meta
+
 
 @dataclass
 class DeltaResult:
@@ -72,7 +77,14 @@ class DeltaResult:
     files_updated_meta: int = 0      # nur Metadaten/SP-Felder geändert
     files_deleted: int = 0
     folders_upserted: int = 0
+    files_skipped: int = 0           # Delta liefert nur Änderungen → typ. 0
+    files_failed: int = 0
     errors: list[str] = field(default_factory=list)
+
+    # Einheitliche Property für UI/CLI — summiert Content- und Meta-Updates.
+    @property
+    def files_updated(self) -> int:
+        return self.files_updated_content + self.files_updated_meta
 
 
 class SyncError(Exception):
@@ -108,6 +120,19 @@ class SharePointSyncer:
     # ------------------------------------------------------------------
     # Öffentliche Einstiege
     # ------------------------------------------------------------------
+
+    def run(self) -> SnapshotResult | DeltaResult:
+        """Führt den passenden Sync-Modus aus.
+
+        - Ohne gespeicherten `sp_delta_link`: vollständiger Snapshot.
+        - Mit gespeichertem Delta-Link: inkrementeller Delta-Sync.
+
+        Dies ist der empfohlene Einstieg für CLI, UI und Agent — der Aufrufer
+        muss nicht selbst wissen, ob es der erste Lauf ist.
+        """
+        if self._load_delta_link():
+            return self.run_delta()
+        return self.run_snapshot()
 
     def run_snapshot(self) -> SnapshotResult:
         """Vollständiger Metadaten-Scan. Lädt KEINE Dateien herunter.
