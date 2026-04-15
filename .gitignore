@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.python-version
+
+# Environment / Secrets
+.env
+.env.local
+
+# Daten (liegen im Projektordner, aber nicht in Git)
+data/raw/
+data/markdown/
+data/exports/
+
+# Datenbank
+db/*.db
+db/*.db-journal
+db/*.db-wal
+db/*.db-shm
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code — nur lokale Settings ignorieren, shared stuff bleibt im Repo
+.claude/settings.local.json
+
+# Logs
+*.log
