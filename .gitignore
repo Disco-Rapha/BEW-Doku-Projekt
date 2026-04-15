@@ -28,5 +28,12 @@ db/*.db-shm
 # Claude Code — nur lokale Settings ignorieren, shared stuff bleibt im Repo
 .claude/settings.local.json
 
+# MSAL Token-Cache (enthält OAuth2-Refresh-Token — NIEMALS committen)
+data/.msal_token_cache.json
+
+# Kunden-Daten-Exporte (SharePoint-Feeds, können PII enthalten — NIEMALS committen)
+Sharepoint Download/
+*.items.txt
+
 # Logs
 *.log

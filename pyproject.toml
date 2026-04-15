@@ -1,14 +1,23 @@
 [project]
 name = "bew"
 version = "0.1.0"
-description = "Lokale PDF-Verarbeitungs-Pipeline mit Azure KI-Services und SQLite-Datenhaltung"
+description = "Agentisches Dokumenten-Management-System mit Azure KI-Services und SQLite-Datenhaltung"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.1",
     "python-dotenv>=1.0",
     "pydantic-settings>=2.0",
     "datasette>=1.0a16",
-    # Azure-Clients — aktuell als Platzhalter, Nutzung folgt in Phase 1
+    # SharePoint-Connector (Phase 1)
+    "msal>=1.28",
+    "httpx>=0.27",
+    # Web-UI + API (Phase 2)
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "anthropic>=0.40",
+    # UI Fallback
+    "streamlit>=1.35",
+    # Azure-Clients (Phase 2)
     "azure-ai-documentintelligence>=1.0",
     "openai>=1.50",
 ]
@@ -22,3 +31,4 @@ packages = ["src/bew"]
 
 [project.scripts]
 bew = "bew.cli:main"
+bew-server = "uvicorn:main"
