@@ -38,5 +38,9 @@ build-backend = "hatchling.build"
 packages = ["src/bew"]
 
 [project.scripts]
+# Hauptmarke: 'disco' — der neue CLI-Einstieg (alle Befehle hier)
+disco = "bew.cli:main"
+disco-server = "uvicorn:main"
+# Aliase fuer Uebergangsphase (alte Skripte/Doku brechen sonst)
 bew = "bew.cli:main"
 bew-server = "uvicorn:main"

@@ -330,6 +330,34 @@ class AgentService:
         thread = chat_repo.get_thread(thread_id)
         chat_repo.append_message(thread_id, role="user", content=user_text)
 
+        # Projekt-Kontext bestimmen: wenn der Thread einer project_id
+        # zugeordnet ist, holen wir den slug und aktivieren den
+        # Sandbox-Modus fuer alle Tool-Aufrufe in diesem Turn.
+        project_slug: str | None = None
+        if thread.get("project_id"):
+            from ..db import connect as system_connect
+            sysconn = system_connect()
+            try:
+                row = sysconn.execute(
+                    "SELECT slug FROM projects WHERE id = ?",
+                    (thread["project_id"],),
+                ).fetchone()
+                if row and row["slug"]:
+                    project_slug = row["slug"]
+            finally:
+                sysconn.close()
+            if project_slug:
+                logger.info(
+                    "run_turn thread=%s project_slug=%s (Sandbox aktiv)",
+                    thread_id, project_slug,
+                )
+
+        # Projekt-Kontext aktivieren — gilt fuer alle Tool-Aufrufe in
+        # diesem Turn (fs_*, sqlite_*). Reset im finally am Ende von
+        # run_turn (siehe unten).
+        from .context import _current_project
+        _ctx_token = _current_project.set(project_slug)
+
         previous_response_id: str | None = thread.get("foundry_thread_id")
         # Bei uns wird foundry_thread_id als previous_response_id der letzten
         # Assistant-Antwort verwendet. Name "foundry_thread_id" bleibt aus
@@ -584,6 +612,12 @@ class AgentService:
             tokens_input=(last_usage or {}).get("input") if last_usage else None,
             tokens_output=(last_usage or {}).get("output") if last_usage else None,
         )
+
+        # Projekt-Kontext zuruecksetzen (verhindert Leak in andere Turns)
+        try:
+            _current_project.reset(_ctx_token)
+        except Exception:
+            pass
 
 
 # Modul-weites Singleton — leichter Wiederverwendungsfall aus FastAPI

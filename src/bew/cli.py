@@ -13,9 +13,13 @@ from . import sources as sources_module
 
 
 @click.group()
-@click.version_option(__version__, prog_name="bew")
+@click.version_option(__version__, prog_name="disco")
 def main() -> None:
-    """BEW Doku Projekt — agentisches Dokumenten-Management-System."""
+    """Disco — agentisches Dokumenten-Management.
+
+    Workspace liegt unter ~/Disco/ (oder DISCO_WORKSPACE in .env).
+    Code-Repo getrennt von Daten — Kundendaten landen NIE in Git.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -56,47 +60,108 @@ def db_status() -> None:
 
 
 # ---------------------------------------------------------------------------
-# bew project
+# disco project — Workspace-aware Projekt-Verwaltung
 # ---------------------------------------------------------------------------
 
 @main.group("project")
 def project_group() -> None:
-    """Projekt-Kommandos."""
+    """Projekte im Disco-Workspace verwalten.
+
+    Ein Projekt = ein Verzeichnis unter ~/Disco/projects/<slug>/ mit
+    sources/, work/, exports/, .disco/ und einer eigenen data.db.
+    """
 
 
-@project_group.command("list")
-@click.option("--all", "include_archived", is_flag=True, default=False, help="Auch archivierte Projekte anzeigen.")
-def project_list(include_archived: bool) -> None:
-    """Listet alle Projekte auf."""
-    items = projects_module.list_projects(include_archived=include_archived)
-    if not items:
-        click.echo("Keine Projekte vorhanden. Mit 'bew project create' anlegen.")
-        return
-    click.echo(f"{'ID':<5} {'Name':<30} {'Status':<12} Erstellt")
-    click.echo("-" * 65)
-    for p in items:
-        click.echo(f"{p['id']:<5} {p['name']:<30} {p['status']:<12} {p['created_at'][:10]}")
-
-
-@project_group.command("create")
-@click.option("--name", required=True, help="Name des Projekts.")
+@project_group.command("init")
+@click.argument("slug")
+@click.option("--name", default=None, help="Anzeige-Name (Default: aus slug abgeleitet).")
 @click.option("--description", default=None, help="Optionale Beschreibung.")
-def project_create(name: str, description: str | None) -> None:
-    """Legt ein neues Projekt an."""
+@click.option(
+    "--overwrite-files",
+    is_flag=True,
+    default=False,
+    help="Bestehende README/NOTES/memory.md ueberschreiben.",
+)
+def project_init(slug: str, name: str | None, description: str | None, overwrite_files: bool) -> None:
+    """Legt ein neues Projekt im Workspace an (idempotent).
+
+    SLUG: kurze ID, lowercase, '-' und '_' erlaubt. z.B. 'vattenfall-reuter'
+    """
+    from .workspace import init_project, validate_slug
+
     try:
-        p = projects_module.create_project(name, description)
-        click.echo(f"Projekt angelegt: ID={p['id']}, Name='{p['name']}'")
+        slug = validate_slug(slug)
+        info = init_project(slug, name=name, description=description, overwrite_files=overwrite_files)
     except ValueError as exc:
         click.echo(f"Fehler: {exc}", err=True)
         raise SystemExit(1)
 
+    status = "neu angelegt" if info["created"] else "bereits vorhanden — aktualisiert"
+    click.echo(f"OK Projekt '{info['name']}' ({status}):")
+    click.echo(f"   Slug:       {info['slug']}")
+    click.echo(f"   Pfad:       {info['path']}")
+    click.echo(f"   Projekt-DB: {info['db_path']}")
+    click.echo(f"   System-ID:  {info['project_id']}")
+    click.echo("")
+    click.echo("Naechste Schritte:")
+    click.echo(f"   - Quelldaten in {info['path']}/sources/ ablegen")
+    click.echo(f"   - Disco starten:  disco agent chat --project {info['slug']}")
+
+
+@project_group.command("list")
+def project_list() -> None:
+    """Listet alle Projekte im Workspace (mit Status + Datei-Zahlen)."""
+    from .workspace import list_workspace_projects
+
+    items = list_workspace_projects()
+    if not items:
+        click.echo("Keine Projekte. Mit 'disco project init <slug>' anlegen.")
+        return
+    click.echo(f"{'Slug':<25} {'Name':<28} {'Status':<14} {'Quellen':>8} {'Work':>6} {'Export':>7}")
+    click.echo("-" * 95)
+    for p in items:
+        click.echo(
+            f"{p['slug']:<25} {p['name'][:28]:<28} {p['status']:<14} "
+            f"{p['files_in_sources']:>8} {p['files_in_work']:>6} {p['files_in_exports']:>7}"
+        )
+
+
+@project_group.command("show")
+@click.argument("slug")
+def project_show(slug: str) -> None:
+    """Details zu einem Projekt: Pfade, DB-Tabellen, Datei-Zahlen."""
+    from .workspace import show_project
+
+    try:
+        info = show_project(slug)
+    except (KeyError, ValueError) as exc:
+        click.echo(f"Fehler: {exc}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Projekt: {info['name']}  ({info['slug']})")
+    click.echo(f"  Pfad         : {info['path']}")
+    click.echo(f"  Status       : {info['status']}")
+    click.echo(f"  Beschreibung : {info['description'] or '(keine)'}")
+    click.echo(f"  System-ID    : {info['db_id']}")
+    click.echo(f"  Erstellt     : {info['created_at']}")
+    click.echo(f"")
+    click.echo(f"  Projekt-DB   : {info['db_path']}  ({info['db_size']:,} B)")
+    if info["db_tables"]:
+        click.echo(f"  Tabellen     : {', '.join(info['db_tables'])}")
+    else:
+        click.echo(f"  Tabellen     : (noch keine work_*/agent_*-Tabellen)")
+    click.echo("")
+    click.echo(f"  Dateien in sources : {info['files_in_sources']}")
+    click.echo(f"  Dateien in work    : {info['files_in_work']}")
+    click.echo(f"  Dateien in exports : {info['files_in_exports']}")
+
 
 @project_group.command("archive")
-@click.option("--id", "project_id", required=True, type=int, help="Projekt-ID.")
+@click.option("--id", "project_id", required=True, type=int, help="System-Projekt-ID (siehe 'disco project show').")
 def project_archive(project_id: int) -> None:
-    """Archiviert ein Projekt (reversibel — Daten bleiben erhalten)."""
+    """Archiviert ein Projekt in der system.db (reversibel — Verzeichnis bleibt)."""
     projects_module.archive_project(project_id)
-    click.echo(f"Projekt {project_id} archiviert.")
+    click.echo(f"Projekt {project_id} archiviert (Verzeichnis im Workspace bleibt erhalten).")
 
 
 # ---------------------------------------------------------------------------
@@ -372,18 +437,68 @@ def agent_setup() -> None:
 @agent_group.command("chat")
 @click.option("--thread-id", type=int, default=None, help="Bestehenden Thread fortsetzen.")
 @click.option("--title", default=None, help="Titel fuer einen neuen Thread.")
-def agent_chat(thread_id: int | None, title: str | None) -> None:
-    """Startet einen interaktiven Chat im Terminal gegen den Foundry-Agent.
+@click.option(
+    "--project",
+    "project_slug",
+    default=None,
+    help="Disco im Projekt-Sandbox laufen lassen (Slug aus 'disco project list').",
+)
+def agent_chat(thread_id: int | None, title: str | None, project_slug: str | None) -> None:
+    """Startet einen interaktiven Chat im Terminal gegen Disco.
+
+    Mit --project laeuft Disco im Sandbox-Modus dieses Projekts:
+    fs_*-Tools sehen nur das Projekt-Verzeichnis, sqlite_*-Tools die Projekt-DB.
 
     Nuetzlich fuer Tests ohne Web-UI. Enter sendet, Ctrl+D oder 'exit' beendet.
     """
     from .agent.core import get_agent_service
     from .chat import repo as chat_repo
+    from .workspace import validate_slug
+    from .db import connect
+
+    # Projekt aufloesen (slug -> system.db.id)
+    project_id: int | None = None
+    if project_slug:
+        try:
+            project_slug = validate_slug(project_slug)
+        except ValueError as exc:
+            click.echo(f"FEHLER: {exc}", err=True)
+            raise SystemExit(1)
+        c = connect()
+        try:
+            row = c.execute(
+                "SELECT id, name FROM projects WHERE slug = ?", (project_slug,)
+            ).fetchone()
+            if row is None:
+                click.echo(
+                    f"FEHLER: Projekt '{project_slug}' nicht in der system.db. "
+                    f"Mit 'disco project init {project_slug}' anlegen.",
+                    err=True,
+                )
+                raise SystemExit(1)
+            project_id = row["id"]
+            project_name = row["name"]
+        finally:
+            c.close()
 
     if thread_id is None:
-        thread = chat_repo.create_thread(title=title or "CLI-Chat")
+        default_title = title or (
+            f"Chat {project_slug}" if project_slug else "CLI-Chat"
+        )
+        thread = chat_repo.create_thread(
+            title=default_title, project_id=project_id,
+        )
         thread_id = thread["id"]
-        click.echo(f"Neuer Thread: {thread['id']} ({thread['title']})")
+        if project_id:
+            click.echo(
+                f"Neuer Thread: {thread['id']} (\"{thread['title']}\") "
+                f"-> Projekt-Sandbox: {project_name} ({project_slug})"
+            )
+        else:
+            click.echo(
+                f"Neuer Thread: {thread['id']} (\"{thread['title']}\") "
+                f"-> kein Projekt (global)"
+            )
     else:
         try:
             thread = chat_repo.get_thread(thread_id)

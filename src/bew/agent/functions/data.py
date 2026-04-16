@@ -26,8 +26,26 @@ import re
 import sqlite3
 from typing import Any
 
-from ...db import connect
+from ...db import connect as system_connect
 from . import register
+
+
+def _connect():
+    """Verbindung zur aktiven DB:
+    - Projekt-Kontext aktiv -> Projekt-data.db
+    - Sonst -> system.db (alte Semantik)
+    """
+    import sqlite3
+    from ..context import get_project_db_path
+
+    proj_db = get_project_db_path()
+    if proj_db is not None:
+        proj_db.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(proj_db))
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.row_factory = sqlite3.Row
+        return conn
+    return system_connect()
 
 
 logger = logging.getLogger(__name__)
@@ -115,7 +133,7 @@ def _sqlite_query(
 
     effective_limit = max(1, min(int(limit or DEFAULT_QUERY_LIMIT), MAX_QUERY_LIMIT))
 
-    conn = connect()
+    conn = _connect()
     try:
         cur = conn.execute(sql, tuple(params or ()))
         # Zeilen begrenzen, um Speicher/Kontext zu schuetzen
@@ -184,7 +202,7 @@ def _sqlite_write(
 ) -> dict[str, Any]:
     verb, target_table = _check_write_allowed(sql)
 
-    conn = connect()
+    conn = _connect()
     try:
         cur = conn.execute(sql, tuple(params or ()))
         conn.commit()

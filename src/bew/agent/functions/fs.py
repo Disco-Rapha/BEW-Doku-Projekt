@@ -251,12 +251,24 @@ def _fs_read(
 
 
 def _data_root() -> Path:
-    """Kanonischer, aufgeloester data-Pfad. Wird einmal pro Call bestimmt."""
+    """Kanonischer, aufgeloester Schreibraum-Pfad.
+
+    - Wenn ein Projekt-Kontext aktiv ist (Disco arbeitet im Sandbox-Modus
+      eines Threads): der Projekt-Verzeichnis-Pfad.
+    - Sonst (kein Projekt-Kontext): der globale Workspace-Root —
+      Disco sieht dann alle Projekte (Admin-/CLI-Modus).
+
+    Wird einmal pro Tool-Aufruf bestimmt.
+    """
+    from ..context import get_project_root  # lazy, vermeidet Zirkular-Imports
+
+    project_root = get_project_root()
+    if project_root is not None:
+        project_root.mkdir(parents=True, exist_ok=True)
+        return project_root.resolve()
+
     root = settings.data_dir.resolve()
     if not root.exists():
-        # Zur Sicherheit anlegen — sollte normalerweise durch bew db init
-        # schon passieren, aber wir brechen nicht wegen eines fehlenden
-        # Ordners ab.
         root.mkdir(parents=True, exist_ok=True)
     return root
 

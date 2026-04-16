@@ -27,9 +27,9 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from ...db import connect
+from ...db import connect as system_connect
 from . import register
-from .data import AGENT_NAMESPACE_PREFIXES
+from .data import AGENT_NAMESPACE_PREFIXES, _connect as connect
 from .fs import _resolve_under_data, _data_root
 
 
