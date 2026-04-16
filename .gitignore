@@ -1,3 +1,8 @@
+# ============================================================================
+# Code-Repo: nur Quellcode, NIEMALS Daten oder Secrets
+# Daten wohnen unter ~/Disco/ (siehe DISCO_WORKSPACE in .env)
+# ============================================================================
+
 # Python
 __pycache__/
 *.py[cod]
@@ -9,16 +14,21 @@ __pycache__/
 .env
 .env.local
 
-# Daten (liegen im Projektordner, aber nicht in Git)
-data/raw/
-data/markdown/
-data/exports/
+# ---------------------------------------------------------------------------
+# Schutznetz: falls jemand versehentlich data/ oder db/ im Repo anlegt
+# (eigentlich gehoeren die ins ~/Disco-Workspace, NICHT hierher)
+# ---------------------------------------------------------------------------
+data/
+db/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.msal_token_cache.json
 
-# Datenbank
-db/*.db
-db/*.db-journal
-db/*.db-wal
-db/*.db-shm
+# Kunden-Daten-Exporte (SharePoint-Feeds, koennen PII enthalten)
+Sharepoint Download/
+*.items.txt
 
 # IDE / OS
 .vscode/
@@ -27,13 +37,6 @@ db/*.db-shm
 
 # Claude Code — nur lokale Settings ignorieren, shared stuff bleibt im Repo
 .claude/settings.local.json
-
-# MSAL Token-Cache (enthält OAuth2-Refresh-Token — NIEMALS committen)
-data/.msal_token_cache.json
-
-# Kunden-Daten-Exporte (SharePoint-Feeds, können PII enthalten — NIEMALS committen)
-Sharepoint Download/
-*.items.txt
 
 # Logs
 *.log

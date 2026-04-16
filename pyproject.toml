@@ -20,6 +20,14 @@ dependencies = [
     # Azure-Clients (Phase 2)
     "azure-ai-documentintelligence>=1.0",
     "openai>=1.50",
+    # Agent-Framework (Phase 2a) — Microsoft Foundry Agent Service
+    # Code Interpreter + File Search + Custom Functions managed by Azure
+    "azure-ai-projects>=2.0",
+    "azure-identity>=1.19",
+    # PDF-Textextraktion lokal (Worker-Prozess für Bulk-Jobs, Phase 2c)
+    "pypdf>=5.0",
+    # Excel lesen/schreiben mit Formatierung (Phase 2b)
+    "openpyxl>=3.1",
 ]
 
 [build-system]

@@ -339,5 +339,126 @@ def sp_import_json(json_file: "Path", source_id: int) -> None:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# bew agent (Phase 2a — Foundry Agent Service)
+# ---------------------------------------------------------------------------
+
+
+@main.group("agent")
+def agent_group() -> None:
+    """Haupt-Agent-Kommandos (Foundry/GPT-5.1)."""
+
+
+@agent_group.command("setup")
+def agent_setup() -> None:
+    """Registriert den BEW-Agent im Foundry-Portal (einmalig).
+
+    Voraussetzungen:
+      - `az login` im Terminal
+      - FOUNDRY_ENDPOINT in .env gesetzt
+    """
+    # Delegation an scripts/foundry_setup.py (identische Implementierung)
+    import runpy
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    script = _Path(__file__).resolve().parent.parent.parent / "scripts" / "foundry_setup.py"
+    if not script.exists():
+        click.echo(f"FEHLER: {script} nicht gefunden.", err=True)
+        _sys.exit(1)
+    runpy.run_path(str(script), run_name="__main__")
+
+
+@agent_group.command("chat")
+@click.option("--thread-id", type=int, default=None, help="Bestehenden Thread fortsetzen.")
+@click.option("--title", default=None, help="Titel fuer einen neuen Thread.")
+def agent_chat(thread_id: int | None, title: str | None) -> None:
+    """Startet einen interaktiven Chat im Terminal gegen den Foundry-Agent.
+
+    Nuetzlich fuer Tests ohne Web-UI. Enter sendet, Ctrl+D oder 'exit' beendet.
+    """
+    from .agent.core import get_agent_service
+    from .chat import repo as chat_repo
+
+    if thread_id is None:
+        thread = chat_repo.create_thread(title=title or "CLI-Chat")
+        thread_id = thread["id"]
+        click.echo(f"Neuer Thread: {thread['id']} ({thread['title']})")
+    else:
+        try:
+            thread = chat_repo.get_thread(thread_id)
+        except KeyError:
+            click.echo(f"FEHLER: Thread {thread_id} nicht gefunden.", err=True)
+            raise SystemExit(1)
+        click.echo(f"Setze Thread {thread['id']} fort ({thread['title']})")
+
+    svc = get_agent_service()
+    click.echo("Chatte. Leere Zeile = senden ohne Nachricht ueberspringen. Ctrl+D zum Beenden.\n")
+
+    while True:
+        try:
+            user_text = click.prompt("Du", prompt_suffix=" > ", default="", show_default=False)
+        except (EOFError, click.exceptions.Abort):
+            click.echo()
+            break
+        user_text = (user_text or "").strip()
+        if not user_text:
+            continue
+        if user_text.lower() in ("exit", "quit", ":q"):
+            break
+
+        click.echo("\nAgent > ", nl=False)
+        any_text = False
+        try:
+            for event in svc.run_turn(thread_id, user_text):
+                et = event.type
+                if et == "text_delta":
+                    click.echo(event.text, nl=False)
+                    any_text = True
+                elif et == "tool_call_start":
+                    click.echo(f"\n  [Tool-Call: {event.name}]", nl=False)
+                elif et == "tool_call_args":
+                    click.echo(f" args={json.dumps(event.arguments, ensure_ascii=False)}", nl=False)
+                elif et == "tool_result":
+                    preview = (event.result or "")[:200].replace("\n", " ")
+                    click.echo(f"\n  [Result: {preview}{'...' if len(event.result) > 200 else ''}]", nl=False)
+                elif et == "code_interpreter":
+                    click.echo(f"\n  [Code Interpreter: {event.phase}]", nl=False)
+                elif et == "file_search":
+                    click.echo(f"\n  [File Search: {event.phase}]", nl=False)
+                elif et == "error":
+                    click.echo(f"\n  FEHLER: {event.message}", err=True, nl=False)
+                elif et == "done":
+                    click.echo("")
+                    if event.tokens_input or event.tokens_output:
+                        click.echo(
+                            f"  (Tokens: in={event.tokens_input} out={event.tokens_output})"
+                        )
+        except Exception as exc:
+            click.echo(f"\nAgent-Fehler: {exc}", err=True)
+
+        if not any_text:
+            click.echo("")
+        click.echo()
+
+
+@agent_group.command("threads")
+@click.option("--all", "include_archived", is_flag=True, default=False, help="Auch archivierte Threads.")
+def agent_threads(include_archived: bool) -> None:
+    """Listet alle Chat-Threads auf."""
+    from .chat import repo as chat_repo
+    threads = chat_repo.list_threads(include_archived=include_archived)
+    if not threads:
+        click.echo("Keine Threads. Mit 'bew agent chat' einen neuen starten.")
+        return
+    click.echo(f"{'ID':<5} {'Status':<10} {'Titel':<40} Modell")
+    click.echo("-" * 80)
+    for t in threads:
+        click.echo(
+            f"{t['id']:<5} {t['status']:<10} "
+            f"{(t['title'] or '')[:40]:<40} {t['model_used']}"
+        )
+
+
 if __name__ == "__main__":
     main()

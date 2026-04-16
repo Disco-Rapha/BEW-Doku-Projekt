@@ -398,6 +398,115 @@
 
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* Persistenter Tool-Call-Block (Phase 2a Foundry-Agent) */
+  .tool-call {
+    font-size: 11px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--yellow);
+    border-radius: 4px;
+    margin: 2px 0;
+    padding: 0;
+  }
+  .tool-call summary {
+    cursor: pointer;
+    padding: 6px 10px;
+    color: var(--text-dim);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tool-call summary::-webkit-details-marker { display: none; }
+  .tool-call summary::before {
+    content: '▶';
+    font-size: 8px;
+    color: var(--text-dim);
+    transition: transform 0.15s;
+  }
+  .tool-call[open] summary::before { transform: rotate(90deg); }
+  .tool-call .tool-name { color: var(--yellow); font-weight: 600; }
+  .tool-call .tool-status { color: var(--green); font-size: 10px; margin-left: auto; }
+  .tool-call .tool-status.pending { color: var(--yellow); }
+  .tool-call .tool-body {
+    padding: 0 10px 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .tool-call .tool-args, .tool-call .tool-result {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: #0a0a0a;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 6px 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  .tool-call .tool-label { color: var(--text-dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .tool-call.code-interpreter { border-left-color: var(--accent); }
+  .tool-call.file-search { border-left-color: var(--green); }
+
+  /* Thread-Tab-Leiste (Multi-Chat) */
+  #chat-tabs {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    overflow-x: auto;
+    flex-shrink: 0;
+    min-height: 32px;
+  }
+  #chat-tabs::-webkit-scrollbar { height: 4px; }
+  #chat-tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .chat-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--panel2);
+    border-right: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    max-width: 180px;
+    flex-shrink: 0;
+  }
+  .chat-tab:hover { background: var(--panel); color: var(--text); }
+  .chat-tab.active {
+    background: var(--panel);
+    color: var(--text-bright);
+    border-bottom: 2px solid var(--accent);
+    margin-bottom: -1px;
+  }
+  .chat-tab .tab-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+  }
+  .chat-tab .tab-close {
+    color: var(--text-dim);
+    font-size: 12px;
+    padding: 0 2px;
+    border-radius: 2px;
+  }
+  .chat-tab .tab-close:hover { background: var(--red, #c44); color: #fff; }
+  .chat-tab-new {
+    padding: 6px 12px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    border-right: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .chat-tab-new:hover { background: var(--panel2); color: var(--text-bright); }
+
   .typing-indicator {
     display: flex;
     align-items: center;
@@ -521,11 +630,15 @@
   <div id="chat-panel">
     <div class="panel-title">
       Agent
-      <button title="Chat leeren" onclick="clearChat()">✕</button>
+      <button title="Thread schliessen" onclick="closeCurrentThread()">✕</button>
+    </div>
+    <div id="chat-tabs">
+      <!-- Tabs werden dynamisch via renderThreadTabs() erzeugt -->
+      <div class="chat-tab-new" onclick="createNewThread()" title="Neuer Chat">+</div>
     </div>
     <div id="chat-messages">
       <div class="msg system">
-        <div class="bubble">Agent bereit. Stelle eine Frage oder gib eine Aufgabe.</div>
+        <div class="bubble">Verbindung wird hergestellt ...</div>
       </div>
     </div>
     <div id="chat-input-area">
@@ -547,9 +660,12 @@ const state = {
   projects: [],
   activeProjectId: null,
   activeView: 'dashboard',
-  chatMessages: [],   // {role: 'user'|'assistant', content: string|array}
+  // Multi-Thread-Chat (Phase 2a Foundry)
+  threads: [],            // [{id, title, status, foundry_thread_id, ...}]
+  activeThreadId: null,
   ws: null,
   wsReady: false,
+  wsThreadId: null,       // Thread-ID, auf die der aktuelle WebSocket verbunden ist
 };
 
 const _syncPollers    = {};   // sourceId → interval handle
@@ -558,11 +674,21 @@ const _spFieldNames    = {};  // sourceId → string[]
 let   _selectedDocs    = new Set(); // doc IDs currently checked
 
 // =========================================================================
-// WebSocket
+// WebSocket — pro Thread ein eigener Socket (serverseitig durch thread_id gebunden)
 // =========================================================================
-function connectWS() {
+function connectWS(threadId) {
+  if (!threadId) return;
+  // Alten Socket schliessen, wenn vorhanden und auf anderer Thread-ID
+  if (state.ws && state.wsThreadId !== threadId) {
+    try { state.ws.close(); } catch(e) {}
+    state.ws = null;
+    state.wsReady = false;
+  }
+  if (state.ws && state.wsThreadId === threadId) return; // bereits offen
+
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  state.ws = new WebSocket(`${proto}//${location.host}/ws/chat`);
+  state.ws = new WebSocket(`${proto}//${location.host}/ws/chat?thread_id=${threadId}`);
+  state.wsThreadId = threadId;
 
   state.ws.onopen = () => {
     state.wsReady = true;
@@ -570,7 +696,10 @@ function connectWS() {
 
   state.ws.onclose = () => {
     state.wsReady = false;
-    setTimeout(connectWS, 2000);
+    // Nur reconnect, wenn dieser Socket noch der "aktive" ist
+    if (state.wsThreadId === threadId && state.activeThreadId === threadId) {
+      setTimeout(() => connectWS(threadId), 2000);
+    }
   };
 
   state.ws.onerror = () => {
@@ -783,7 +912,7 @@ async function renderProjectView(projectId) {
   content.innerHTML = '<div class="loading">Lade Projekt ...</div>';
   const project = state.projects.find(p => p.id === projectId);
   const sources = await apiFetch(`/api/projects/${projectId}/sources`);
-  const docs = await apiFetch(`/api/projects/${projectId}/documents?limit=50`);
+  const docs = await apiFetch(`/api/projects/${projectId}/documents?limit=5000`);
 
   const sourcesHtml = sources.length === 0
     ? `<div class="alert alert-warn">Keine Quellen. <a href="#" onclick="openView('new-source');return false">Quelle hinzufügen</a></div>`
@@ -814,7 +943,7 @@ async function filterDocs(projectId) {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(async () => {
     const q = document.getElementById('doc-search')?.value || '';
-    const docs = await apiFetch(`/api/projects/${projectId}/documents?limit=100&search=${encodeURIComponent(q)}`);
+    const docs = await apiFetch(`/api/projects/${projectId}/documents?limit=5000&search=${encodeURIComponent(q)}`);
     const el = document.getElementById('doc-list');
     if (el) el.innerHTML = renderDocTable(docs);
   }, 300);
@@ -828,7 +957,7 @@ async function renderSourceView(projectId, sourceId, sourceName) {
   content.innerHTML = '<div class="loading">Lade Quelle ...</div>';
 
   const [docs, syncStatus] = await Promise.all([
-    apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=200`),
+    apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000`),
     apiFetch(`/api/sources/${sourceId}/sync-status`),
   ]);
 
@@ -1126,7 +1255,7 @@ function startSyncPolling(projectId, sourceId) {
       delete _syncPollers[sourceId];
       // Reload doc list
       const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-      const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=200${incl}`);
+      const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000${incl}`);
       const countEl = document.getElementById(`doc-count-${sourceId}`);
       if (countEl) countEl.textContent = `${docs.length} Dokument(e)`;
       const el = document.getElementById(`doc-list-src-${sourceId}`);
@@ -1148,7 +1277,7 @@ async function toggleSpFields(projectId, sourceId) {
   }
 
   const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-  const docs  = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=200${incl}`);
+  const docs  = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000${incl}`);
   const el    = document.getElementById(`doc-list-src-${sourceId}`);
   if (el) el.innerHTML = renderSourceDocTable(docs, sourceId, projectId);
 
@@ -1165,7 +1294,7 @@ async function filterSourceDocs(projectId, sourceId) {
     const q    = document.getElementById(`doc-search-src-${sourceId}`)?.value || '';
     const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
     const docs = await apiFetch(
-      `/api/projects/${projectId}/documents?source_id=${sourceId}&limit=200&search=${encodeURIComponent(q)}${incl}`
+      `/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000&search=${encodeURIComponent(q)}${incl}`
     );
     const countEl = document.getElementById(`doc-count-${sourceId}`);
     if (countEl) countEl.textContent = `${docs.length} Dokument(e)`;
@@ -1227,7 +1356,7 @@ async function markSelectedForIndexing(projectId, sourceId) {
   _selectedDocs.clear();
   // Reload table
   const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-  const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=200${incl}`);
+  const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000${incl}`);
   const el   = document.getElementById(`doc-list-src-${sourceId}`);
   if (el) el.innerHTML = renderSourceDocTable(docs, sourceId, projectId);
   updateSelectionToolbar(projectId, sourceId);
@@ -1243,7 +1372,7 @@ async function selectAllAndMark(projectId, sourceId) {
   if (bar) bar.innerHTML = `✅ ${res.selected_total} Dokumente zum Indexieren vorgemerkt.`;
   _selectedDocs.clear();
   const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-  const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=200${incl}`);
+  const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000${incl}`);
   const el   = document.getElementById(`doc-list-src-${sourceId}`);
   if (el) el.innerHTML = renderSourceDocTable(docs, sourceId, projectId);
   updateSelectionToolbar(projectId, sourceId);
@@ -1343,16 +1472,159 @@ async function submitNewSource() {
 }
 
 // =========================================================================
-// Chat
+// Chat — Multi-Thread Foundry-Agent (Phase 2a)
 // =========================================================================
 let currentAgentBubble = null;
 let currentAgentText = '';
+// Laufende Tool-Calls im aktuellen Turn: call_id -> {name, el (details), statusEl, resultEl}
+const _activeToolCalls = {};
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
 });
+
+// ------------------ Thread-Management ------------------
+
+async function initChat() {
+  // 1. Bestehende Threads laden
+  try {
+    const res = await fetch('/api/threads?limit=50');
+    state.threads = await res.json();
+  } catch (e) {
+    state.threads = [];
+  }
+
+  if (state.threads.length === 0) {
+    // Frisch starten: einen leeren Thread anlegen
+    await createNewThread();
+  } else {
+    // Aktuellsten Thread oeffnen
+    await switchThread(state.threads[0].id);
+  }
+}
+
+async function createNewThread(title) {
+  try {
+    const res = await fetch('/api/threads', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ title: title || 'Neuer Chat' }),
+    });
+    const t = await res.json();
+    state.threads.unshift(t);
+    await switchThread(t.id);
+  } catch (e) {
+    console.error('createNewThread', e);
+  }
+}
+
+async function switchThread(threadId) {
+  if (!threadId) return;
+  state.activeThreadId = threadId;
+  renderThreadTabs();
+  await loadThreadMessages(threadId);
+  connectWS(threadId);
+  const input = document.getElementById('chat-input');
+  if (input) input.focus();
+}
+
+async function closeCurrentThread() {
+  if (!state.activeThreadId) return;
+  const id = state.activeThreadId;
+  if (!confirm('Diesen Chat schliessen (archivieren)?')) return;
+  try {
+    await fetch(`/api/threads/${id}`, { method: 'DELETE' });
+  } catch (e) {}
+  state.threads = state.threads.filter(t => t.id !== id);
+  if (state.threads.length === 0) {
+    await createNewThread();
+  } else {
+    await switchThread(state.threads[0].id);
+  }
+}
+
+function renderThreadTabs() {
+  const container = document.getElementById('chat-tabs');
+  const newBtn = container.querySelector('.chat-tab-new');
+  // Alle Tabs (ohne + Button) entfernen
+  Array.from(container.children).forEach(ch => {
+    if (!ch.classList.contains('chat-tab-new')) ch.remove();
+  });
+  for (const t of state.threads) {
+    const div = document.createElement('div');
+    div.className = 'chat-tab' + (t.id === state.activeThreadId ? ' active' : '');
+    div.onclick = (e) => {
+      if (e.target.classList.contains('tab-close')) return;
+      switchThread(t.id);
+    };
+    div.innerHTML = `
+      <span class="tab-title" title="${escAttr(t.title)}">${escHtml(t.title)}</span>
+      <span class="tab-close" onclick="event.stopPropagation(); archiveThread(${t.id})" title="Tab schliessen">×</span>
+    `;
+    container.insertBefore(div, newBtn);
+  }
+}
+
+async function archiveThread(threadId) {
+  try {
+    await fetch(`/api/threads/${threadId}`, { method: 'DELETE' });
+  } catch (e) {}
+  state.threads = state.threads.filter(t => t.id !== threadId);
+  if (state.activeThreadId === threadId) {
+    if (state.threads.length === 0) {
+      await createNewThread();
+    } else {
+      await switchThread(state.threads[0].id);
+    }
+  } else {
+    renderThreadTabs();
+  }
+}
+
+async function loadThreadMessages(threadId) {
+  const msgs = document.getElementById('chat-messages');
+  msgs.innerHTML = '';
+  try {
+    const res = await fetch(`/api/threads/${threadId}/messages`);
+    const items = await res.json();
+    if (!Array.isArray(items) || items.length === 0) {
+      msgs.innerHTML = '<div class="msg system"><div class="bubble">Neuer Chat. Stelle eine Frage oder gib eine Aufgabe.</div></div>';
+      return;
+    }
+    for (const m of items) {
+      if (m.role === 'user') {
+        appendMessage('user', m.content || '');
+      } else if (m.role === 'assistant') {
+        if (m.content) appendMessage('agent', m.content);
+        if (Array.isArray(m.tool_calls)) {
+          for (const tc of m.tool_calls) {
+            // Gespeicherter Tool-Call mit Result aus der DB rendern
+            const result = findHistoricResult(items, tc.call_id);
+            appendToolCallBlock(tc.call_id, tc.name, tc.arguments, result, 'completed');
+          }
+        }
+      }
+      // tool-Nachrichten werden durch appendToolCallBlock bereits abgebildet
+    }
+  } catch (e) {
+    msgs.innerHTML = '<div class="msg system"><div class="bubble">Chat konnte nicht geladen werden.</div></div>';
+  }
+}
+
+function findHistoricResult(allMessages, callId) {
+  for (const m of allMessages) {
+    if (m.role === 'tool' && Array.isArray(m.tool_results)) {
+      for (const tr of m.tool_results) {
+        if (tr.call_id === callId) return tr.result;
+      }
+    }
+  }
+  return null;
+}
+
+// ------------------ Senden + Event-Handling ------------------
 
 function sendMessage() {
   const input = document.getElementById('chat-input');
@@ -1362,19 +1634,12 @@ function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
 
-  // User-Nachricht
   appendMessage('user', text);
-  state.chatMessages.push({ role: 'user', content: text });
 
-  // Typing indicator
   const typing = appendTyping();
-
-  // An WebSocket senden
-  state.ws.send(JSON.stringify({ messages: state.chatMessages }));
+  state.ws.send(JSON.stringify({ text }));
   currentAgentBubble = null;
   currentAgentText = '';
-
-  // Typing-Indikator wird entfernt wenn erste Antwort kommt
   state._typingEl = typing;
 }
 
@@ -1384,28 +1649,57 @@ function handleAgentChunk(data) {
     state._typingEl = null;
   }
 
-  if (data.type === 'text') {
-    if (!currentAgentBubble) {
-      const msg = appendMessage('agent', '');
-      currentAgentBubble = msg.querySelector('.bubble');
-    }
-    currentAgentText += data.text;
-    currentAgentBubble.innerHTML = markdownToHtml(currentAgentText);
-    scrollChat();
-  } else if (data.type === 'tool_use') {
-    appendToolIndicator(data.name, data.input);
-  } else if (data.type === 'done') {
-    if (currentAgentText) {
-      state.chatMessages.push({ role: 'assistant', content: currentAgentText });
-    }
-    currentAgentBubble = null;
-    currentAgentText = '';
-    // Explorer nach agent-Aktionen ggf. neu laden
-    loadExplorer();
-  } else if (data.type === 'error') {
-    appendMessage('system', '⚠️ ' + data.text);
+  switch (data.type) {
+    case 'text_delta':
+      if (!currentAgentBubble) {
+        const msg = appendMessage('agent', '');
+        currentAgentBubble = msg.querySelector('.bubble');
+      }
+      currentAgentText += data.text;
+      currentAgentBubble.innerHTML = markdownToHtml(currentAgentText);
+      scrollChat();
+      break;
+
+    case 'tool_call_start':
+      appendToolCallBlock(data.call_id, data.name, null, null, 'pending');
+      break;
+
+    case 'tool_call_args':
+      updateToolCallArgs(data.call_id, data.arguments);
+      break;
+
+    case 'tool_result':
+      updateToolCallResult(data.call_id, data.result);
+      break;
+
+    case 'code_interpreter':
+      renderCodeInterpreterEvent(data);
+      break;
+
+    case 'file_search':
+      renderFileSearchEvent(data);
+      break;
+
+    case 'done':
+      currentAgentBubble = null;
+      currentAgentText = '';
+      // Thread-Titel ggf. refreshen (Server kann spaeter Auto-Titel setzen)
+      refreshThreadTitle(state.activeThreadId);
+      // Explorer ggf. neu laden (falls Agent Quellen angelegt hat o.ae.)
+      loadExplorer();
+      break;
+
+    case 'error':
+      appendMessage('system', 'FEHLER: ' + (data.message || data.text || 'unbekannt'));
+      break;
+
+    default:
+      // Stumm ignorieren
+      break;
   }
 }
+
+// ------------------ Render-Helfer ------------------
 
 function appendMessage(role, text) {
   const msgs = document.getElementById('chat-messages');
@@ -1430,28 +1724,134 @@ function appendTyping() {
   return div;
 }
 
-function appendToolIndicator(name, input) {
+function appendToolCallBlock(callId, name, args, result, statusText) {
   const msgs = document.getElementById('chat-messages');
-  const div = document.createElement('div');
-  div.className = 'tool-indicator';
-  div.innerHTML = `<div class="spinner"></div> Tool: <code>${escHtml(name)}</code>`;
-  msgs.appendChild(div);
+  const details = document.createElement('details');
+  details.className = 'tool-call';
+  const argsStr = args ? JSON.stringify(args, null, 2) : '...';
+  const resStr = result ? (typeof result === 'string' ? result : JSON.stringify(result, null, 2)) : '';
+  const statusClass = (statusText === 'pending') ? 'pending' : '';
+  details.innerHTML = `
+    <summary>
+      <span class="tool-name">${escHtml(name)}</span>
+      <span class="tool-status ${statusClass}" data-role="status">${escHtml(statusText || 'pending')}</span>
+    </summary>
+    <div class="tool-body">
+      <div class="tool-label">Argumente</div>
+      <div class="tool-args" data-role="args">${escHtml(argsStr)}</div>
+      <div class="tool-label">Ergebnis</div>
+      <div class="tool-result" data-role="result">${escHtml(resStr || '(ausstehend ...)')}</div>
+    </div>
+  `;
+  msgs.appendChild(details);
+  _activeToolCalls[callId] = {
+    name,
+    el: details,
+    statusEl: details.querySelector('[data-role=status]'),
+    argsEl: details.querySelector('[data-role=args]'),
+    resultEl: details.querySelector('[data-role=result]'),
+  };
   scrollChat();
-  // Nach 3s ausblenden
-  setTimeout(() => div.remove(), 3000);
+}
+
+function updateToolCallArgs(callId, args) {
+  const tc = _activeToolCalls[callId];
+  if (!tc) return;
+  tc.argsEl.textContent = JSON.stringify(args, null, 2);
+}
+
+function updateToolCallResult(callId, result) {
+  const tc = _activeToolCalls[callId];
+  if (!tc) return;
+  let pretty = result;
+  try {
+    pretty = JSON.stringify(JSON.parse(result), null, 2);
+  } catch (e) {}
+  tc.resultEl.textContent = pretty;
+  tc.statusEl.textContent = 'ok';
+  tc.statusEl.classList.remove('pending');
+}
+
+function renderCodeInterpreterEvent(data) {
+  // data.phase: in_progress | code | interpreting | completed
+  const msgs = document.getElementById('chat-messages');
+  const key = '_ci_current';
+  let el = state[key];
+  if (data.phase === 'in_progress' || !el) {
+    el = document.createElement('details');
+    el.className = 'tool-call code-interpreter';
+    el.open = true;
+    el.innerHTML = `
+      <summary>
+        <span class="tool-name">Code Interpreter</span>
+        <span class="tool-status pending" data-role="status">laeuft ...</span>
+      </summary>
+      <div class="tool-body">
+        <div class="tool-label">Code</div>
+        <div class="tool-args" data-role="code">(wird erstellt ...)</div>
+      </div>
+    `;
+    msgs.appendChild(el);
+    state[key] = el;
+  }
+  if (data.phase === 'code' && data.code) {
+    el.querySelector('[data-role=code]').textContent = data.code;
+  }
+  if (data.phase === 'interpreting') {
+    el.querySelector('[data-role=status]').textContent = 'rechnet ...';
+  }
+  if (data.phase === 'completed') {
+    el.querySelector('[data-role=status]').textContent = 'fertig';
+    el.querySelector('[data-role=status]').classList.remove('pending');
+    state[key] = null;
+  }
+  scrollChat();
+}
+
+function renderFileSearchEvent(data) {
+  const msgs = document.getElementById('chat-messages');
+  const key = '_fs_current';
+  let el = state[key];
+  if (data.phase === 'in_progress' || !el) {
+    el = document.createElement('details');
+    el.className = 'tool-call file-search';
+    el.innerHTML = `
+      <summary>
+        <span class="tool-name">File Search</span>
+        <span class="tool-status pending" data-role="status">sucht ...</span>
+      </summary>
+      <div class="tool-body">
+        <div class="tool-label">Status</div>
+        <div class="tool-args" data-role="phase">in_progress</div>
+      </div>
+    `;
+    msgs.appendChild(el);
+    state[key] = el;
+  }
+  el.querySelector('[data-role=phase]').textContent = data.phase;
+  if (data.phase === 'completed') {
+    el.querySelector('[data-role=status]').textContent = 'fertig';
+    el.querySelector('[data-role=status]').classList.remove('pending');
+    state[key] = null;
+  }
+  scrollChat();
+}
+
+async function refreshThreadTitle(threadId) {
+  try {
+    const res = await fetch(`/api/threads/${threadId}`);
+    const t = await res.json();
+    const idx = state.threads.findIndex(x => x.id === threadId);
+    if (idx >= 0) {
+      state.threads[idx] = t;
+      renderThreadTabs();
+    }
+  } catch (e) {}
 }
 
 function scrollChat() {
   const msgs = document.getElementById('chat-messages');
   msgs.scrollTop = msgs.scrollHeight;
-}
-
-function clearChat() {
-  state.chatMessages = [];
-  currentAgentBubble = null;
-  currentAgentText = '';
-  document.getElementById('chat-messages').innerHTML =
-    '<div class="msg system"><div class="bubble">Chat geleert.</div></div>';
 }
 
 // =========================================================================
@@ -1482,7 +1882,7 @@ function escAttr(s) {
 // =========================================================================
 // Init
 // =========================================================================
-connectWS();
+initChat();
 loadExplorer().then(() => openView('dashboard'));
 </script>
 </body>

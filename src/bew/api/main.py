@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import tempfile
@@ -10,15 +11,17 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..agent.core import get_agent_service
+from ..chat import repo as chat_repo
 from ..config import settings
 from ..db import connect
 from ..projects import list_projects, create_project, archive_project, count_documents as proj_doc_count
 from ..sources import list_sources, create_source, get_source, parse_config, count_documents as src_doc_count
-from .agent import stream_response
+from .agent import stream_response  # Alt-Agent (Claude) — Fallback fuer Phase-0-Kompatibilitaet
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +256,7 @@ async def api_list_documents(
     source_id: int | None = None,
     search: str | None = None,
     status: str | None = None,
-    limit: int = 200,
+    limit: int = 5000,
     include_sp_fields: bool = False,
 ):
     conn = connect()
@@ -367,20 +370,134 @@ async def api_stats():
 
 
 # ---------------------------------------------------------------------------
-# WebSocket: Chat-Agent
+# REST-API: Chat-Threads (Phase 2a)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/threads")
+async def api_list_threads(
+    include_archived: bool = False,
+    project_id: int | None = None,
+    limit: int = 100,
+):
+    return chat_repo.list_threads(
+        include_archived=include_archived,
+        project_id=project_id,
+        limit=limit,
+    )
+
+
+@app.post("/api/threads")
+async def api_create_thread(body: dict):
+    title = (body.get("title") or "Neuer Chat").strip() or "Neuer Chat"
+    project_id = body.get("project_id")
+    return chat_repo.create_thread(title=title, project_id=project_id)
+
+
+@app.get("/api/threads/{thread_id}")
+async def api_get_thread(thread_id: int):
+    try:
+        return chat_repo.get_thread(thread_id)
+    except KeyError:
+        return {"error": f"Thread {thread_id} nicht gefunden."}
+
+
+@app.get("/api/threads/{thread_id}/messages")
+async def api_thread_messages(thread_id: int):
+    try:
+        chat_repo.get_thread(thread_id)
+    except KeyError:
+        return {"error": f"Thread {thread_id} nicht gefunden."}
+    return chat_repo.list_messages(thread_id)
+
+
+@app.patch("/api/threads/{thread_id}")
+async def api_update_thread(thread_id: int, body: dict):
+    title = body.get("title")
+    if title:
+        chat_repo.update_thread_title(thread_id, title.strip() or "Neuer Chat")
+    return chat_repo.get_thread(thread_id)
+
+
+@app.delete("/api/threads/{thread_id}")
+async def api_archive_thread(thread_id: int, hard: bool = False):
+    """Archiviert (soft) oder loescht (hard) einen Thread.
+
+    Foundry-seitig bleibt die Response-History bestehen — nur unser lokaler
+    Mirror wird entfernt. Fuer kompletten Cleanup muesste auch die
+    Foundry-Conversation geloescht werden (aktuell nicht implementiert).
+    """
+    if hard:
+        chat_repo.delete_thread(thread_id)
+    else:
+        chat_repo.archive_thread(thread_id)
+    return {"ok": True, "mode": "hard" if hard else "archive"}
+
+
+# ---------------------------------------------------------------------------
+# WebSocket: Chat-Agent (Foundry)
 # ---------------------------------------------------------------------------
 
 @app.websocket("/ws/chat")
-async def ws_chat(websocket: WebSocket):
+async def ws_chat(
+    websocket: WebSocket,
+    thread_id: int = Query(..., description="BEW-lokale Thread-ID aus /api/threads"),
+):
+    """Streamt Agent-Events fuer einen Chat-Thread.
+
+    Protokoll:
+      Client -> Server:  {"text": "Nachricht vom Benutzer"}
+      Server -> Client:  typisierte JSON-Events aus AgentService.run_turn
+                         (text_delta, tool_call_start, tool_result,
+                          code_interpreter, file_search, error, done).
+    """
     await websocket.accept()
+
+    # Thread muss existieren (sonst sofort 1008 / close)
+    try:
+        chat_repo.get_thread(thread_id)
+    except KeyError:
+        await websocket.send_text(
+            json.dumps({"type": "error", "message": f"Thread {thread_id} nicht gefunden."})
+        )
+        await websocket.close(code=1008)
+        return
+
+    svc = get_agent_service()
+
     try:
         while True:
             data = await websocket.receive_text()
             payload = json.loads(data)
-            messages = payload.get("messages", [])
+            user_text = (payload.get("text") or "").strip()
+            if not user_text:
+                continue
 
-            async for chunk in stream_response(messages):
-                await websocket.send_text(chunk)
+            # sync-Generator aus AgentService in Worker-Thread laufen lassen,
+            # Events via asyncio.Queue zurueck in den WebSocket-Loop bringen.
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue = asyncio.Queue()
+            SENTINEL = object()
+
+            def _worker() -> None:
+                try:
+                    for event in svc.run_turn(thread_id, user_text):
+                        loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
+                except Exception as exc:
+                    logger.exception("AgentService-Fehler")
+                    loop.call_soon_threadsafe(
+                        queue.put_nowait,
+                        {"type": "error", "message": f"Agent-Fehler: {exc}"},
+                    )
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+            while True:
+                ev = await queue.get()
+                if ev is SENTINEL:
+                    break
+                await websocket.send_text(json.dumps(ev, ensure_ascii=False))
 
     except WebSocketDisconnect:
         pass
@@ -388,7 +505,7 @@ async def ws_chat(websocket: WebSocket):
         logger.exception("WebSocket-Fehler")
         try:
             await websocket.send_text(
-                json.dumps({"type": "error", "text": str(exc)})
+                json.dumps({"type": "error", "message": str(exc)})
             )
         except Exception:
             pass
