@@ -28,6 +28,7 @@ dependencies = [
     "pypdf>=5.0",
     # Excel lesen/schreiben mit Formatierung (Phase 2b)
     "openpyxl>=3.1",
+    "docling>=2.90.0",
 ]
 
 [build-system]

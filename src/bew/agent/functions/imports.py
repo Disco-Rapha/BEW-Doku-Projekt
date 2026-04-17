@@ -38,7 +38,7 @@ from .fs import _resolve_under_data, _data_root
 # ---------------------------------------------------------------------------
 
 MAX_ROWS_PER_IMPORT = 50_000          # bei mehr Zeilen Hinweis auf Job-System
-MAX_COLUMNS_PER_TABLE = 80
+MAX_COLUMNS_PER_TABLE = 200
 DEFAULT_BATCH_SIZE = 500
 
 

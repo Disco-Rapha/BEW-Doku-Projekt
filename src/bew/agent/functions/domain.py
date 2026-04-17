@@ -16,6 +16,7 @@ from ...db import connect
 from ...projects import (
     count_documents as project_doc_count,
     get_project,
+    get_project_by_slug,
     list_projects,
 )
 from ...sources import (
@@ -24,6 +25,7 @@ from ...sources import (
     list_sources,
     parse_config,
 )
+from ..context import get_current_project_slug
 from . import register
 
 
@@ -38,9 +40,12 @@ logger = logging.getLogger(__name__)
 @register(
     name="list_projects",
     description=(
-        "Listet alle Projekte mit Dokumentenanzahl auf. "
-        "Nuetzlich als Einstieg, wenn der Benutzer nicht spezifiziert, "
-        "welches Projekt gemeint ist."
+        "Listet Projekte mit Dokumentenanzahl auf. "
+        "WICHTIG: Wenn ein Projekt aktiv ist (Sandbox-Modus), gibt diese "
+        "Funktion NUR das aktive Projekt zurueck — andere Projekte sind "
+        "in der Sandbox nicht sichtbar. Dieses Tool ist daher nicht "
+        "geeignet, um nach 'dem richtigen Projekt' zu suchen; das aktive "
+        "Projekt ist bereits aus dem Kontext bekannt."
     ),
     parameters={
         "type": "object",
@@ -52,9 +57,34 @@ logger = logging.getLogger(__name__)
         },
         "required": [],
     },
-    returns="Liste von {id, name, description, status, dokumente, erstellt}",
+    returns="Liste von {id, name, description, status, dokumente, erstellt, slug}",
 )
 def _list_projects(*, include_archived: bool = False) -> list[dict[str, Any]]:
+    # Sandbox-Check: Wenn ein Projekt aktiv ist, geben wir nur dieses zurueck.
+    active_slug = get_current_project_slug()
+    if active_slug:
+        p = get_project_by_slug(active_slug)
+        if p is None:
+            # Slug gesetzt aber kein Eintrag in DB — sollte praktisch nie passieren
+            return []
+        return [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "description": p.get("description"),
+                "status": p["status"],
+                "dokumente": project_doc_count(p["id"]),
+                "erstellt": p["created_at"][:10],
+                "slug": p.get("slug"),
+                "_sandbox_hint": (
+                    f"Sandbox-Modus: nur das aktive Projekt ist sichtbar "
+                    f"(slug='{active_slug}'). Andere Projekte existieren "
+                    f"fuer Dich in dieser Sitzung nicht."
+                ),
+            }
+        ]
+
+    # Kein Sandbox-Kontext (z.B. projektlose Chat-Startseite): altes Verhalten
     projects = list_projects(include_archived=include_archived)
     result: list[dict[str, Any]] = []
     for p in projects:
@@ -67,6 +97,7 @@ def _list_projects(*, include_archived: bool = False) -> list[dict[str, Any]]:
                 "status": p["status"],
                 "dokumente": count,
                 "erstellt": p["created_at"][:10],
+                "slug": p.get("slug"),
             }
         )
     return result
@@ -80,8 +111,9 @@ def _list_projects(*, include_archived: bool = False) -> list[dict[str, Any]]:
 @register(
     name="get_project_details",
     description=(
-        "Liefert Details zu einem Projekt: alle Quellen, Dokumentenanzahl, "
-        "Sync-Status je Quelle."
+        "Liefert Details zum aktiven Projekt: alle Quellen, Dokumentenanzahl, "
+        "Sync-Status je Quelle. Im Sandbox-Modus ist NUR das aktive Projekt "
+        "zugaenglich; andere project_ids liefern einen Fehler."
     ),
     parameters={
         "type": "object",
@@ -90,9 +122,24 @@ def _list_projects(*, include_archived: bool = False) -> list[dict[str, Any]]:
         },
         "required": ["project_id"],
     },
-    returns="{id, name, description, status, dokumente_gesamt, quellen: [...]}",
+    returns="{id, name, description, status, dokumente_gesamt, quellen: [...]} oder {error}",
 )
 def _get_project_details(*, project_id: int) -> dict[str, Any]:
+    # Sandbox-Check: nur Details des aktiven Projekts sind zugaenglich
+    active_slug = get_current_project_slug()
+    if active_slug:
+        p_active = get_project_by_slug(active_slug)
+        if p_active is None:
+            return {"error": f"Sandbox-Projekt '{active_slug}' nicht in system.db."}
+        if p_active["id"] != project_id:
+            return {
+                "error": (
+                    f"Projekt id={project_id} ist in dieser Sandbox nicht "
+                    f"zugaenglich. Aktives Projekt: '{active_slug}' "
+                    f"(id={p_active['id']}, name='{p_active['name']}')."
+                )
+            }
+
     p = get_project(project_id)
     sources = list_sources(project_id)
     doc_count = project_doc_count(project_id)
@@ -152,6 +199,16 @@ def _search_documents(
     project_id: int | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
+    # Sandbox-Check: im Sandbox-Modus wird immer auf das aktive Projekt gescoped
+    active_slug = get_current_project_slug()
+    if active_slug:
+        p_active = get_project_by_slug(active_slug)
+        if p_active is None:
+            return []
+        if project_id is not None and project_id != p_active["id"]:
+            return []  # angefordertes Projekt nicht in Sandbox sichtbar
+        project_id = p_active["id"]
+
     conn = connect()
     try:
         params: list[Any] = [f"%{query}%", f"%{query}%"]
@@ -189,23 +246,55 @@ def _search_documents(
     returns="{projekte, quellen, dokumente_gesamt, nach_status, ordner}",
 )
 def _get_database_stats() -> dict[str, Any]:
+    # Sandbox-Check: Stats nur fuer aktives Projekt
+    active_slug = get_current_project_slug()
+    project_id: int | None = None
+    if active_slug:
+        p_active = get_project_by_slug(active_slug)
+        if p_active is None:
+            return {"error": f"Sandbox-Projekt '{active_slug}' nicht in system.db."}
+        project_id = p_active["id"]
+
     conn = connect()
     try:
         stats: dict[str, Any] = {}
-        stats["projekte"] = conn.execute(
-            "SELECT COUNT(*) FROM projects WHERE status='active'"
-        ).fetchone()[0]
-        stats["quellen"] = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
-        stats["dokumente_gesamt"] = conn.execute(
-            "SELECT COUNT(*) FROM documents"
-        ).fetchone()[0]
-        rows = conn.execute(
-            "SELECT status, COUNT(*) as n FROM documents GROUP BY status"
-        ).fetchall()
-        stats["nach_status"] = {r["status"]: r["n"] for r in rows}
-        stats["ordner"] = conn.execute(
-            "SELECT COUNT(*) FROM source_folders"
-        ).fetchone()[0]
+        if project_id is not None:
+            stats["projekt"] = active_slug
+            stats["quellen"] = conn.execute(
+                "SELECT COUNT(*) FROM sources WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+            stats["dokumente_gesamt"] = conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT status, COUNT(*) as n FROM documents "
+                "WHERE project_id = ? GROUP BY status",
+                (project_id,),
+            ).fetchall()
+            stats["nach_status"] = {r["status"]: r["n"] for r in rows}
+            stats["ordner"] = conn.execute(
+                "SELECT COUNT(*) FROM source_folders sf "
+                "JOIN sources s ON sf.source_id = s.id WHERE s.project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+        else:
+            # kein Sandbox-Kontext: globale Stats (alte Semantik)
+            stats["projekte"] = conn.execute(
+                "SELECT COUNT(*) FROM projects WHERE status='active'"
+            ).fetchone()[0]
+            stats["quellen"] = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
+            stats["dokumente_gesamt"] = conn.execute(
+                "SELECT COUNT(*) FROM documents"
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT status, COUNT(*) as n FROM documents GROUP BY status"
+            ).fetchall()
+            stats["nach_status"] = {r["status"]: r["n"] for r in rows}
+            stats["ordner"] = conn.execute(
+                "SELECT COUNT(*) FROM source_folders"
+            ).fetchone()[0]
         return stats
     finally:
         conn.close()
@@ -252,6 +341,12 @@ def _list_documents(
     status: str | None = None,
     limit: int = 30,
 ) -> list[dict[str, Any]]:
+    # Sandbox-Check
+    active_slug = get_current_project_slug()
+    if active_slug:
+        p_active = get_project_by_slug(active_slug)
+        if p_active and p_active["id"] != project_id:
+            return []  # anderes Projekt nicht sichtbar
     conn = connect()
     try:
         params: list[Any] = [project_id]

@@ -246,6 +246,243 @@ def _fs_read(
 
 
 # ---------------------------------------------------------------------------
+# fs_search — Volltextsuche in Text-Dateien
+# ---------------------------------------------------------------------------
+
+
+# Ordner, die bei fs_search grundsaetzlich uebersprungen werden
+_SEARCH_SKIP_DIRS = {
+    "__pycache__",
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    ".venv",
+    "venv",
+    ".tox",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".idea",
+    ".vscode",
+}
+
+# Max. Bytes, die pro Datei eingelesen werden (sonst Speicher-Explosion).
+# Wir lesen die ganze Datei ein, um Zeilen-Kontext zu kennen.
+_SEARCH_MAX_FILE_BYTES = 2_000_000  # 2 MB pro Datei
+
+# Max. Zeichen pro ausgegebener Zeile — gegen Riesen-Zeilen (minified JSON etc.)
+_SEARCH_LINE_MAX = 400
+
+
+@register(
+    name="fs_search",
+    description=(
+        "Sucht einen Text/Regex in allen Text-Dateien unter data/ (bzw. im "
+        "aktiven Projekt). Aehnelt 'grep -rn'. Binaerdateien (PDF, Excel, "
+        "Bilder, ...) werden uebersprungen — fuer PDF-Inhalt ist "
+        "pdf_extract_text bzw. extract_pdf_to_markdown zustaendig. "
+        "Liefert pro Treffer Dateiname, Zeilennummer, Zeile und optional "
+        "Kontext-Zeilen vorher/nachher. Standardmaessig case-insensitive "
+        "literale Suche; mit regex=true ist das Pattern ein Python-Regex."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "pattern": {
+                "type": "string",
+                "description": "Zu suchender Text oder (bei regex=true) Python-Regex-Pattern.",
+            },
+            "path": {
+                "type": "string",
+                "description": (
+                    "Unterordner zum Durchsuchen (relativ zu data/). Leer = "
+                    "ganzes Projekt. Beispiele: 'context', 'sources/Elektro', '.disco/plans'."
+                ),
+            },
+            "glob": {
+                "type": "string",
+                "description": (
+                    "Optionales Datei-Muster, z.B. '*.md', '*.py', '*.json'. "
+                    "Leer = alle Text-Dateien."
+                ),
+            },
+            "regex": {
+                "type": "boolean",
+                "description": "True = pattern als Python-Regex. Default false (literale Suche).",
+            },
+            "case_sensitive": {
+                "type": "boolean",
+                "description": "Gross-/Kleinschreibung beachten. Default false.",
+            },
+            "context_lines": {
+                "type": "integer",
+                "description": (
+                    "Wie viele Zeilen vor/nach dem Treffer mitliefern (Default 0). "
+                    "Max 3 — darueber hinaus lieber fs_read mit offset."
+                ),
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Max. Anzahl Treffer. Default 50, Max 500.",
+            },
+        },
+        "required": ["pattern"],
+    },
+    returns=(
+        "{query: {pattern, path, glob, regex, case_sensitive, context_lines}, "
+        "matches: [{file, line_number, line, before, after}], "
+        "files_searched, files_skipped, truncated}"
+    ),
+)
+def _fs_search(
+    *,
+    pattern: str,
+    path: str = "",
+    glob: str | None = None,
+    regex: bool = False,
+    case_sensitive: bool = False,
+    context_lines: int = 0,
+    max_results: int = 50,
+) -> dict[str, Any]:
+    import re as _re
+
+    if not pattern:
+        raise ValueError("pattern ist erforderlich.")
+
+    ctx = max(0, min(int(context_lines or 0), 3))
+    limit = max(1, min(int(max_results or 50), 500))
+
+    root = _data_root()
+    target = _resolve_under_data(path or ".")
+
+    if not target.exists():
+        raise ValueError(f"Pfad existiert nicht: {path!r}")
+    if not target.is_dir():
+        # Auch Einzel-Datei erlauben: Suche nur in dieser Datei
+        if not target.is_file():
+            raise ValueError(f"Pfad ist weder Ordner noch Datei: {path!r}")
+
+    # Pattern kompilieren
+    try:
+        if regex:
+            flags = 0 if case_sensitive else _re.IGNORECASE
+            compiled = _re.compile(pattern, flags)
+        else:
+            flags = 0 if case_sensitive else _re.IGNORECASE
+            compiled = _re.compile(_re.escape(pattern), flags)
+    except _re.error as exc:
+        raise ValueError(f"Ungueltiges Regex-Pattern: {exc}") from exc
+
+    # Dateien sammeln
+    candidates: list[Path] = []
+    if target.is_file():
+        candidates = [target]
+    else:
+        # Rekursiv durchgehen, mit Skip-Liste
+        for p in target.rglob(glob or "*"):
+            if not p.is_file():
+                continue
+            # Skip-Verzeichnisse ueberspringen (relativ zum target)
+            rel_parts = p.relative_to(target).parts
+            if any(part in _SEARCH_SKIP_DIRS for part in rel_parts):
+                continue
+            # Binaerdateien anhand Endung ausschliessen
+            if p.suffix.lower() in BINARY_SUFFIXES:
+                continue
+            # Symlinks nur zulassen, wenn Ziel unter root bleibt
+            try:
+                resolved = p.resolve(strict=False)
+            except (OSError, RuntimeError):
+                continue
+            if not _is_under(resolved, root):
+                continue
+            candidates.append(p)
+
+    matches: list[dict[str, Any]] = []
+    files_searched = 0
+    files_skipped = 0
+    truncated = False
+
+    for file_path in candidates:
+        if len(matches) >= limit:
+            truncated = True
+            break
+        try:
+            stat = file_path.stat()
+        except OSError:
+            files_skipped += 1
+            continue
+        if stat.st_size > _SEARCH_MAX_FILE_BYTES:
+            files_skipped += 1
+            continue
+
+        try:
+            with file_path.open("rb") as fh:
+                raw = fh.read(_SEARCH_MAX_FILE_BYTES + 1)
+        except OSError:
+            files_skipped += 1
+            continue
+
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # Vielleicht latin-1? Im Zweifel fuer echte Binaer-Files skip.
+            try:
+                text = raw.decode("latin-1")
+            except UnicodeDecodeError:
+                files_skipped += 1
+                continue
+
+        files_searched += 1
+        lines = text.splitlines()
+
+        for idx, line in enumerate(lines):
+            if not compiled.search(line):
+                continue
+
+            entry: dict[str, Any] = {
+                "file": str(file_path.relative_to(root)),
+                "line_number": idx + 1,
+                "line": _truncate(line, _SEARCH_LINE_MAX),
+            }
+            if ctx > 0:
+                before = lines[max(0, idx - ctx): idx]
+                after = lines[idx + 1: idx + 1 + ctx]
+                entry["before"] = [_truncate(line_b, _SEARCH_LINE_MAX) for line_b in before]
+                entry["after"] = [_truncate(line_a, _SEARCH_LINE_MAX) for line_a in after]
+            matches.append(entry)
+
+            if len(matches) >= limit:
+                truncated = True
+                break
+
+    return {
+        "query": {
+            "pattern": pattern,
+            "path": str(target.relative_to(root)) or ".",
+            "glob": glob or "",
+            "regex": bool(regex),
+            "case_sensitive": bool(case_sensitive),
+            "context_lines": ctx,
+        },
+        "matches": matches,
+        "files_searched": files_searched,
+        "files_skipped": files_skipped,
+        "total_matches": len(matches),
+        "truncated": truncated,
+    }
+
+
+def _truncate(text: str, maxlen: int) -> str:
+    if len(text) <= maxlen:
+        return text
+    return text[:maxlen] + "…"
+
+
+# ---------------------------------------------------------------------------
 # Helfer
 # ---------------------------------------------------------------------------
 

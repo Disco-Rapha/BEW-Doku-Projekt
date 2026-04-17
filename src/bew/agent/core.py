@@ -166,9 +166,10 @@ class AgentService:
 
     # Maximale Anzahl an Tool-Call-Runden pro Turn (Sicherheitsnetz gegen
     # Endlos-Loops bei fehlerhaftem Tool-Gebrauch durch das Modell).
-    # 24 deckt realistische Workflows (sources-onboarding mit register +
-    # metadata + duplicates + mehreren SQL-Verifikationen) ab.
-    MAX_TOOL_ROUNDS = 24
+    # 48 deckt Batch-Workflows ab (z.B. 16 Context-PDFs mit je 3-4
+    # Tool-Calls = ~60 Calls). Bei echten Endlos-Loops greift das
+    # Abort-Handling (offene Calls mit 'aborted' beantworten).
+    MAX_TOOL_ROUNDS = 48
 
     def __init__(self) -> None:
         self._openai_client = None
@@ -198,11 +199,19 @@ class AgentService:
         # Der neue /openai/v1 Pfad ist versionslos — api-version als Query-Param
         # wird abgelehnt ("api-version query parameter is not allowed when using
         # /v1 path"). Der OpenAI-SDK-Client spricht /v1 nativ.
+        #
+        # Timeout: 30 Minuten. Disco macht manchmal lange Turns (16 DI-
+        # Extraktionen + SQL + fs_write = 10-20 Min pro Turn). Der Default
+        # von 600s (10 Min) reicht dafuer nicht.
+        import httpx as _httpx
+        _client_timeout = _httpx.Timeout(1800.0, connect=30.0)
+
         if settings.foundry_endpoint and settings.foundry_api_key:
             base_url = settings.foundry_endpoint.rstrip("/") + "/openai/v1"
             self._openai_client = OpenAI(
                 base_url=base_url,
                 api_key=settings.foundry_api_key,
+                timeout=_client_timeout,
             )
             logger.info(
                 "Foundry-Client (Project-API-Key, /openai/v1): endpoint=%s deployment=%s",
@@ -217,6 +226,7 @@ class AgentService:
                 azure_endpoint=settings.azure_openai_endpoint,
                 api_key=settings.azure_openai_key,
                 api_version=settings.azure_openai_api_version,
+                timeout=_client_timeout,
             )
             logger.info(
                 "Azure-OpenAI-Client (Resource-Key): endpoint=%s api_version=%s deployment=%s",
@@ -366,7 +376,40 @@ class AgentService:
         # Schema-Gruenden (Migration 004), auch wenn es technisch eine
         # response_id aus der Responses API ist.
 
-        current_input: str | list[dict] = user_text
+        # Projekt-Kontext als developer-Message prependen (nur wenn Sandbox aktiv).
+        # Damit weiss Disco in jedem Turn ohne Nachfrage, in welchem Projekt er
+        # arbeitet — und er bekommt beruecksichtigt, dass list_projects /
+        # get_project_details / search_documents / list_documents in dieser
+        # Session NUR das aktive Projekt zeigen.
+        current_input: str | list[dict]
+        if project_slug:
+            from ..projects import get_project_by_slug
+            _p_info = get_project_by_slug(project_slug)
+            if _p_info is not None:
+                _ctx_text = (
+                    "[AKTIVES PROJEKT — aus Sandbox-Kontext]\n"
+                    f"slug: {_p_info.get('slug')}\n"
+                    f"id: {_p_info['id']}\n"
+                    f"name: {_p_info['name']}\n"
+                    f"description: {_p_info.get('description') or '—'}\n\n"
+                    "Du arbeitest bereits IN diesem Projekt. fs_*- und "
+                    "sqlite_*-Tools sind auf dessen Verzeichnis bzw. "
+                    "data.db gescoped. "
+                    "Frage den Nutzer NICHT 'in welchem Projekt arbeiten wir' "
+                    "— das ist oben bereits gesetzt. Rufe list_projects "
+                    "NICHT als Start-Check auf (es liefert in der Sandbox "
+                    "ohnehin nur dieses eine Projekt). "
+                    "Andere Projekte existieren fuer Dich in dieser Sitzung "
+                    "nicht."
+                )
+                current_input = [
+                    {"type": "message", "role": "developer", "content": _ctx_text},
+                    {"type": "message", "role": "user", "content": user_text},
+                ]
+            else:
+                current_input = user_text
+        else:
+            current_input = user_text
 
         # Zwei Wege:
         #   (A) Portal-Agent per ID: Modell + Prompt + Tools kommen aus dem

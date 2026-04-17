@@ -24,14 +24,34 @@ fs_list({"path": ""})
 Damit weißt Du, welche Standard-Verzeichnisse befüllt sind und welche
 Dateien im Projekt-Root liegen.
 
-### 2. README.md lesen (User-Beschreibung)
+### 2. README.md lesen — Projektziel prüfen
 
 ```text
 fs_read({"path": "README.md"})
 ```
 
-Das ist der Kontext-Text, den der Benutzer selbst gepflegt hat:
-Worum geht das Projekt überhaupt, welche Frist, welcher Auftraggeber.
+Das ist der Kontext-Text, den der Benutzer selbst gepflegt hat.
+**WICHTIG: Prüfe ob ein konkretes Projektziel drinsteht.**
+
+Wenn README.md nur das leere Template enthält (kein Projektziel,
+nur Platzhalter-Text wie "*(Hier traegst Du den Projekt-Kontext
+ein...)*") → **frag den Benutzer aktiv:**
+
+> "Ich sehe, dass das Projektziel noch nicht festgehalten ist.
+> Bevor wir richtig arbeiten koennen, brauche ich Dein Ziel:
+>
+> 1. **Was ist das Ziel** dieses Projekts?
+>    (z.B. 'Dokumente nach VGB S 831 klassifizieren')
+> 2. **Was sollen die Ergebnisse sein?**
+>    (z.B. 'Excel mit Klassifikation + neue Ordnerstruktur')
+> 3. **Welche Quellen wirst Du laden?**
+>    (z.B. '1600 PDFs aus SharePoint + KKS-Liste als Excel')
+>
+> Ich trage das dann ins README.md ein."
+
+Nachdem der Benutzer geantwortet hat: schreibe ein **strukturiertes
+README** mit den Angaben (Projektziel, erwartete Ergebnisse, Quellen,
+ggf. Frist). Dann erst mit dem restlichen Onboarding fortfahren.
 
 ### 3. NOTES.md lesen (chronologisches Logbuch)
 
@@ -65,14 +85,24 @@ hilft**. Wenn das Manifest nicht existiert oder leer wirkt:
 sag dem Benutzer Bescheid, dass wir den `context-onboarding`-Skill
 durchlaufen sollten.
 
-### 5. Aktive Pläne prüfen (optional)
+### 5. Aktive Pläne prüfen (fast immer sinnvoll)
 
 ```text
-fs_list({"path": ".disco/plans"})
+plan_list({})
 ```
 
-Falls da Dateien liegen: kurz reinschauen, ob ein offener Plan auf
-Fortsetzung wartet.
+Listet alle Pläne mit Titel, Status und Datum. Wenn ein Plan mit Status
+`in-progress` oder `blocked` dabei ist: **zuerst reinschauen**, bevor
+Du etwas Neues anfängst:
+
+```text
+plan_read({"filename": "<aus plan_list>"})
+```
+
+Im Onboarding-Antwortblock (siehe unten) nennst Du dann explizit:
+„**Offener Plan:** `<Titel>` — Status `in-progress`, Schritt 3 von 5."
+Der Benutzer kann dann entscheiden, ob er dort weitermacht oder etwas
+anderes startet.
 
 ### 6. Projekt-DB-Status (optional, wenn relevant)
 

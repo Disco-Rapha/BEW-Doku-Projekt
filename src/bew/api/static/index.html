@@ -67,6 +67,8 @@ button { cursor: pointer; }
 button:hover { background: var(--panel); }
 .btn-primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
 .btn-primary:hover { background: var(--accent); }
+.btn-stop { background: var(--red); border-color: var(--red); color: #fff; font-size: 12px; padding: 4px 12px; }
+.btn-stop:hover { background: #dc2626; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
@@ -460,7 +462,8 @@ a:hover { text-decoration: underline; }
       <textarea id="chat-input" placeholder="Nachricht an Disco …  (Enter senden, Shift+Enter Zeilenumbruch)"></textarea>
       <div class="chat-actions">
         <span id="chat-status" class="muted">Bereit</span>
-        <button class="btn-primary" onclick="sendMessage()">Senden ▶</button>
+        <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
+        <button id="btn-send" class="btn-primary" onclick="sendMessage()">Senden ▶</button>
       </div>
     </div>
 
@@ -856,7 +859,36 @@ function sendMessage() {
   typingEl = appendTyping();
   state.ws.send(JSON.stringify({ text }));
   currentBubble = null; currentText = '';
+  state._isStreaming = true;
+  showStopButton(true);
   setStatus('Disco denkt …');
+}
+
+function stopResponse() {
+  // WebSocket schließen um den laufenden Turn abzubrechen
+  if (state.ws) {
+    try { state.ws.close(); } catch(e) {}
+    state.ws = null;
+    state.wsReady = false;
+  }
+  state._isStreaming = false;
+  showStopButton(false);
+  if (typingEl) { typingEl.remove(); typingEl = null; }
+  // Bisherige Teil-Antwort stehen lassen
+  if (currentBubble && currentText) {
+    currentBubble.innerHTML = renderMarkdown(currentText + '\n\n*[abgebrochen]*');
+  }
+  currentBubble = null; currentText = '';
+  setStatus('Abgebrochen — neuen Prompt senden um fortzufahren');
+  // WebSocket nach kurzer Pause neu verbinden
+  setTimeout(() => {
+    if (state.activeThreadId) connectWS(state.activeThreadId);
+  }, 1000);
+}
+
+function showStopButton(show) {
+  document.getElementById('btn-stop').classList.toggle('hidden', !show);
+  document.getElementById('btn-send').classList.toggle('hidden', show);
 }
 
 function handleEvent(ev) {
@@ -892,12 +924,16 @@ function handleEvent(ev) {
       break;
     case 'done':
       currentBubble = null; currentText = '';
+      state._isStreaming = false;
+      showStopButton(false);
       setStatus(`Bereit  ·  ${ev.tokens_input || 0}/${ev.tokens_output || 0} Tokens`);
-      // Nach Disco-Aktion: Sidebar refreshen, da neue Files/Tabellen entstanden sein koennten
+      // Nach Disco-Aktion: alles refreshen
       if (state.activeProjectSlug) {
         loadChats(state.activeProjectSlug);
         loadExplorer(state.activeProjectSlug);
         loadDbTables(state.activeProjectSlug);
+        // Viewer auto-refresh: wenn eine Datei offen ist, nochmal laden
+        refreshOpenViewer();
       }
       break;
   }
@@ -1044,8 +1080,14 @@ function fileUrl(slug, path) {
   return `/api/workspace/projects/${encodeURIComponent(slug)}/file?path=${encodeURIComponent(path)}`;
 }
 
+// Track was aktuell im Viewer offen ist (fuer Auto-Refresh)
+state._viewerOpenFile = null;   // {path, name} oder null
+state._viewerOpenTable = null;  // table-name oder null
+
 async function openFileInViewer(path, name) {
   if (!state.activeProjectSlug) return;
+  state._viewerOpenFile = {path, name};
+  state._viewerOpenTable = null;
   setViewerTitle(name, path);
   ensureViewerOpen();
   const ext = (name.split('.').pop() || '').toLowerCase();
@@ -1079,7 +1121,18 @@ function ensureViewerOpen() {
   document.getElementById('app').classList.remove('viewer-collapsed');
 }
 
+function refreshOpenViewer() {
+  // Wenn eine Datei oder Tabelle gerade offen ist: nochmal laden
+  if (state._viewerOpenFile) {
+    openFileInViewer(state._viewerOpenFile.path, state._viewerOpenFile.name);
+  } else if (state._viewerOpenTable) {
+    openTableInViewer(state._viewerOpenTable);
+  }
+}
+
 function closeViewer() {
+  state._viewerOpenFile = null;
+  state._viewerOpenTable = null;
   setViewerTitle('Viewer', '');
   setViewerHtml(`
     <div id="viewer-empty">
@@ -1312,6 +1365,8 @@ async function loadDbTables(slug) {
 
 async function openTableInViewer(table) {
   if (!state.activeProjectSlug) return;
+  state._viewerOpenTable = table;
+  state._viewerOpenFile = null;
   setViewerTitle('▤ ' + table, 'Projekt-DB');
   ensureViewerOpen();
   state._dbTable = table;
@@ -1421,22 +1476,27 @@ function setupSplitter(id, cssVar, lsKey, side) {
   const el = document.getElementById(id);
   let dragging = false; let startX = 0; let startW = 0;
   el.addEventListener('mousedown', (e) => {
+    e.preventDefault();
     dragging = true;
     startX = e.clientX;
     startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
     document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
   });
   document.addEventListener('mousemove', (e) => {
     if (!dragging) return;
     let delta = e.clientX - startX;
     if (side === 'right') delta = -delta;
-    let w = Math.max(0, Math.min(700, startW + delta));
+    // Min 100px, Max 60% des Viewports — erlaubt breite Viewer
+    const maxW = Math.floor(window.innerWidth * 0.6);
+    let w = Math.max(100, Math.min(maxW, startW + delta));
     document.documentElement.style.setProperty(cssVar, w + 'px');
   });
   document.addEventListener('mouseup', () => {
     if (dragging) {
       dragging = false;
       document.body.style.userSelect = '';
+      document.body.style.cursor = '';
       const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
       localStorage.setItem(lsKey, String(w));
     }

@@ -37,7 +37,7 @@ def get_project(project_id: int, conn: sqlite3.Connection | None = None, db_path
         conn = connect(db_path or settings.db_path)
     try:
         row = conn.execute(
-            "SELECT id, name, description, status, created_at, updated_at "
+            "SELECT id, name, description, status, created_at, updated_at, slug "
             "FROM projects WHERE id = ?",
             (project_id,),
         ).fetchone()
@@ -47,6 +47,25 @@ def get_project(project_id: int, conn: sqlite3.Connection | None = None, db_path
     finally:
         if _owned:
             conn.close()
+
+
+def get_project_by_slug(slug: str, db_path=None) -> dict[str, Any] | None:
+    """Gibt das Projekt mit gegebenem Slug zurueck, oder None wenn nicht gefunden.
+
+    Wird vom Agent-Sandbox-Mechanismus genutzt: der Slug kommt aus
+    `agent.context.get_current_project_slug()`, hier holen wir die
+    zugehoerige Projekt-Zeile aus der system.db.
+    """
+    conn = connect(db_path or settings.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, name, description, status, created_at, updated_at, slug "
+            "FROM projects WHERE slug = ?",
+            (slug,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def list_projects(include_archived: bool = False, db_path=None) -> list[dict[str, Any]]:

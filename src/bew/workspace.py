@@ -74,13 +74,17 @@ def validate_slug(slug: str) -> str:
 
 PROJECT_SUBDIRS: tuple[str, ...] = (
     "sources",
+    "sources/_meta",
     "context",
     "work",
+    "work/scripts",
     "exports",
     ".disco",
     ".disco/plans",
     ".disco/sessions",
     ".disco/local-skills",
+    ".disco/context-extracts",
+    ".disco/context-summaries",
 )
 
 
