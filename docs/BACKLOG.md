@@ -308,6 +308,60 @@ existiert im SDK).
 → Umsetzung: SDK-Feature prüfen, sonst selbst bauen (Zusammenfassungs-
   Prompt → neuer Response-Anker → alte Chain verwerfen).
 
+### Iterativer, gesprächiger Tool-Loop wie Claude Code (Priorität: hoch)
+
+**Beobachtung des Nutzers:** Disco macht viele Tool-Calls hintereinander
+stillschweigend und gibt erst am Ende einen großen Text-Block heraus.
+Was wir wollen: Frage → Tool → **Ergebnis analysieren** → nächstes
+Tool (mit sichtbaren Gedanken dazwischen), bis die Anfrage erledigt ist.
+
+**Stand heute:**
+- Das Framework ist iterativ: `core.py` hat `MAX_TOOL_ROUNDS = 48`,
+  pro Runde Response → Tools → Results → nächste Runde, bis das Modell
+  keine Tool-Calls mehr macht.
+- Das Modell-Verhalten ist das Problem: GPT-5 batcht gerne mehrere
+  Tool-Calls pro Runde (parallel) und schweigt zwischen den Runden
+  („reine Denk-Runden" ohne Text-Output).
+- Claude Code macht's anders: Claude schreibt aktiv Gedanken zwischen
+  Tool-Calls („Ich schaue mir X an, dann Y"). Das ist Modell-Verhalten,
+  nicht Infrastruktur.
+
+**Was fehlt, um Disco-Runs gesprächiger und länger zu machen:**
+
+1. **System-Prompt-Regel „Narrate-while-acting":** explizit fordern,
+   dass nach jedem wichtigen Tool-Result ein kurzer Satz kommt, was
+   das Ergebnis bedeutet und was als Nächstes getan wird. Nicht am
+   Ende alles auf einmal, sondern laufend.
+
+2. **Reasoning-Events streamen:** GPT-5 hat `reasoning` als
+   Response-Type (zwischen Tool-Calls passiert „inneres Denken").
+   Aktuell nicht live im UI sichtbar — wenn wir es als Text darstellen,
+   sieht der Nutzer, was Disco gerade überlegt.
+
+3. **Selbst-Überprüfung nach jedem Meilenstein:** Regel im
+   System-Prompt: „Nach N Tool-Calls: kurz innehalten und prüfen,
+   ob Du dem Ziel näher kommst. Falls nein: anderen Ansatz wählen
+   oder beim Nutzer rückfragen."
+
+4. **Adaptive Tool-Rundungen:** `MAX_TOOL_ROUNDS=48` ist generous
+   für normale Anfragen, aber für umfassende Analysen (10k Dokumente)
+   reicht es nicht. Diese Klasse an Aufgaben gehört ohnehin in einen
+   **Flow**, nicht in einen Chat-Turn. System-Prompt-Regel:
+   „Bei > N Items: Flow empfehlen, nicht selbst durchgehen."
+
+5. **UI-Feedback für lange Runs:** Progressbar oder Live-Zähler
+   „Runde 7/48, 3 Tool-Calls bisher". Damit der Nutzer sieht, dass
+   Disco arbeitet, nicht hängt.
+
+**Ziel:** Disco soll lange Agent-Runs fahren können (Datenanalysen über
+mehrere Minuten, mit 20+ Tool-Calls), und dabei die ganze Zeit sichtbar
+und nachvollziehbar arbeiten — wie Claude Code. Der Fallback für
+richtig große Läufe (10k Items, Stunden) ist der Flow.
+
+→ Umsetzung: System-Prompt-Regeln (Abschnitt "Arbeitsstil" erweitern),
+  Reasoning-Events im `core.py` streamen + im Frontend als dezente
+  „Gedanken"-Zeilen rendern, Tool-Call-Zähler in den Status-Bar.
+
 ### "No tool output found" nach Crash/Stop (Bug, Priorität: hoch)
 
 Wenn ein Turn crasht oder per Stop-Button abgebrochen wird, bleibt

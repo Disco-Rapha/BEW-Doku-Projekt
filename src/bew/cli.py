@@ -601,5 +601,364 @@ def agent_threads(include_archived: bool) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# disco flow — Flow-Verwaltung im aktiven Projekt
+# ---------------------------------------------------------------------------
+
+
+def _resolve_project_path(project_slug: str) -> Path:
+    """Projekt-Slug → Pfad. Wirft SystemExit bei Unbekanntem."""
+    from .workspace import validate_slug
+    from .config import settings
+    try:
+        slug = validate_slug(project_slug)
+    except ValueError as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
+    project_path = settings.projects_dir / slug
+    if not project_path.is_dir():
+        click.echo(
+            f"FEHLER: Projekt '{slug}' nicht gefunden ({project_path}).",
+            err=True,
+        )
+        raise SystemExit(1)
+    return project_path
+
+
+@main.group("flow")
+def flow_group() -> None:
+    """Flows (Massenverarbeitung) in einem Projekt verwalten.
+
+    Ein Flow lebt unter <projekt>/flows/<name>/ mit README.md und
+    runner.py. Laufzeit-Zustand (Runs, Items) in der Projekt-DB.
+    """
+
+
+@flow_group.command("list")
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+def flow_list(project_slug: str) -> None:
+    """Listet alle Flows im Projekt auf."""
+    from .flows import service
+
+    project_path = _resolve_project_path(project_slug)
+    flows = service.list_flows(project_path)
+    if not flows:
+        click.echo(
+            f"Keine Flows unter {project_path / 'flows'}. "
+            f"Neuen Flow anlegen: mkdir flows/<name>, README.md + runner.py schreiben."
+        )
+        return
+    click.echo(f"{'Name':<28} {'Runner':<8} {'README':<8} {'Runs':>5}  Letzte Aenderung")
+    click.echo("-" * 85)
+    for f in flows:
+        runner_mark = "OK" if f.has_runner else "FEHLT"
+        readme_mark = "OK" if f.has_readme else "FEHLT"
+        last = f.last_modified or "-"
+        click.echo(
+            f"{f.name:<28} {runner_mark:<8} {readme_mark:<8} {f.run_count:>5}  {last}"
+        )
+
+
+@flow_group.command("show")
+@click.argument("flow_name")
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+def flow_show(flow_name: str, project_slug: str) -> None:
+    """Details zu einem Flow: Pfad, README-Auszug, bisherige Runs."""
+    from .flows import service
+
+    project_path = _resolve_project_path(project_slug)
+    try:
+        info = service.get_flow(project_path, flow_name)
+    except KeyError as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Flow: {info.name}")
+    click.echo(f"  Pfad         : {info.path}")
+    click.echo(f"  runner.py    : {'OK' if info.has_runner else 'FEHLT'}")
+    click.echo(f"  README.md    : {'OK' if info.has_readme else 'FEHLT'}")
+    click.echo(f"  Letzte Aend. : {info.last_modified or '-'}")
+    click.echo(f"  Runs bisher  : {info.run_count}")
+    if info.readme_excerpt:
+        click.echo("")
+        click.echo("README-Auszug:")
+        click.echo(f"  {info.readme_excerpt}")
+
+    # Letzte 5 Runs
+    runs = service.list_runs(project_path, flow_name=info.name, limit=5)
+    if runs:
+        click.echo("")
+        click.echo("Letzte Runs:")
+        click.echo(f"  {'ID':<5} {'Status':<12} {'Items':>12} {'Kosten':>10}  Erstellt")
+        click.echo("  " + "-" * 60)
+        for r in runs:
+            items = f"{r.done_items}/{r.total_items}"
+            if r.failed_items:
+                items += f" ({r.failed_items}F)"
+            cost = f"{r.total_cost_eur:.3f} EUR" if r.total_cost_eur else "-"
+            click.echo(
+                f"  {r.id:<5} {r.status:<12} {items:>12} {cost:>10}  {r.created_at}"
+            )
+
+
+@flow_group.command("run")
+@click.argument("flow_name")
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+@click.option("--title", default=None, help="Optionaler Titel fuer diesen Run.")
+@click.option(
+    "--config",
+    "config_json",
+    default=None,
+    help='Parameter als JSON-String, z.B. \'{"limit": 100, "budget_eur": 5}\'.',
+)
+@click.option(
+    "--wait",
+    is_flag=True,
+    default=False,
+    help="Warte auf Ende und zeige Status. Default: detached Start.",
+)
+def flow_run(
+    flow_name: str,
+    project_slug: str,
+    title: str | None,
+    config_json: str | None,
+    wait: bool,
+) -> None:
+    """Startet einen neuen Run eines Flows."""
+    from .flows import service
+
+    project_path = _resolve_project_path(project_slug)
+
+    config: dict | None = None
+    if config_json:
+        try:
+            config = json.loads(config_json)
+            if not isinstance(config, dict):
+                raise ValueError("config muss ein JSON-Objekt sein.")
+        except (json.JSONDecodeError, ValueError) as exc:
+            click.echo(f"FEHLER: ungueltiges --config: {exc}", err=True)
+            raise SystemExit(1)
+
+    try:
+        run = service.create_run(project_path, flow_name, title=title, config=config)
+    except (KeyError, FileNotFoundError, ValueError) as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Run {run.id} angelegt fuer Flow '{flow_name}'")
+    try:
+        run = service.start_run(project_path, run.id)
+    except RuntimeError as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
+    click.echo(
+        f"Worker gestartet (pid={run.worker_pid}). "
+        f"Status beobachten:  disco flow status {run.id} --project {project_slug}"
+    )
+
+    if not wait:
+        return
+
+    # --wait: Polling bis Endstatus
+    import time as _time
+    click.echo("")
+    click.echo("Warte auf Run-Ende (Strg+C zum Verlassen — Worker laeuft weiter)...")
+    last_done = -1
+    while True:
+        try:
+            run = service.get_run(project_path, run.id)
+        except KeyError:
+            click.echo("Run aus DB verschwunden?!", err=True)
+            break
+        if run.done_items != last_done:
+            click.echo(
+                f"  status={run.status}  items={run.done_items}/{run.total_items}  "
+                f"failed={run.failed_items}  cost={run.total_cost_eur:.3f}EUR"
+            )
+            last_done = run.done_items
+        if run.status in ("done", "failed", "cancelled", "paused"):
+            click.echo(f"Ende: status={run.status}")
+            if run.error:
+                click.echo(f"Fehler: {run.error[:500]}")
+            break
+        _time.sleep(1.0)
+
+
+@flow_group.command("status")
+@click.argument("run_id", type=int)
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+def flow_status(run_id: int, project_slug: str) -> None:
+    """Zeigt den Status eines Runs."""
+    from .flows import service
+
+    project_path = _resolve_project_path(project_slug)
+    try:
+        run = service.get_run(project_path, run_id)
+    except KeyError as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Run {run.id} — Flow '{run.flow_name}'")
+    click.echo(f"  Status        : {run.status}")
+    click.echo(f"  Worker-PID    : {run.worker_pid or '-'}")
+    click.echo(f"  Erstellt      : {run.created_at}")
+    click.echo(f"  Gestartet     : {run.started_at or '-'}")
+    click.echo(f"  Beendet       : {run.finished_at or '-'}")
+    click.echo(f"  Items total   : {run.total_items}")
+    click.echo(f"  Items done    : {run.done_items}")
+    click.echo(f"  Items failed  : {run.failed_items}")
+    click.echo(f"  Items skipped : {run.skipped_items}")
+    click.echo(f"  Kosten (EUR)  : {run.total_cost_eur:.4f}")
+    click.echo(f"  Tokens in/out : {run.total_tokens_in} / {run.total_tokens_out}")
+    if run.pause_requested:
+        click.echo("  ** pause_requested gesetzt")
+    if run.cancel_requested:
+        click.echo("  ** cancel_requested gesetzt")
+    if run.error:
+        click.echo(f"  Fehler        : {run.error[:500]}")
+    if run.config:
+        click.echo(f"  Config        : {json.dumps(run.config, ensure_ascii=False)}")
+
+
+@flow_group.command("runs")
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+@click.option("--flow", "flow_filter", default=None, help="Nur Runs eines Flows.")
+@click.option("--status", "status_filter", default=None, help="Nur Runs mit diesem Status.")
+@click.option("--limit", default=20, type=int, help="Max. Anzahl (Default 20).")
+def flow_runs(
+    project_slug: str,
+    flow_filter: str | None,
+    status_filter: str | None,
+    limit: int,
+) -> None:
+    """Listet Runs im Projekt (neueste zuerst)."""
+    from .flows import service
+
+    project_path = _resolve_project_path(project_slug)
+    runs = service.list_runs(
+        project_path,
+        flow_name=flow_filter,
+        status=status_filter,
+        limit=limit,
+    )
+    if not runs:
+        click.echo("Keine Runs.")
+        return
+    click.echo(
+        f"{'ID':<5} {'Flow':<22} {'Status':<11} {'Items':>12} {'EUR':>8}  Erstellt"
+    )
+    click.echo("-" * 85)
+    for r in runs:
+        items = f"{r.done_items}/{r.total_items}"
+        if r.failed_items:
+            items += f"({r.failed_items}F)"
+        click.echo(
+            f"{r.id:<5} {r.flow_name[:22]:<22} {r.status:<11} "
+            f"{items:>12} {r.total_cost_eur:>7.3f}  {r.created_at}"
+        )
+
+
+@flow_group.command("pause")
+@click.argument("run_id", type=int)
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+def flow_pause(run_id: int, project_slug: str) -> None:
+    """Signalisiert dem Worker, dass er beim naechsten Item pausieren soll."""
+    from .flows import service
+
+    project_path = _resolve_project_path(project_slug)
+    try:
+        run = service.request_pause(project_path, run_id)
+    except (KeyError, ValueError) as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
+    click.echo(f"pause_requested=1 fuer Run {run.id}. Worker beendet beim naechsten Item.")
+
+
+@flow_group.command("cancel")
+@click.argument("run_id", type=int)
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+@click.option("--force", is_flag=True, default=False, help="Prozess hart killen (SIGTERM).")
+def flow_cancel(run_id: int, project_slug: str, force: bool) -> None:
+    """Signalisiert dem Worker, dass er abbrechen soll."""
+    from .flows import service
+
+    project_path = _resolve_project_path(project_slug)
+    try:
+        if force:
+            killed = service.kill_run(project_path, run_id)
+            click.echo(
+                f"Kill-Signal an Run {run_id} gesendet."
+                if killed
+                else f"Worker von Run {run_id} war nicht mehr am Leben — Status bereinigt."
+            )
+        else:
+            run = service.request_cancel(project_path, run_id)
+            click.echo(f"cancel_requested=1 fuer Run {run.id}.")
+    except (KeyError, ValueError) as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
+
+
+@flow_group.command("items")
+@click.argument("run_id", type=int)
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+@click.option("--status", "status_filter", default=None, help="nur pending/running/done/failed/skipped")
+@click.option("--limit", default=20, type=int, help="Max. Anzahl (Default 20).")
+def flow_items(
+    run_id: int,
+    project_slug: str,
+    status_filter: str | None,
+    limit: int,
+) -> None:
+    """Zeigt Items eines Runs (input_ref, status, output-Preview)."""
+    from .flows import service
+
+    project_path = _resolve_project_path(project_slug)
+    items = service.list_run_items(
+        project_path, run_id, status=status_filter, limit=limit
+    )
+    if not items:
+        click.echo("Keine Items.")
+        return
+    click.echo(f"{'ID':<5} {'Status':<9} {'Attempts':<9} Input-Ref")
+    click.echo("-" * 80)
+    for it in items:
+        click.echo(
+            f"{it['id']:<5} {it['status']:<9} {it['attempts']:<9} {it['input_ref']}"
+        )
+        if it.get("error"):
+            click.echo(f"      Fehler: {it['error'][:200]}")
+        elif it.get("output_json"):
+            preview = it["output_json"][:120]
+            click.echo(f"      Output: {preview}{'...' if len(it['output_json']) > 120 else ''}")
+
+
+@flow_group.command("logs")
+@click.argument("run_id", type=int)
+@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
+@click.option("--tail", default=50, type=int, help="Letzte N Zeilen (Default 50).")
+def flow_logs(run_id: int, project_slug: str, tail: int) -> None:
+    """Zeigt die letzten Zeilen des Run-Logs."""
+    project_path = _resolve_project_path(project_slug)
+    log_dir = project_path / ".disco" / "flows" / "runs" / str(run_id)
+    log_file = log_dir / "log.txt"
+    stderr_file = log_dir / "stderr.log"
+    if not log_file.exists() and not stderr_file.exists():
+        click.echo(f"Keine Logs fuer Run {run_id}.")
+        return
+    if log_file.exists():
+        click.echo(f"--- {log_file} (letzte {tail} Zeilen) ---")
+        lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        for line in lines[-tail:]:
+            click.echo(line)
+    if stderr_file.exists():
+        txt = stderr_file.read_text(encoding="utf-8", errors="replace")
+        if txt.strip():
+            click.echo("")
+            click.echo(f"--- {stderr_file} (letzte {tail} Zeilen) ---")
+            for line in txt.splitlines()[-tail:]:
+                click.echo(line)
+
+
 if __name__ == "__main__":
     main()

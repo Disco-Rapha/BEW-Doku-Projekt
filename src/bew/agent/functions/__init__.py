@@ -166,6 +166,7 @@ from . import fs      # noqa: E402,F401 — fs_list/read/write/mkdir/delete + by
 from . import pdf     # noqa: E402,F401 — pdf_extract_text
 from . import notes   # noqa: E402,F401 — project_notes_read, project_notes_append
 from . import plans   # noqa: E402,F401 — plan_list, plan_read, plan_write, plan_append_note
+from . import flows   # noqa: E402,F401 — flow_list, flow_show, flow_create, flow_run, flow_runs, flow_status, flow_items, flow_pause, flow_cancel, flow_logs
 from . import imports  # noqa: E402,F401 — xlsx_inspect, import_xlsx_to_table, import_csv_to_table
 from . import skills   # noqa: E402,F401 — list_skills, load_skill
 from . import sources   # noqa: E402,F401 — sources_register, attach_metadata, detect_duplicates

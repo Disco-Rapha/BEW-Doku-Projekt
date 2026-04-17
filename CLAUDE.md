@@ -103,18 +103,24 @@ Arbeitsweise: **proaktiv, transparent, selbstkritisch.** Disco kündigt
 an was er tut, führt es aus, und meldet das Ergebnis — mit echtem
 Tool-Result als Wahrheitsquelle, keine Halluzination.
 
-### 6. Pipelines (noch nicht implementiert — nächste große Phase)
+### 6. Flows — Massenverarbeitung als Projekt-Artefakt
 
-Pipelines sind für **Heavy-Lifting-Repetitivaufgaben** mit LLMs:
-- Pro Dokument ein LLM-Call (Klassifikation, Zusammenfassung,
-  Daten-Extraktion)
-- Über Tausende Dokumente, über Stunden laufend
-- Disco baut die Pipeline auf, überprüft sie, überwacht den
-  Durchlauf, steuert bei Problemen nach
+Ein **Flow** ist ein projektinterner Verarbeitungs-Auftrag mit eigenem
+Ordner `<projekt>/flows/<flow_name>/` (README + runner.py), eigenem
+Subprocess, eigenem Status in der Projekt-DB. Flows decken alles von
+0-EUR-Daten-Transformationen über DI-PDF-Extraktion bis
+LLM-Klassifikationen ab.
 
-Architektur: separater Worker-Prozess, Job-Queue, Status-Tracking,
-Resume bei Abbruch. Das "Arbeitstier" (direktes gpt-5-Deployment,
-ohne Agent-Overhead) läuft die Pipeline, Disco (der Agent) koordiniert.
+- Disco **baut** den Flow mit dem Nutzer zusammen (README + runner.py)
+- Disco **testet** ihn (Mini-Läufe mit `--config '{"limit": 5}'`)
+- Disco **startet + überwacht** den Full-Run (auch über 10 Stunden)
+- Disco **reagiert** bei Anomalien (Pause, Nachjustieren, Resume)
+
+Framework-Bausteine: `src/bew/flows/sdk.py` (FlowRun/FlowDB für
+Autoren), `runner_host.py` (Subprocess-Lifecycle), `service.py`
+(CLI-/Agent-API), Migration `004_agent_flows.sql`.
+
+Siehe `src/bew/flows/README.md` für das Entwickler-Howto.
 
 ---
 
@@ -265,17 +271,35 @@ disco agent threads                            # Alle Threads
 disco db init                                  # System-DB-Migrationen
 disco db status                                # Schema-Version
 
+# Flows (Massenverarbeitung)
+disco flow list --project <slug>                       # Alle Flows im Projekt
+disco flow show <name> --project <slug>                # Details + letzte Runs
+disco flow run <name> --project <slug> [--wait]        # Neuen Run starten
+disco flow status <run_id> --project <slug>            # Laufender Status
+disco flow pause <run_id> --project <slug>             # Pause-Signal
+disco flow cancel <run_id> --project <slug> [--force]  # Cancel-Signal
+disco flow items <run_id> --project <slug>             # Items mit Output
+disco flow logs <run_id> --project <slug> [--tail N]   # Run-Logs
+
 # Server (eigenes Terminal, --reload für Live-Updates):
 uv run uvicorn bew.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ## Was als Nächstes kommt
 
-### Pipelines (Phase 2c — nächste große Phase)
-- Job-Queue + Worker-Prozess für Bulk-LLM-Operationen
-- Job-Typen: `llm_classify`, `markdown_extract`, `embedding_index`
-- Disco triggert + überwacht, das "Arbeitstier" (direktes gpt-5-Deployment) arbeitet
-- Status-Tracking, Resume bei Abbruch, parallele Jobs
+### Flow-Integration für Disco (Phase 2c — laufend)
+- Agent-Tools: flow_list, flow_show, flow_create, flow_run_start,
+  flow_run_status, flow_run_pause, flow_run_cancel
+- Skill `flow-builder` — Playbook für das gemeinsame Entwickeln
+  und Testen eines Flows mit dem Nutzer
+- Erster echter Flow (DCC-Klassifikation, SOLL/IST oder Excel-Report —
+  entscheidet der Nutzer, sobald Framework integriert ist)
+- Fundament steht: SDK, Worker, Migration 004, CLI, Test-Flow
+  `flow-smoketest/file-stats` grün
+
+### Portal-Agent für Flows erweitern
+- System-Prompt-Regeln: wann Flow statt run_python
+- Trigger-Tabelle: „10.000 Dokumente klassifizieren" → Flow-Builder-Skill
 
 ### Hybrid-Search (Phase 2c)
 - Ein Suchdienst pro Projekt über alle Dateien (sources + context)
