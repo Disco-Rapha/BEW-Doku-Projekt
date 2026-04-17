@@ -82,12 +82,25 @@ def project_group() -> None:
     default=False,
     help="Bestehende README/NOTES/memory.md ueberschreiben.",
 )
-def project_init(slug: str, name: str | None, description: str | None, overwrite_files: bool) -> None:
+@click.option(
+    "--sample",
+    is_flag=True,
+    default=False,
+    help="Sample-Dateien unter sources/ + _meta/ fuer Test-Zwecke anlegen.",
+)
+def project_init(
+    slug: str,
+    name: str | None,
+    description: str | None,
+    overwrite_files: bool,
+    sample: bool,
+) -> None:
     """Legt ein neues Projekt im Workspace an (idempotent).
 
     SLUG: kurze ID, lowercase, '-' und '_' erlaubt. z.B. 'vattenfall-reuter'
     """
-    from .workspace import init_project, validate_slug
+    from pathlib import Path as _Path
+    from .workspace import init_project, validate_slug, seed_sample_sources
 
     try:
         slug = validate_slug(slug)
@@ -102,9 +115,22 @@ def project_init(slug: str, name: str | None, description: str | None, overwrite
     click.echo(f"   Pfad:       {info['path']}")
     click.echo(f"   Projekt-DB: {info['db_path']}")
     click.echo(f"   System-ID:  {info['project_id']}")
+
+    if sample:
+        sample_info = seed_sample_sources(_Path(info["path"]))
+        click.echo("")
+        click.echo(f"   Sample:     {sample_info['count']} Dateien unter sources/ angelegt")
+        for f in sample_info["files"][:10]:
+            click.echo(f"               - {f}")
+        if len(sample_info["files"]) > 10:
+            click.echo(f"               ... +{len(sample_info['files']) - 10} weitere")
+
     click.echo("")
     click.echo("Naechste Schritte:")
-    click.echo(f"   - Quelldaten in {info['path']}/sources/ ablegen")
+    if sample:
+        click.echo(f"   - Im Chat: 'registriere die Quelldateien'")
+    else:
+        click.echo(f"   - Quelldaten in {info['path']}/sources/ ablegen")
     click.echo(f"   - Disco starten:  disco agent chat --project {info['slug']}")
 
 

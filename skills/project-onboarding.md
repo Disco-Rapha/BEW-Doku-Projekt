@@ -1,7 +1,7 @@
 ---
 name: project-onboarding
-description: Disco betritt ein Projekt zum ersten Mal in einer Session — liest README/NOTES/memory ein, fasst zusammen wo wir stehen, fragt was heute zu tun ist.
-when_to_use: Am Anfang jeder neuen Chat-Session in einem Projekt. Wenn Du nicht weißt, was im Projekt schon getan wurde, oder wenn der Benutzer „erinnerst Du dich noch?" fragt.
+description: Session-Start-Routine — README + NOTES + memory + context/_manifest lesen, Stand zusammenfassen, naechsten Schritt vorschlagen.
+when_to_use: "wo waren wir?", "was haben wir letztes Mal gemacht?", "erinnerst Du dich?" oder frische Session ohne bisherigen Chat-Verlauf.
 ---
 
 # Skill: project-onboarding
@@ -51,6 +51,20 @@ fs_read({"path": ".disco/memory.md"})
 Dauerhafte Erkenntnisse: Konventionen, Vorlieben des Benutzers,
 Schlüssel-Erkenntnisse zu den Daten. Immer komplett lesen.
 
+### 4b. context/_manifest.md lesen (Arbeitsgrundlagen)
+
+```text
+fs_read({"path": "context/_manifest.md"})
+```
+
+Das Manifest zählt auf, welche Normen, Kataloge, Richtlinien im
+Projekt als Nachschlagewerke liegen. Lies es kurz durch — Du musst
+nicht jeden Volltext kennen, aber **welche Datei bei welcher Frage
+hilft**. Wenn das Manifest nicht existiert oder leer wirkt:
+`fs_list({"path": "context"})` — wenn da unpflegte Dateien liegen,
+sag dem Benutzer Bescheid, dass wir den `context-onboarding`-Skill
+durchlaufen sollten.
+
 ### 5. Aktive Pläne prüfen (optional)
 
 ```text
@@ -78,8 +92,10 @@ Halte die Antwort **kurz** (max. 8 Zeilen):
 1. **Eine Zeile** zum Projekt-Kontext (aus README)
 2. **Eine Zeile** zum letzten Stand (aus NOTES letzter Eintrag)
 3. **Eine Zeile** zu Konventionen oder Faustregeln, die heute relevant sind
-4. **Eine Zeile** zu offenen Plänen (wenn vorhanden)
-5. **Frage** an den Benutzer: "Womit starten wir heute?"
+4. **Eine Zeile** zu Arbeitsgrundlagen (Kontext-Manifest): wenn Du
+   Normen/Lookup-Tabellen gesehen hast, nenne sie kurz; wenn leer, erwaehn es nicht.
+5. **Eine Zeile** zu offenen Plänen (wenn vorhanden)
+6. **Frage** an den Benutzer: "Womit starten wir heute?"
 
 Beispiel:
 
@@ -87,7 +103,7 @@ Beispiel:
 > SOLL/IST nach VGB S 831, Frist 18.05.2026).
 > Letzter Stand: IBL-Prototyp mit 72 Einträgen erstellt, Excel-Export
 > nach `exports/` lief.
-> Faustregel: Du nutzt für Hersteller-Zuordnung den BEW-Standard-
+> Faustregel: Du nutzt für Hersteller-Zuordnung den Standard-
 > Dokumentensatz, nicht VGB-T-Marker.
 > Offen: Bauwerk-Komponenten BW-001 bis BW-018 sind noch nicht in
 > die IBL übernommen.

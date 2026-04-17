@@ -165,8 +165,10 @@ class AgentService:
     """
 
     # Maximale Anzahl an Tool-Call-Runden pro Turn (Sicherheitsnetz gegen
-    # Endlos-Loops bei fehlerhaftem Tool-Gebrauch durch das Modell)
-    MAX_TOOL_ROUNDS = 12
+    # Endlos-Loops bei fehlerhaftem Tool-Gebrauch durch das Modell).
+    # 24 deckt realistische Workflows (sources-onboarding mit register +
+    # metadata + duplicates + mehreren SQL-Verifikationen) ab.
+    MAX_TOOL_ROUNDS = 24
 
     def __init__(self) -> None:
         self._openai_client = None
@@ -580,9 +582,49 @@ class AgentService:
             current_input = next_input
             # Schleife faehrt fort mit neuem responses.create-Call
         else:
-            # for-else: Schleife ist ohne break durchgelaufen -> Max-Rounds
+            # for-else: Schleife ist ohne break durchgelaufen -> Max-Rounds.
+            # WICHTIG: Wir muessen die letzten offenen Tool-Calls noch
+            # "abschliessen" (mit synthetischem Output an Foundry zuruecksenden),
+            # sonst bleibt die Conversation mit unbeantwortetem function_call
+            # haengen und der NAECHSTE Turn scheitert mit
+            # "No tool output found for function call ...".
+            pending_unanswered = [
+                (iid, d) for iid, d in pending_tool_calls.items()
+                if "arguments" in d
+            ]
+            if pending_unanswered and previous_response_id:
+                abort_outputs = [
+                    {
+                        "type": "function_call_output",
+                        "call_id": d["call_id"],
+                        "output": json.dumps({
+                            "error": "aborted",
+                            "reason": f"Max. {self.MAX_TOOL_ROUNDS} Tool-Call-Runden erreicht. "
+                                      "Agent hat zu viele Tool-Calls produziert, Turn wurde abgebrochen.",
+                        }),
+                    }
+                    for _, d in pending_unanswered
+                ]
+                try:
+                    # Blocking, aber kein Streaming noetig — nur "close the loop"
+                    close_resp = self._openai_client.responses.create(
+                        input=abort_outputs,
+                        previous_response_id=previous_response_id,
+                        store=True,
+                        max_output_tokens=200,
+                        **({"extra_body": {"agent_reference": agent_ref}}
+                           if use_portal_agent else {
+                               "model": model,
+                               "instructions": instructions,
+                               "tools": tools,
+                           }),
+                    )
+                    last_response_id = getattr(close_resp, "id", last_response_id)
+                except Exception as exc:
+                    logger.warning("Abort-Close fehlgeschlagen: %s", exc)
             yield ErrorEvent(
-                message=f"Max. {self.MAX_TOOL_ROUNDS} Tool-Call-Runden erreicht."
+                message=f"Max. {self.MAX_TOOL_ROUNDS} Tool-Call-Runden erreicht. "
+                        "Turn wurde sauber beendet — Du kannst direkt einen neuen Prompt senden."
             )
 
         # Assistant-Antwort zusammen persistieren

@@ -6,10 +6,12 @@ Ein Projekt im Disco-Workspace ist ein Verzeichnis unter
     <slug>/
     ├── README.md          ← Du editierst: Worum geht's?
     ├── NOTES.md           ← Disco fuehrt fort: chronologisches Logbuch
-    ├── sources/           ← Quelldaten (read-mostly)
+    ├── sources/           ← Arbeitsdokumente (zu bearbeitendes Material)
+    ├── context/           ← Arbeitsgrundlagen (Normen, Kataloge, Richtlinien)
+    │   └── _manifest.md   ← Agent-gepflegte Uebersicht aller Kontext-Dateien
     ├── work/              ← Discos Arbeitsraum
     ├── exports/           ← Endprodukte (nicht ueberschreiben)
-    ├── data.db            ← Projekt-DB (Discos work_*/agent_*-Tabellen)
+    ├── data.db            ← Projekt-DB (work_*/agent_*/context_*-Tabellen)
     └── .disco/            ← Discos Hirn fuer dieses Projekt
         ├── memory.md      ← Faustregeln, dauerhafte Erkenntnisse
         ├── plans/         ← aktive Aufgaben-Plaene
@@ -72,6 +74,7 @@ def validate_slug(slug: str) -> str:
 
 PROJECT_SUBDIRS: tuple[str, ...] = (
     "sources",
+    "context",
     "work",
     "exports",
     ".disco",
@@ -127,6 +130,36 @@ leere Projekt-DB initialisiert.
 """
 
 
+def _context_manifest_template(name: str) -> str:
+    return f"""# Kontext-Manifest: {name}
+
+**Was ist das?** Hier listet Disco alle Kontext-Dateien in `context/` auf
+— mit Kurzbeschreibung, Typ und Hinweis, wann sie relevant sind.
+
+**Wie wird es gepflegt?** Automatisch durch Disco. Nach jedem Hinzufuegen
+neuer Kontext-Dateien sagst Du Disco "es gibt neue Kontextdateien",
+er sichtet, aktualisiert dieses Manifest und bietet ggf. an, Lookup-
+Tabellen in die DB zu importieren (`context_*`-Praefix).
+
+**Was gehoert in `context/`?**
+- Dokumentationsstandards (VGB S 831, DIN-Normen)
+- Lookup-Tabellen (DCC-Katalog, KKS-Hierarchie, Hersteller-Aliasse)
+- Projekt-/Firmenrichtlinien (BEW-Standard-Dokumentensatz)
+- Referenzwerte (Materialklassen-Tabellen, Grenzwerte)
+
+**Was gehoert NICHT hierher?**
+- IST-Dokumente (die gehoeren nach `sources/`)
+- Zwischenstaende (nach `work/`)
+- Endprodukte (nach `exports/`)
+
+---
+
+## Inhalte
+
+*(leer — Disco fuellt beim naechsten "neue Kontextdateien sichten")*
+"""
+
+
 def _memory_template(name: str) -> str:
     return f"""# Disco-Memory: {name}
 
@@ -154,16 +187,26 @@ zu den Daten. Disco liest die Datei zu Beginn jeder neuen Session.
 # Projekt-DB-Initialisierung
 # ---------------------------------------------------------------------------
 
-def _init_project_db(db_path: Path) -> None:
-    """Legt eine leere Projekt-DB an mit minimalem Meta-Schema.
+PROJECT_DB_MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "migrations" / "project"
 
-    Konvention: nur Discos work_*/agent_*-Tabellen leben hier.
-    Eine Meta-Tabelle '_disco_meta' speichert Schema-Version und Slug.
+
+def _init_project_db(db_path: Path) -> None:
+    """Legt eine Projekt-DB an und wendet alle Template-Migrationen an.
+
+    Konvention:
+      - work_*   — temporaere Session-Tabellen
+      - agent_*  — dauerhafte Agent-Arbeitsdaten (inkl. Sources-Registry)
+      - context_* — Lookup-Tabellen aus context/
+      - _disco_* — interne Meta-Tabellen (Schema-Version, Scan-Historie)
+
+    Template-Migrationen liegen unter `migrations/project/NNN_*.sql`,
+    werden idempotent per CREATE IF NOT EXISTS angelegt.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("PRAGMA foreign_keys = ON;")
+        # Meta-Tabelle fuer Schema-Tracking
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS _disco_meta (
@@ -174,11 +217,152 @@ def _init_project_db(db_path: Path) -> None:
                 VALUES ('schema_version', '1');
             INSERT OR IGNORE INTO _disco_meta (key, value)
                 VALUES ('created_at', datetime('now'));
+            CREATE TABLE IF NOT EXISTS _disco_project_migrations (
+                filename   TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             """
         )
         conn.commit()
+
+        # Template-Migrationen anwenden (idempotent)
+        if PROJECT_DB_MIGRATIONS_DIR.exists():
+            applied = {
+                r[0] for r in conn.execute(
+                    "SELECT filename FROM _disco_project_migrations"
+                ).fetchall()
+            }
+            for mig in sorted(PROJECT_DB_MIGRATIONS_DIR.glob("*.sql")):
+                if mig.name in applied:
+                    continue
+                sql = mig.read_text(encoding="utf-8")
+                conn.executescript(sql)
+                conn.execute(
+                    "INSERT INTO _disco_project_migrations (filename) VALUES (?)",
+                    (mig.name,),
+                )
+                conn.commit()
     finally:
         conn.close()
+
+
+def seed_sample_sources(project_path: Path) -> dict[str, Any]:
+    """Legt Sample-Dateien unter sources/ + _meta/ an, fuer Tests.
+
+    Bewusst klein und selbsterklaerend:
+      - 5 kurze Dummy-PDFs mit eingebettetem Text (pypdf)
+      - 3 Dummy-Markdown-Dateien
+      - _meta/sources-meta.xlsx mit einer Zeile pro Dummy-PDF
+    """
+    from openpyxl import Workbook
+    from pypdf import PdfWriter
+
+    sources = project_path / "sources"
+    meta = sources / "_meta"
+    elektro = sources / "Elektro"
+    bauwerk = sources / "Bauwerk"
+    allgem = sources / "Allgemein"
+    for p in (meta, elektro, bauwerk, allgem):
+        p.mkdir(parents=True, exist_ok=True)
+
+    created: list[str] = []
+
+    # Einfache 1-Seiten-PDFs (leer, fuer Scan-Test reicht das — sha256 variiert ueber den Namen)
+    dummies = [
+        (elektro / "Schaltplan_A1.pdf", "Schaltplan A1 — Elektro"),
+        (elektro / "Produktdatenblatt_SMA_STP50.pdf", "Produktdatenblatt SMA STP50"),
+        (elektro / "Konformitaet_SMA.pdf", "Konformitaetserklaerung SMA"),
+        (bauwerk / "Statik_Tragwerk.pdf", "Statik Tragwerk"),
+        (bauwerk / "Brandschutz_Konzept.pdf", "Brandschutz-Konzept"),
+        (allgem / "Uebergabeprotokoll_V1.pdf", "Uebergabeprotokoll V1"),
+        (allgem / "Dokumenten_Index.pdf", "Dokumenten-Index"),
+    ]
+    for pdf_path, title in dummies:
+        if pdf_path.exists():
+            continue
+        # Minimal-PDF mit 1 leeren Seite — pypdf kann's.
+        # Fuer echten Textinhalt brauchte es reportlab; fuer Scan-Test reicht dies.
+        w = PdfWriter()
+        w.add_blank_page(width=595, height=842)
+        w.add_metadata({"/Title": title})
+        with pdf_path.open("wb") as fh:
+            w.write(fh)
+        created.append(str(pdf_path.relative_to(project_path)))
+
+    # Markdown-Dummies
+    md_files = [
+        (elektro / "Wartungsanleitung.md", "# Wartungsanleitung\n\nJaehrliche Pruefung.\n"),
+        (bauwerk / "Bauzeichnung_Readme.md", "# Bauzeichnung Readme\n\nSiehe Statik.\n"),
+        (allgem / "Inhaltsverzeichnis.md", "# Inhaltsverzeichnis\n\n- Elektro\n- Bauwerk\n"),
+    ]
+    for mp, content in md_files:
+        if mp.exists():
+            continue
+        mp.write_text(content, encoding="utf-8")
+        created.append(str(mp.relative_to(project_path)))
+
+    # Begleit-Excel in _meta/
+    meta_xlsx = meta / "sources-meta.xlsx"
+    if not meta_xlsx.exists():
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Metadaten"
+        ws.append(["rel_path", "gewerk", "dcc", "hersteller", "bemerkung"])
+        ws.append(["Elektro/Schaltplan_A1.pdf", "Elektro", "FA010", "", "Uebersichtsschaltplan"])
+        ws.append(["Elektro/Produktdatenblatt_SMA_STP50.pdf", "Elektro", "DA010", "SMA", "Wechselrichter"])
+        ws.append(["Elektro/Konformitaet_SMA.pdf", "Elektro", "QC010", "SMA", ""])
+        ws.append(["Bauwerk/Statik_Tragwerk.pdf", "Bauwerk", "TB040", "Goldbeck", "Tragwerksplanung"])
+        ws.append(["Bauwerk/Brandschutz_Konzept.pdf", "Bauwerk", "QA010", "", "Brandschutz"])
+        ws.append(["Allgemein/Uebergabeprotokoll_V1.pdf", "Allgemein", "BB020", "", ""])
+        wb.save(meta_xlsx)
+        created.append(str(meta_xlsx.relative_to(project_path)))
+
+    return {
+        "count": len(created),
+        "files": created,
+    }
+
+
+def apply_project_db_migrations(db_path: Path) -> list[str]:
+    """Wendet Template-Migrationen auf eine bestehende Projekt-DB an.
+
+    Nuetzlich fuer Bestands-Projekte nach Update der Template-Scripts.
+    Gibt die Liste der neu angewendeten Dateinamen zurueck.
+    """
+    if not db_path.exists():
+        raise FileNotFoundError(f"Projekt-DB nicht gefunden: {db_path}")
+    newly_applied: list[str] = []
+    conn = sqlite3.connect(str(db_path))
+    try:
+        # Falls die Meta-Tabelle noch nicht existiert (alte Projekte)
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS _disco_project_migrations (
+                filename   TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            """
+        )
+        conn.commit()
+        applied = {
+            r[0] for r in conn.execute(
+                "SELECT filename FROM _disco_project_migrations"
+            ).fetchall()
+        }
+        if PROJECT_DB_MIGRATIONS_DIR.exists():
+            for mig in sorted(PROJECT_DB_MIGRATIONS_DIR.glob("*.sql")):
+                if mig.name in applied:
+                    continue
+                conn.executescript(mig.read_text(encoding="utf-8"))
+                conn.execute(
+                    "INSERT INTO _disco_project_migrations (filename) VALUES (?)",
+                    (mig.name,),
+                )
+                conn.commit()
+                newly_applied.append(mig.name)
+    finally:
+        conn.close()
+    return newly_applied
 
 
 # ---------------------------------------------------------------------------
@@ -224,15 +408,17 @@ def init_project(
         "README.md": _readme_template(name, slug),
         "NOTES.md": _notes_template(name),
         ".disco/memory.md": _memory_template(name),
+        "context/_manifest.md": _context_manifest_template(name),
     }
     for rel_path, content in files.items():
         target = project_path / rel_path
         if not target.exists() or overwrite_files:
             target.write_text(content, encoding="utf-8")
 
-    # 3) Projekt-DB
+    # 3) Projekt-DB + Template-Migrationen (idempotent)
     db_path = project_path / "data.db"
     _init_project_db(db_path)
+    apply_project_db_migrations(db_path)
 
     # 4) Eintrag in system.db (projects-Tabelle) — slug ist Schluessel
     sysconn = connect()
@@ -310,6 +496,7 @@ def list_workspace_projects() -> list[dict[str, Any]]:
             "description": db_entry["description"] if db_entry else None,
             "has_data_db": (d / "data.db").exists(),
             "files_in_sources": meta["files_in_sources"],
+            "files_in_context": meta["files_in_context"],
             "files_in_exports": meta["files_in_exports"],
             "files_in_work": meta["files_in_work"],
             "created_at": db_entry["created_at"] if db_entry else None,
@@ -327,6 +514,7 @@ def list_workspace_projects() -> list[dict[str, Any]]:
                 "description": db_entry["description"],
                 "has_data_db": False,
                 "files_in_sources": 0,
+                "files_in_context": 0,
                 "files_in_exports": 0,
                 "files_in_work": 0,
                 "created_at": db_entry["created_at"],
@@ -345,6 +533,7 @@ def _read_project_meta(project_path: Path) -> dict[str, int]:
         return sum(1 for _ in p.rglob("*") if _.is_file())
     return {
         "files_in_sources": _count("sources"),
+        "files_in_context": _count("context"),
         "files_in_exports": _count("exports"),
         "files_in_work": _count("work"),
     }

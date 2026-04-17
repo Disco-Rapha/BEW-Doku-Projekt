@@ -1,7 +1,7 @@
 ---
 name: excel-reporter
-description: Erstellt eine professionell formatierte Multi-Sheet-Excel direkt server-seitig via build_xlsx_from_tables — Header-Style, AutoFilter, Freeze Panes, Status-Zellfarben, Hyperlinks zwischen Sheets.
-when_to_use: Wann immer der Benutzer eine Excel als Output braucht — Reports, Auswertungen, IBL-Exports, Komponentenlisten, alles mit mehreren Sheets oder formatierten Tabellen.
+description: Formatierte Multi-Sheet-Excel serverseitig via build_xlsx_from_tables bauen (Header-Style, AutoFilter, Status-Farben).
+when_to_use: Benutzer will eine Excel, einen Report oder Export — egal ob IBL, Komponentenliste, Auswertung oder SOLL/IST-Matrix.
 ---
 
 # Skill: excel-reporter

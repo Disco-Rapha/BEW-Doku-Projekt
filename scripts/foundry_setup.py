@@ -82,10 +82,10 @@ def main() -> int:
             "tools": tools,
         },
         "description": (
-            "BEW Doku Projekt — Haupt-Agent fuer Dokument-Auswertung, "
+            "Disco — Haupt-Agent fuer technische Dokumentation, "
             "SQL-Analyse, Excel-Export, PDF-Extraktion."
         ),
-        "metadata": {"project": "bew-doku", "phase": "2a"},
+        "metadata": {"project": "disco", "phase": "2a"},
     }
 
     base = settings.foundry_endpoint.rstrip("/")

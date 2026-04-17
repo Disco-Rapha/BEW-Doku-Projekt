@@ -1,1713 +1,919 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="de">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BEW Doku Projekt</title>
+<meta charset="utf-8">
+<title>Disco</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<!-- Markdown + Code-Highlight + XSS-Sanitizer (CDN, kein Build) -->
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/sql.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/markdown.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"></script>
+
+<!-- Viewer-Bibliotheken -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.js';
+  }
+</script>
+
 <style>
-  /* ------------------------------------------------------------------ */
-  /* Reset & Basis                                                        */
-  /* ------------------------------------------------------------------ */
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:        #1a1a1a;
+  --panel:    #232323;
+  --panel2:   #2c2c2c;
+  --border:   #3a3a3a;
+  --text:     #e0e0e0;
+  --text-dim: #888;
+  --text-bright: #ffffff;
+  --accent:   #5b9aff;
+  --accent2:  #2563eb;
+  --green:    #4ade80;
+  --yellow:   #facc15;
+  --red:      #ef4444;
+  --mono:     ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  :root {
-    --bg:        #1e1e1e;
-    --panel:     #252526;
-    --panel2:    #2d2d2d;
-    --border:    #3c3c3c;
-    --accent:    #007acc;
-    --accent2:   #0e639c;
-    --text:      #cccccc;
-    --text-dim:  #858585;
-    --text-bright: #ffffff;
-    --green:     #4ec9b0;
-    --yellow:    #dcdcaa;
-    --red:       #f44747;
-    --tag-bg:    #37373d;
-    --hover:     #2a2d2e;
-    --font: -apple-system, "Segoe UI", sans-serif;
-    --mono: "Cascadia Code", "Fira Code", monospace;
-  }
+  --sidebar-w: 260px;
+  --viewer-w:  360px;
+  --splitter-w: 4px;
+}
 
-  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100vh; overflow: hidden;
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+button, input, select, textarea {
+  font: inherit; color: inherit;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+button { cursor: pointer; }
+button:hover { background: var(--panel); }
+.btn-primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+.btn-primary:hover { background: var(--accent); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
 
-  /* ------------------------------------------------------------------ */
-  /* Layout: Titlebar + 3-Spalten                                        */
-  /* ------------------------------------------------------------------ */
-  #titlebar {
-    height: 35px;
-    background: #323233;
-    display: flex;
-    align-items: center;
-    padding: 0 16px;
-    gap: 12px;
-    border-bottom: 1px solid var(--border);
-    user-select: none;
-  }
-  #titlebar .logo { color: var(--accent); font-weight: 700; font-size: 14px; letter-spacing: 0.5px; }
-  #titlebar .subtitle { color: var(--text-dim); font-size: 11px; }
-  #titlebar .spacer { flex: 1; }
-  #titlebar .stats-bar { display: flex; gap: 16px; font-size: 11px; color: var(--text-dim); }
-  #titlebar .stats-bar span { display: flex; align-items: center; gap: 4px; }
+/* ============= Layout: 3-Spalten Grid mit Splittern ============= */
+#app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) var(--splitter-w) 1fr var(--splitter-w) var(--viewer-w);
+  height: 100vh;
+}
+#app.sidebar-collapsed { --sidebar-w: 0px; }
+#app.viewer-collapsed { --viewer-w: 0px; }
 
-  #workspace {
-    display: flex;
-    height: calc(100vh - 35px);
-    overflow: hidden;
-  }
+#sidebar, #chat-pane, #viewer-pane { overflow: hidden; }
+.splitter {
+  background: var(--border);
+  cursor: col-resize;
+  user-select: none;
+}
+.splitter:hover { background: var(--accent); }
 
-  /* ------------------------------------------------------------------ */
-  /* Explorer (links)                                                    */
-  /* ------------------------------------------------------------------ */
-  #explorer {
-    width: 260px;
-    min-width: 180px;
-    background: var(--panel);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    flex-shrink: 0;
-  }
+/* ============= Sidebar (links) ============= */
+#sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+.sb-section {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  flex-shrink: 0;
+}
+.sb-section.scrollable { overflow-y: auto; flex: 1 1 auto; min-height: 80px; }
+.sb-title {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.7px; color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.sb-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 3px; cursor: pointer; }
+.sb-row:hover { background: var(--panel2); }
+.sb-row.active { background: var(--accent2); color: #fff; }
+.sb-row .icon { width: 14px; text-align: center; opacity: 0.7; }
+.sb-row .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-row .meta { color: var(--text-dim); font-size: 11px; }
 
-  .panel-title {
-    padding: 8px 12px 6px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-dim);
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .panel-title button {
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-size: 16px;
-    line-height: 1;
-  }
-  .panel-title button:hover { background: var(--hover); color: var(--text); }
+#project-select {
+  width: 100%;
+  background: var(--panel2);
+  font-weight: 600;
+}
 
-  #explorer-tree {
-    flex: 1;
-    overflow-y: auto;
-    padding: 4px 0;
-  }
+/* Tree */
+.tree { font-family: var(--mono); font-size: 12px; }
+.tree-node { padding-left: 0; }
+.tree-node-children { margin-left: 12px; }
+.tree-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px 4px; border-radius: 3px; cursor: default;
+}
+.tree-row:hover { background: var(--panel2); }
+.tree-row.file { cursor: pointer; }
+.tree-toggle { width: 12px; color: var(--text-dim); cursor: pointer; }
+.tree-icon { width: 14px; text-align: center; opacity: 0.7; }
+.tree-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-size { color: var(--text-dim); font-size: 11px; }
 
-  .tree-section { margin-bottom: 4px; }
-  .tree-section-header {
-    padding: 4px 12px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    color: var(--text-dim);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-  }
-  .tree-section-header:hover { color: var(--text); }
-  .tree-section-header .arrow { font-size: 10px; transition: transform 0.15s; }
-  .tree-section-header.open .arrow { transform: rotate(90deg); }
+/* Toggle-Buttons in Header */
+.sb-toolbar { display: flex; gap: 4px; align-items: center; justify-content: space-between; }
+.icon-btn {
+  background: transparent; border: none; padding: 2px 6px;
+  color: var(--text-dim); cursor: pointer; font-size: 14px;
+}
+.icon-btn:hover { color: var(--text-bright); background: var(--panel2); }
 
-  .tree-item {
-    padding: 3px 12px 3px 24px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    border-radius: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .tree-item:hover { background: var(--hover); }
-  .tree-item.active { background: var(--accent2); color: var(--text-bright); }
-  .tree-item .icon { font-size: 14px; flex-shrink: 0; }
-  .tree-item .label { overflow: hidden; text-overflow: ellipsis; flex: 1; }
-  .tree-item .badge {
-    background: var(--tag-bg);
-    color: var(--text-dim);
-    font-size: 10px;
-    padding: 1px 5px;
-    border-radius: 8px;
-    flex-shrink: 0;
-  }
+/* ============= Chat (Mitte) ============= */
+#chat-pane {
+  display: flex; flex-direction: column;
+  background: var(--bg);
+}
+#chat-header {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+}
+#chat-title {
+  flex: 1; font-weight: 600; color: var(--text-bright);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#chat-project-tag {
+  font-size: 11px; color: var(--text-dim);
+  padding: 2px 6px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 3px;
+}
+#chat-messages {
+  flex: 1; overflow-y: auto;
+  padding: 14px 20px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.msg { max-width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.msg .sender {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+.msg.user .sender { color: var(--accent); }
+.msg.agent .sender { color: var(--green); }
+.msg.system .sender { color: var(--text-dim); }
+.msg .bubble {
+  background: var(--panel2);
+  border-radius: 6px;
+  padding: 10px 14px;
+  line-height: 1.55;
+  word-wrap: break-word;
+}
+.msg.user .bubble { background: var(--accent2); color: #fff; }
+.msg.system .bubble {
+  background: transparent; color: var(--text-dim);
+  font-size: 11px; font-style: italic; padding: 4px 0;
+}
 
-  .tree-sub-item {
-    padding: 3px 12px 3px 36px;
-  }
+/* Markdown-Rendering im Chat */
+.bubble p { margin: 0 0 8px 0; }
+.bubble p:last-child { margin-bottom: 0; }
+.bubble h1, .bubble h2, .bubble h3, .bubble h4 {
+  margin: 12px 0 6px 0;
+  color: var(--text-bright);
+  font-weight: 600;
+}
+.bubble h1 { font-size: 18px; }
+.bubble h2 { font-size: 16px; }
+.bubble h3 { font-size: 14px; }
+.bubble h4 { font-size: 13px; }
+.bubble ul, .bubble ol { margin: 6px 0 8px 0; padding-left: 22px; }
+.bubble li { margin-bottom: 3px; }
+.bubble code {
+  font-family: var(--mono); font-size: 12px;
+  background: rgba(255,255,255,0.08);
+  padding: 1px 5px; border-radius: 3px;
+}
+.bubble pre {
+  background: #0a0a0a;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.bubble pre code {
+  background: transparent; padding: 0;
+  font-size: 12px; line-height: 1.5;
+}
+.bubble table {
+  border-collapse: collapse; margin: 8px 0;
+  font-size: 12px;
+  width: auto; max-width: 100%;
+}
+.bubble th, .bubble td {
+  border: 1px solid var(--border);
+  padding: 4px 8px; text-align: left;
+}
+.bubble th { background: var(--panel); font-weight: 600; }
+.bubble tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.bubble blockquote {
+  border-left: 3px solid var(--border);
+  margin: 8px 0; padding: 4px 12px;
+  color: var(--text-dim);
+}
+.bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.bubble a { color: var(--accent); }
+.user .bubble code,
+.user .bubble pre { background: rgba(255,255,255,0.15); }
 
-  /* ------------------------------------------------------------------ */
-  /* Hauptbereich (Mitte)                                                */
-  /* ------------------------------------------------------------------ */
-  #main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    background: var(--bg);
-  }
+/* Tool-Call-Block — kompakt + aufklappbar */
+.tool-call {
+  font-family: var(--mono); font-size: 11px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow);
+  border-radius: 4px;
+  margin: 4px 0;
+}
+.tool-call summary {
+  cursor: pointer; padding: 5px 10px;
+  color: var(--text-dim); list-style: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.tool-call summary::-webkit-details-marker { display: none; }
+.tool-call summary::before {
+  content: '▶'; font-size: 8px; color: var(--text-dim);
+  transition: transform 0.15s;
+}
+.tool-call[open] summary::before { transform: rotate(90deg); }
+.tool-call .tool-name { color: var(--yellow); font-weight: 600; }
+.tool-call .tool-status { color: var(--green); font-size: 10px; margin-left: auto; }
+.tool-call .tool-status.pending { color: var(--yellow); }
+.tool-call .tool-body { padding: 0 10px 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.tool-call .tool-args, .tool-call .tool-result {
+  font-size: 11px; background: #0a0a0a;
+  border: 1px solid var(--border); border-radius: 3px;
+  padding: 5px 8px; white-space: pre-wrap; word-break: break-all;
+  max-height: 180px; overflow-y: auto;
+}
+.tool-call .tool-label {
+  color: var(--text-dim); font-size: 9px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.tool-call.code-interpreter { border-left-color: var(--accent); }
+.tool-call.file-search { border-left-color: var(--green); }
 
-  #main-tabs {
-    display: flex;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    gap: 0;
-    flex-shrink: 0;
-  }
-  .tab {
-    padding: 7px 16px;
-    cursor: pointer;
-    border-right: 1px solid var(--border);
-    color: var(--text-dim);
-    font-size: 12px;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .tab:hover { color: var(--text); background: var(--hover); }
-  .tab.active { color: var(--text-bright); border-top: 2px solid var(--accent); background: var(--bg); }
-  .tab .close-tab {
-    color: var(--text-dim);
-    font-size: 14px;
-    padding: 0 2px;
-    border-radius: 2px;
-    line-height: 1;
-  }
-  .tab .close-tab:hover { background: var(--tag-bg); color: var(--text); }
+/* Typing indicator */
+.typing { display: flex; gap: 4px; padding: 6px 10px; }
+.typing-dot {
+  width: 6px; height: 6px; background: var(--text-dim);
+  border-radius: 50%; animation: bounce 1.2s infinite ease-in-out;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes bounce { 0%, 80%, 100% { transform: scale(0.6); } 40% { transform: scale(1); } }
 
-  #main-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 20px;
-  }
+/* Chat-Input */
+#chat-input-area {
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+#chat-input {
+  width: 100%; min-height: 40px; max-height: 200px;
+  resize: vertical;
+  background: var(--panel2);
+  font-family: inherit; font-size: 13px;
+  padding: 8px 10px;
+}
+#chat-input:focus { outline: 1px solid var(--accent); }
+.chat-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: var(--text-dim);
+}
 
-  /* Dashboard */
-  .dashboard { max-width: 900px; }
-  .dashboard h1 { font-size: 22px; color: var(--text-bright); margin-bottom: 6px; }
-  .dashboard .subtitle { color: var(--text-dim); margin-bottom: 24px; }
+/* ============= Viewer (rechts) ============= */
+#viewer-pane {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+#viewer-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+#viewer-title { flex: 1; font-weight: 600; }
+#viewer-content {
+  flex: 1; overflow: auto;
+  padding: 14px;
+  color: var(--text-dim);
+}
+#viewer-empty { text-align: center; padding: 40px 20px; color: var(--text-dim); font-size: 12px; }
 
-  .stat-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    margin-bottom: 24px;
-  }
-  .stat-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 16px;
-  }
-  .stat-card .value { font-size: 28px; font-weight: 700; color: var(--text-bright); }
-  .stat-card .label { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+/* Allgemein */
+.muted { color: var(--text-dim); }
+.warn  { color: var(--yellow); }
+.err   { color: var(--red); }
+.hidden { display: none !important; }
 
-  .section-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-bottom: 10px;
-  }
+/* ============= Viewer-Renderings ============= */
+#viewer-content { padding: 0; }
+.viewer-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px; background: var(--panel2);
+  position: sticky; top: 0; z-index: 5;
+}
+.viewer-toolbar .spacer { flex: 1; }
+.viewer-toolbar select { font-size: 11px; padding: 2px 6px; }
+.viewer-toolbar button { font-size: 11px; padding: 2px 8px; }
 
-  .project-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 14px 16px;
-    margin-bottom: 8px;
-    cursor: pointer;
-    transition: border-color 0.15s;
-  }
-  .project-card:hover { border-color: var(--accent); }
-  .project-card .name { font-size: 14px; color: var(--text-bright); font-weight: 500; }
-  .project-card .meta { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
+.viewer-body { padding: 14px; }
+.viewer-md { line-height: 1.6; max-width: 100%; }
+.viewer-md h1, .viewer-md h2, .viewer-md h3 { color: var(--text-bright); margin-top: 1em; }
+.viewer-md table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.viewer-md th, .viewer-md td { border: 1px solid var(--border); padding: 4px 8px; }
+.viewer-md th { background: var(--panel); }
+.viewer-md pre { background: #0a0a0a; padding: 10px; border-radius: 4px; overflow-x: auto; }
+.viewer-md code { background: rgba(255,255,255,0.08); padding: 1px 4px; border-radius: 3px; }
 
-  /* Dokument-Tabelle */
-  .doc-table { width: 100%; border-collapse: collapse; }
-  .doc-table th {
-    text-align: left;
-    padding: 6px 10px;
-    color: var(--text-dim);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    border-bottom: 1px solid var(--border);
-  }
-  .doc-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-  .doc-table tr:hover td { background: var(--hover); }
-  .doc-table .name-cell { color: var(--text-bright); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .doc-table .path-cell { color: var(--text-dim); font-size: 11px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.viewer-table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--mono); font-size: 11px;
+}
+.viewer-table th, .viewer-table td {
+  border: 1px solid var(--border);
+  padding: 3px 6px; text-align: left;
+  white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; max-width: 280px;
+}
+.viewer-table th {
+  background: var(--panel2); position: sticky; top: 0;
+  font-weight: 600; color: var(--text-bright);
+  cursor: pointer; user-select: none;
+}
+.viewer-table th:hover { background: var(--panel); }
+.viewer-table tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.viewer-table td:hover { background: var(--panel2); }
 
-  .status-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-  }
-  .status-registered   { background: #1e3a5f; color: #69b8f7; }
-  .status-parsed       { background: #1e3a2e; color: var(--green); }
-  .status-enriched     { background: #2d2d00; color: var(--yellow); }
-  .status-discovered   { background: #1a2d3d; color: #79b8ff; }
-  .status-downloading  { background: #1e2a1e; color: #73c9a0; }
-  .status-downloaded   { background: #1e3a2e; color: var(--green); }
-  .status-indexing     { background: #2d2800; color: #e2c08d; }
-  .status-indexed      { background: #1a3020; color: #6cc644; }
-  .status-needs_reindex{ background: #2e2400; color: var(--yellow); }
-  .status-deleted      { background: #262626; color: #666; }
-  .status-failed       { background: #3a1e1e; color: var(--red); }
-  .status-queued       { background: #162816; color: #8fba8f; font-size:9px; padding:2px 5px; }
+.viewer-pre {
+  font-family: var(--mono); font-size: 12px;
+  white-space: pre-wrap; word-break: break-word;
+  background: #0a0a0a; padding: 12px; border-radius: 4px;
+  margin: 0; line-height: 1.4;
+}
 
-  .btn-sm { padding: 4px 10px; font-size: 12px; }
+#pdf-canvas-container {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; padding: 8px;
+}
+#pdf-canvas-container canvas {
+  background: #fff; box-shadow: 0 0 8px rgba(0,0,0,.4);
+  max-width: 100%;
+}
 
-  .spinner-inline {
-    display: inline-block; width: 10px; height: 10px;
-    border: 2px solid var(--accent); border-top-color: transparent;
-    border-radius: 50%; animation: spin 0.8s linear infinite;
-    margin-right: 4px; vertical-align: middle;
-  }
-
-  .sync-toolbar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 5px;
-    margin-bottom: 10px; flex-wrap: wrap;
-  }
-  .sync-toolbar .sep { flex: 1; }
-
-  input[type="checkbox"].doc-cb { cursor: pointer; accent-color: var(--accent); }
-
-  /* Formular */
-  .form-row { margin-bottom: 14px; }
-  .form-row label { display: block; color: var(--text-dim); font-size: 11px; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .form-row input, .form-row textarea, .form-row select {
-    width: 100%;
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 7px 10px;
-    color: var(--text);
-    font-family: var(--font);
-    font-size: 13px;
-    outline: none;
-  }
-  .form-row input:focus, .form-row textarea:focus { border-color: var(--accent); }
-
-  .btn {
-    padding: 7px 16px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 13px;
-    font-family: var(--font);
-  }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { background: var(--accent2); }
-  .btn-secondary { background: var(--tag-bg); color: var(--text); }
-  .btn-secondary:hover { background: var(--border); }
-  .btn-ghost { background: none; color: var(--text-dim); border: 1px solid var(--border); }
-  .btn-ghost:hover { color: var(--text); border-color: var(--text-dim); }
-
-  .search-bar {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 16px;
-  }
-  .search-bar input { flex: 1; }
-
-  /* ------------------------------------------------------------------ */
-  /* Chat (rechts)                                                       */
-  /* ------------------------------------------------------------------ */
-  #chat-panel {
-    width: 360px;
-    min-width: 280px;
-    background: var(--panel);
-    border-left: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    flex-shrink: 0;
-  }
-
-  #chat-messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .msg {
-    max-width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .msg .sender {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-  }
-  .msg.user .sender { color: var(--accent); }
-  .msg.agent .sender { color: var(--green); }
-  .msg.system .sender { color: var(--text-dim); }
-
-  .msg .bubble {
-    background: var(--panel2);
-    border-radius: 6px;
-    padding: 8px 12px;
-    line-height: 1.5;
-    word-break: break-word;
-  }
-  .msg.user .bubble { background: var(--accent2); color: #fff; }
-  .msg.agent .bubble { background: var(--panel2); }
-  .msg.system .bubble { background: transparent; color: var(--text-dim); font-size: 11px; font-style: italic; padding: 0; }
-
-  .tool-indicator {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--yellow);
-    font-size: 11px;
-    padding: 4px 8px;
-    background: #2a2700;
-    border-radius: 4px;
-    border: 1px solid #4a4400;
-  }
-  .tool-indicator .spinner {
-    width: 10px; height: 10px;
-    border: 2px solid var(--yellow);
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* Persistenter Tool-Call-Block (Phase 2a Foundry-Agent) */
-  .tool-call {
-    font-size: 11px;
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--yellow);
-    border-radius: 4px;
-    margin: 2px 0;
-    padding: 0;
-  }
-  .tool-call summary {
-    cursor: pointer;
-    padding: 6px 10px;
-    color: var(--text-dim);
-    list-style: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .tool-call summary::-webkit-details-marker { display: none; }
-  .tool-call summary::before {
-    content: '▶';
-    font-size: 8px;
-    color: var(--text-dim);
-    transition: transform 0.15s;
-  }
-  .tool-call[open] summary::before { transform: rotate(90deg); }
-  .tool-call .tool-name { color: var(--yellow); font-weight: 600; }
-  .tool-call .tool-status { color: var(--green); font-size: 10px; margin-left: auto; }
-  .tool-call .tool-status.pending { color: var(--yellow); }
-  .tool-call .tool-body {
-    padding: 0 10px 8px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .tool-call .tool-args, .tool-call .tool-result {
-    font-family: var(--mono);
-    font-size: 10px;
-    background: #0a0a0a;
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 6px 8px;
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 160px;
-    overflow-y: auto;
-  }
-  .tool-call .tool-label { color: var(--text-dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .tool-call.code-interpreter { border-left-color: var(--accent); }
-  .tool-call.file-search { border-left-color: var(--green); }
-
-  /* Thread-Tab-Leiste (Multi-Chat) */
-  #chat-tabs {
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-    border-bottom: 1px solid var(--border);
-    background: var(--panel);
-    overflow-x: auto;
-    flex-shrink: 0;
-    min-height: 32px;
-  }
-  #chat-tabs::-webkit-scrollbar { height: 4px; }
-  #chat-tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  .chat-tab {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    background: var(--panel2);
-    border-right: 1px solid var(--border);
-    color: var(--text-dim);
-    font-size: 11px;
-    cursor: pointer;
-    white-space: nowrap;
-    max-width: 180px;
-    flex-shrink: 0;
-  }
-  .chat-tab:hover { background: var(--panel); color: var(--text); }
-  .chat-tab.active {
-    background: var(--panel);
-    color: var(--text-bright);
-    border-bottom: 2px solid var(--accent);
-    margin-bottom: -1px;
-  }
-  .chat-tab .tab-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 120px;
-  }
-  .chat-tab .tab-close {
-    color: var(--text-dim);
-    font-size: 12px;
-    padding: 0 2px;
-    border-radius: 2px;
-  }
-  .chat-tab .tab-close:hover { background: var(--red, #c44); color: #fff; }
-  .chat-tab-new {
-    padding: 6px 12px;
-    background: transparent;
-    color: var(--text-dim);
-    font-size: 14px;
-    cursor: pointer;
-    border-right: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-  .chat-tab-new:hover { background: var(--panel2); color: var(--text-bright); }
-
-  .typing-indicator {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 8px 12px;
-    color: var(--text-dim);
-    font-size: 12px;
-  }
-  .typing-dot {
-    width: 6px; height: 6px;
-    background: var(--text-dim);
-    border-radius: 50%;
-    animation: bounce 1.2s infinite ease-in-out;
-  }
-  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes bounce { 0%, 80%, 100% { transform: scale(0.6); } 40% { transform: scale(1); } }
-
-  #chat-input-area {
-    border-top: 1px solid var(--border);
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  #chat-input {
-    width: 100%;
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 12px;
-    color: var(--text);
-    font-family: var(--font);
-    font-size: 13px;
-    resize: none;
-    outline: none;
-    min-height: 60px;
-    max-height: 150px;
-  }
-  #chat-input:focus { border-color: var(--accent); }
-
-  .chat-actions {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-  }
-  .chat-hint { color: var(--text-dim); font-size: 10px; }
-
-  /* ------------------------------------------------------------------ */
-  /* Scrollbars                                                          */
-  /* ------------------------------------------------------------------ */
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #424242; border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: #555; }
-
-  /* ------------------------------------------------------------------ */
-  /* Utility                                                             */
-  /* ------------------------------------------------------------------ */
-  .empty-state { text-align: center; padding: 40px 20px; color: var(--text-dim); }
-  .empty-state .icon { font-size: 40px; margin-bottom: 10px; }
-
-  .alert { padding: 10px 14px; border-radius: 5px; margin-bottom: 12px; font-size: 12px; }
-  .alert-info { background: #1e3a5f; border-left: 3px solid var(--accent); color: #9fcfff; }
-  .alert-warn { background: #3a2e00; border-left: 3px solid #d7ba7d; color: #d7ba7d; }
-  .alert-ok   { background: #1e3a2e; border-left: 3px solid var(--green); color: var(--green); }
-
-  code { font-family: var(--mono); background: var(--tag-bg); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
-
-  .loading { display: flex; align-items: center; gap: 8px; color: var(--text-dim); }
+.viewer-pagination {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-top: 1px solid var(--border);
+  font-size: 11px; background: var(--panel2);
+  position: sticky; bottom: 0;
+}
+.viewer-pagination button[disabled] { opacity: 0.4; cursor: not-allowed; }
 </style>
 </head>
 <body>
 
-<!-- Titelleiste -->
-<div id="titlebar">
-  <span class="logo">BEW DOKU</span>
-  <span class="subtitle">Agentisches Dokumentenmanagementsystem</span>
-  <div class="spacer"></div>
-  <div class="stats-bar" id="titlebar-stats">
-    <span>📁 <span id="stat-projects">—</span> Projekte</span>
-    <span>📄 <span id="stat-docs">—</span> Dokumente</span>
-  </div>
-</div>
+<div id="app">
 
-<div id="workspace">
+  <!-- ============ Sidebar (links) ============ -->
+  <aside id="sidebar">
 
-  <!-- ================================================================ -->
-  <!-- EXPLORER                                                          -->
-  <!-- ================================================================ -->
-  <div id="explorer">
-    <div class="panel-title">
-      Explorer
-      <button title="Neu laden" onclick="loadExplorer()">↻</button>
-    </div>
-    <div id="explorer-tree">
-      <div class="loading" style="padding:12px 12px;">
-        <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
-        &nbsp;Lade ...
+    <div class="sb-section">
+      <div class="sb-toolbar">
+        <select id="project-select" onchange="onProjectChange()"></select>
+        <button class="icon-btn" title="Sidebar einklappen" onclick="toggleSidebar()">«</button>
       </div>
     </div>
-  </div>
 
-  <!-- ================================================================ -->
-  <!-- HAUPTBEREICH                                                      -->
-  <!-- ================================================================ -->
-  <div id="main">
-    <div id="main-tabs">
-      <div class="tab active" data-view="dashboard">🏠 Dashboard</div>
+    <div class="sb-section scrollable" id="explorer-section">
+      <div class="sb-title">Explorer</div>
+      <div id="explorer-tree" class="tree"></div>
     </div>
-    <div id="main-content">
-      <!-- Inhalt wird per JS gesetzt -->
-    </div>
-  </div>
 
-  <!-- ================================================================ -->
-  <!-- CHAT                                                              -->
-  <!-- ================================================================ -->
-  <div id="chat-panel">
-    <div class="panel-title">
-      Agent
-      <button title="Thread schliessen" onclick="closeCurrentThread()">✕</button>
+    <div class="sb-section scrollable" id="db-tables-section">
+      <div class="sb-title">Datenbank-Tabellen</div>
+      <div id="db-tables-list" class="tree"></div>
     </div>
-    <div id="chat-tabs">
-      <!-- Tabs werden dynamisch via renderThreadTabs() erzeugt -->
-      <div class="chat-tab-new" onclick="createNewThread()" title="Neuer Chat">+</div>
+
+    <div class="sb-section scrollable" id="chats-section">
+      <div class="sb-title sb-toolbar">
+        <span>Chats</span>
+        <button class="icon-btn" title="Neuer Chat" onclick="createNewThread()">+</button>
+      </div>
+      <div id="chat-list"></div>
     </div>
+
+    <div class="sb-section">
+      <div class="sb-title">Einstellungen</div>
+      <div class="muted" style="font-size:11px">
+        Workspace: <code id="settings-workspace">~/Disco</code><br>
+        Model: <code id="settings-model">gpt-5</code>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- Splitter Sidebar/Chat -->
+  <div class="splitter" id="splitter-left" data-target="sidebar"></div>
+
+  <!-- ============ Chat (Mitte) ============ -->
+  <main id="chat-pane">
+
+    <div id="chat-header">
+      <button class="icon-btn" title="Sidebar ein-/ausblenden" onclick="toggleSidebar()">☰</button>
+      <span id="chat-title">Disco</span>
+      <span id="chat-project-tag">(kein Projekt)</span>
+      <button class="icon-btn" title="Viewer ein-/ausblenden" onclick="toggleViewer()">▭</button>
+    </div>
+
     <div id="chat-messages">
-      <div class="msg system">
-        <div class="bubble">Verbindung wird hergestellt ...</div>
-      </div>
+      <div class="msg system"><div class="bubble">Verbindung wird hergestellt …</div></div>
     </div>
+
     <div id="chat-input-area">
-      <textarea id="chat-input" placeholder="Nachricht an den Agenten ..." rows="2"></textarea>
+      <textarea id="chat-input" placeholder="Nachricht an Disco …  (Enter senden, Shift+Enter Zeilenumbruch)"></textarea>
       <div class="chat-actions">
-        <span class="chat-hint">Enter = Senden &nbsp;·&nbsp; Shift+Enter = Zeilenumbruch</span>
-        <button class="btn btn-primary" onclick="sendMessage()">Senden ▶</button>
+        <span id="chat-status" class="muted">Bereit</span>
+        <button class="btn-primary" onclick="sendMessage()">Senden ▶</button>
       </div>
     </div>
-  </div>
+
+  </main>
+
+  <!-- Splitter Chat/Viewer -->
+  <div class="splitter" id="splitter-right" data-target="viewer"></div>
+
+  <!-- ============ Viewer (rechts) ============ -->
+  <aside id="viewer-pane">
+    <div id="viewer-header">
+      <span id="viewer-title">Viewer</span>
+      <button class="icon-btn" title="Schliessen" onclick="closeViewer()">✕</button>
+    </div>
+    <div id="viewer-content">
+      <div id="viewer-empty">
+        Keine Datei geöffnet.<br>
+        Klick im Explorer auf eine Datei zum Anzeigen.<br><br>
+        <small>(Viewer-Funktionalität: Iteration 2 — kommt nach diesem Skelett)</small>
+      </div>
+    </div>
+  </aside>
 
 </div>
 
+
+<!-- ====================== Skripte ====================== -->
 <script>
+'use strict';
+
 // =========================================================================
 // State
 // =========================================================================
 const state = {
   projects: [],
-  activeProjectId: null,
-  activeView: 'dashboard',
-  // Multi-Thread-Chat (Phase 2a Foundry)
-  threads: [],            // [{id, title, status, foundry_thread_id, ...}]
+  activeProjectSlug: null,
+  threads: [],            // Threads des aktiven Projekts
   activeThreadId: null,
   ws: null,
+  wsThreadId: null,
   wsReady: false,
-  wsThreadId: null,       // Thread-ID, auf die der aktuelle WebSocket verbunden ist
+  md: null,               // markdown-it Renderer
 };
 
-const _syncPollers    = {};   // sourceId → interval handle
-const _spFieldsVisible = {};  // sourceId → bool
-const _spFieldNames    = {};  // sourceId → string[]
-let   _selectedDocs    = new Set(); // doc IDs currently checked
+const _activeToolCalls = {};   // call_id -> {name, el, statusEl, argsEl, resultEl}
+const LS_KEY_SIDEBAR_W = 'disco.sidebar.w';
+const LS_KEY_VIEWER_W  = 'disco.viewer.w';
+const LS_KEY_PROJECT   = 'disco.active.project';
 
 // =========================================================================
-// WebSocket — pro Thread ein eigener Socket (serverseitig durch thread_id gebunden)
+// Markdown-Setup
 // =========================================================================
-function connectWS(threadId) {
-  if (!threadId) return;
-  // Alten Socket schliessen, wenn vorhanden und auf anderer Thread-ID
-  if (state.ws && state.wsThreadId !== threadId) {
-    try { state.ws.close(); } catch(e) {}
-    state.ws = null;
-    state.wsReady = false;
-  }
-  if (state.ws && state.wsThreadId === threadId) return; // bereits offen
-
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  state.ws = new WebSocket(`${proto}//${location.host}/ws/chat?thread_id=${threadId}`);
-  state.wsThreadId = threadId;
-
-  state.ws.onopen = () => {
-    state.wsReady = true;
-  };
-
-  state.ws.onclose = () => {
-    state.wsReady = false;
-    // Nur reconnect, wenn dieser Socket noch der "aktive" ist
-    if (state.wsThreadId === threadId && state.activeThreadId === threadId) {
-      setTimeout(() => connectWS(threadId), 2000);
+function initMarkdown() {
+  state.md = window.markdownit({
+    html: false,
+    linkify: true,
+    typographer: false,
+    breaks: true,
+    highlight: function (str, lang) {
+      try {
+        if (lang && hljs.getLanguage(lang)) {
+          return '<pre><code class="hljs language-' + lang + '">' +
+                 hljs.highlight(str, {language: lang, ignoreIllegals: true}).value +
+                 '</code></pre>';
+        }
+      } catch (e) {}
+      return '<pre><code class="hljs">' + state.md.utils.escapeHtml(str) + '</code></pre>';
     }
-  };
+  });
+}
 
-  state.ws.onerror = () => {
-    state.wsReady = false;
-  };
-
-  state.ws.onmessage = (ev) => {
-    const data = JSON.parse(ev.data);
-    handleAgentChunk(data);
-  };
+function renderMarkdown(text) {
+  if (!text) return '';
+  const html = state.md.render(text);
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['p','br','strong','em','code','pre','ul','ol','li','a','h1','h2','h3','h4','h5','h6',
+                   'blockquote','hr','table','thead','tbody','tr','th','td','span','del','sub','sup','img'],
+    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt']
+  });
 }
 
 // =========================================================================
 // API-Helfer
 // =========================================================================
-async function apiFetch(path, opts = {}) {
+async function api(path, opts = {}) {
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {'Content-Type':'application/json'},
     ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined
   });
+  if (!res.ok) throw new Error(`${res.status} ${path}`);
   return res.json();
 }
 
 // =========================================================================
-// Explorer laden
+// Init
 // =========================================================================
-async function loadExplorer() {
-  const tree = document.getElementById('explorer-tree');
-  tree.innerHTML = '<div class="loading" style="padding:12px"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>';
+window.addEventListener('DOMContentLoaded', async () => {
+  initMarkdown();
+  initSplitters();
+  initChatInput();
 
-  const projects = await apiFetch('/api/projects');
-  state.projects = projects;
-  updateTitleStats();
-
-  tree.innerHTML = '';
-
-  // Projekte
-  const section = document.createElement('div');
-  section.className = 'tree-section';
-
-  const header = document.createElement('div');
-  header.className = 'tree-section-header open';
-  header.innerHTML = `<span class="arrow">▶</span> PROJEKTE <span style="margin-left:auto;font-size:10px">${projects.length}</span>`;
-  header.onclick = () => {
-    header.classList.toggle('open');
-    body.style.display = header.classList.contains('open') ? 'block' : 'none';
-  };
-  section.appendChild(header);
-
-  const body = document.createElement('div');
-  section.appendChild(body);
-
-  if (projects.length === 0) {
-    body.innerHTML = '<div class="tree-item" style="color:var(--text-dim);font-style:italic">Keine Projekte</div>';
-  }
-
-  for (const p of projects) {
-    const item = document.createElement('div');
-    item.className = 'tree-item' + (state.activeProjectId === p.id ? ' active' : '');
-    item.dataset.projectId = p.id;
-    item.innerHTML = `<span class="icon">📁</span><span class="label">${escHtml(p.name)}</span><span class="badge">${p.document_count}</span>`;
-    item.onclick = () => selectProject(p.id);
-    body.appendChild(item);
-
-    // Quellen unter dem Projekt
-    const sources = await apiFetch(`/api/projects/${p.id}/sources`);
-    for (const s of sources) {
-      const sub = document.createElement('div');
-      sub.className = 'tree-item tree-sub-item';
-      const syncIcon = s.last_synced_at ? '🔗' : '⚠️';
-      sub.innerHTML = `<span class="icon">${syncIcon}</span><span class="label">${escHtml(s.name)}</span><span class="badge">${s.document_count}</span>`;
-      sub.onclick = (e) => { e.stopPropagation(); openSourceView(p.id, s.id, s.name); };
-      body.appendChild(sub);
-    }
-  }
-
-  tree.appendChild(section);
-
-  // Trennlinie + Schnellaktionen
-  tree.insertAdjacentHTML('beforeend', `
-    <div style="padding:10px 12px 4px;border-top:1px solid var(--border);margin-top:8px">
-      <div class="tree-section-header" style="padding:0;margin-bottom:6px;cursor:default">AKTIONEN</div>
-      <div class="tree-item" onclick="openView('new-project')"><span class="icon">➕</span><span class="label">Neues Projekt</span></div>
-      <div class="tree-item" onclick="openView('new-source')"><span class="icon">🔌</span><span class="label">Quelle hinzufügen</span></div>
-    </div>
-  `);
-}
-
-function updateTitleStats() {
-  const totalDocs = state.projects.reduce((s, p) => s + p.document_count, 0);
-  document.getElementById('stat-projects').textContent = state.projects.length;
-  document.getElementById('stat-docs').textContent = totalDocs;
-}
-
-// =========================================================================
-// Projekt auswählen
-// =========================================================================
-function selectProject(projectId) {
-  state.activeProjectId = projectId;
-  // Explorer-Markierung aktualisieren
-  document.querySelectorAll('[data-project-id]').forEach(el => {
-    el.classList.toggle('active', parseInt(el.dataset.projectId) === projectId);
-  });
-  openView('project', { projectId });
-}
-
-// =========================================================================
-// Views
-// =========================================================================
-function openView(view, params = {}) {
-  state.activeView = view;
-  const content = document.getElementById('main-content');
-  updateTabs(view, params);
-
-  if (view === 'dashboard') {
-    renderDashboard();
-  } else if (view === 'project') {
-    renderProjectView(params.projectId);
-  } else if (view === 'source') {
-    renderSourceView(params.projectId, params.sourceId, params.sourceName);
-  } else if (view === 'new-project') {
-    renderNewProjectForm();
-  } else if (view === 'new-source') {
-    renderNewSourceForm();
-  }
-}
-
-function updateTabs(view, params = {}) {
-  const tabsEl = document.getElementById('main-tabs');
-  // Wir halten Dashboard immer offen
-  const labels = {
-    dashboard: '🏠 Dashboard',
-    project: `📁 ${params.projectId ? (state.projects.find(p=>p.id===params.projectId)?.name || 'Projekt') : 'Projekt'}`,
-    source: `🔗 ${params.sourceName || 'Quelle'}`,
-    'new-project': '➕ Neues Projekt',
-    'new-source': '🔌 Neue Quelle',
-  };
-  const existing = tabsEl.querySelector(`[data-view="${view}"]`);
-  if (!existing) {
-    const tab = document.createElement('div');
-    tab.className = 'tab';
-    tab.dataset.view = view;
-    tab.dataset.params = JSON.stringify(params);
-    tab.innerHTML = `${labels[view] || view} <span class="close-tab" onclick="closeTab(event, this.parentElement)">×</span>`;
-    tab.onclick = (e) => { if (!e.target.classList.contains('close-tab')) openView(view, params); };
-    tabsEl.appendChild(tab);
-  }
-  tabsEl.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
-}
-
-function closeTab(e, tab) {
-  e.stopPropagation();
-  tab.remove();
-  const tabs = document.querySelectorAll('.tab');
-  if (tabs.length > 0) {
-    const last = tabs[tabs.length - 1];
-    openView(last.dataset.view, JSON.parse(last.dataset.params || '{}'));
-  }
-}
-
-function openSourceView(projectId, sourceId, sourceName) {
-  openView('source', { projectId, sourceId, sourceName });
-}
-
-// =========================================================================
-// Dashboard
-// =========================================================================
-async function renderDashboard() {
-  const content = document.getElementById('main-content');
-  content.innerHTML = '<div class="loading">Lade ...</div>';
-  const stats = await apiFetch('/api/stats');
-  const projects = state.projects;
-
-  const statusHtml = Object.entries(stats.by_status || {})
-    .map(([s, n]) => `<span class="status-badge status-${s}">${s}: ${n}</span>`)
-    .join(' ');
-
-  content.innerHTML = `
-    <div class="dashboard">
-      <h1>Dashboard</h1>
-      <p class="subtitle">BEW Agentisches Dokumentenmanagementsystem</p>
-
-      <div class="stat-grid">
-        <div class="stat-card"><div class="value">${stats.projects}</div><div class="label">Projekte</div></div>
-        <div class="stat-card"><div class="value">${stats.sources}</div><div class="label">Quellen</div></div>
-        <div class="stat-card"><div class="value">${stats.documents}</div><div class="label">Dokumente</div></div>
-        <div class="stat-card"><div class="value">${stats.folders}</div><div class="label">Ordner</div></div>
-      </div>
-
-      ${stats.documents > 0 ? `<div style="margin-bottom:20px">${statusHtml}</div>` : ''}
-
-      <div class="section-title">Projekte</div>
-      ${projects.length === 0
-        ? `<div class="empty-state"><div class="icon">📁</div><div>Noch keine Projekte.<br><button class="btn btn-primary" onclick="openView('new-project')" style="margin-top:10px">Erstes Projekt anlegen</button></div></div>`
-        : projects.map(p => `
-          <div class="project-card" onclick="selectProject(${p.id})">
-            <div class="name">${escHtml(p.name)}</div>
-            <div class="meta">${p.document_count} Dokumente · erstellt ${p.created_at?.slice(0,10) || '—'}</div>
-          </div>`).join('')
-      }
-    </div>
-  `;
-}
-
-// =========================================================================
-// Projekt-View
-// =========================================================================
-async function renderProjectView(projectId) {
-  const content = document.getElementById('main-content');
-  content.innerHTML = '<div class="loading">Lade Projekt ...</div>';
-  const project = state.projects.find(p => p.id === projectId);
-  const sources = await apiFetch(`/api/projects/${projectId}/sources`);
-  const docs = await apiFetch(`/api/projects/${projectId}/documents?limit=5000`);
-
-  const sourcesHtml = sources.length === 0
-    ? `<div class="alert alert-warn">Keine Quellen. <a href="#" onclick="openView('new-source');return false">Quelle hinzufügen</a></div>`
-    : sources.map(s => `
-        <div class="project-card" onclick="openSourceView(${projectId}, ${s.id}, '${escAttr(s.name)}')">
-          <div class="name">${escHtml(s.name)} <span style="color:var(--text-dim);font-size:11px;font-weight:400">${s.source_type}</span></div>
-          <div class="meta">${s.document_count} Dokumente · Sync: ${s.last_synced_at ? s.last_synced_at.slice(0,16) : 'noch nie'}</div>
-        </div>`).join('');
-
-  content.innerHTML = `
-    <div class="dashboard">
-      <h1>${escHtml(project?.name || 'Projekt')}</h1>
-      <div class="section-title" style="margin-top:20px">Quellen (${sources.length})</div>
-      ${sourcesHtml}
-      <div style="margin-top:20px;display:flex;align-items:center;justify-content:space-between">
-        <div class="section-title">Dokumente (${docs.length}${docs.length===50?'+':''})</div>
-        <div class="search-bar" style="margin:0;width:280px">
-          <input type="text" id="doc-search" placeholder="Suchen ..." oninput="filterDocs(${projectId})">
-        </div>
-      </div>
-      <div id="doc-list">${renderDocTable(docs)}</div>
-    </div>
-  `;
-}
-
-let searchTimer = null;
-async function filterDocs(projectId) {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(async () => {
-    const q = document.getElementById('doc-search')?.value || '';
-    const docs = await apiFetch(`/api/projects/${projectId}/documents?limit=5000&search=${encodeURIComponent(q)}`);
-    const el = document.getElementById('doc-list');
-    if (el) el.innerHTML = renderDocTable(docs);
-  }, 300);
-}
-
-// =========================================================================
-// Quellen-View
-// =========================================================================
-async function renderSourceView(projectId, sourceId, sourceName) {
-  const content = document.getElementById('main-content');
-  content.innerHTML = '<div class="loading">Lade Quelle ...</div>';
-
-  const [docs, syncStatus] = await Promise.all([
-    apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000`),
-    apiFetch(`/api/sources/${sourceId}/sync-status`),
-  ]);
-
-  content.innerHTML = `
-    <div class="dashboard">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
-        <h1 style="margin:0">${escHtml(sourceName)}</h1>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <button class="btn btn-primary btn-sm" id="btn-import-${sourceId}"
-            onclick="document.getElementById('json-upload-${sourceId}').click()">📂 JSON importieren</button>
-          <input type="file" id="json-upload-${sourceId}" accept=".json" style="display:none"
-            onchange="handleJsonUpload(event,${projectId},${sourceId})">
-          <button class="btn btn-ghost btn-sm"
-            onclick="toggleBrowserScript(${sourceId})">💻 Browser-Script</button>
-          <button class="btn btn-secondary btn-sm" id="btn-snapshot-${sourceId}"
-            onclick="startSync(${projectId},${sourceId},'snapshot')">📸 Snapshot (Graph)</button>
-          <button class="btn btn-ghost btn-sm" id="btn-sp-fields-${sourceId}"
-            onclick="toggleSpFields(${projectId},${sourceId})">🏷 SP-Felder</button>
-        </div>
-      </div>
-
-      <div id="browser-script-${sourceId}" style="display:none;margin-bottom:14px">
-        <div style="background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:12px">
-          <div style="color:var(--text-dim);font-size:11px;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">
-            Browser-Script (DevTools Console auf der SharePoint-Seite ausführen)
-          </div>
-          <pre id="browser-script-code-${sourceId}" style="font-family:var(--mono);font-size:11px;color:var(--green);white-space:pre-wrap;overflow-x:auto;margin:0">${generateBrowserScript(sourceName)}</pre>
-          <div style="margin-top:8px;display:flex;gap:8px">
-            <button class="btn btn-ghost btn-sm" onclick="copyBrowserScript(${sourceId})">Kopieren</button>
-            <span style="color:var(--text-dim);font-size:11px;align-self:center">
-              → JSON-Datei herunterladen → hier importieren
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div id="sync-status-bar-${sourceId}" class="alert alert-info" style="margin-bottom:14px">
-        ${renderSyncStatusText(syncStatus)}
-      </div>
-
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div class="section-title" id="doc-count-${sourceId}" style="margin:0">${docs.length} Dokument(e)</div>
-        <input type="text" id="doc-search-src-${sourceId}" placeholder="Suchen …"
-          style="background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:5px 10px;color:var(--text);font-size:12px;width:200px;outline:none"
-          oninput="filterSourceDocs(${projectId},${sourceId})">
-      </div>
-
-      <div id="sel-toolbar-${sourceId}" class="sync-toolbar" style="display:none">
-        <span id="sel-count-${sourceId}" style="color:var(--text-dim);font-size:12px">0 ausgewählt</span>
-        <button class="btn btn-primary btn-sm"
-          onclick="markSelectedForIndexing(${projectId},${sourceId})">✓ Zum Indexieren vormerken</button>
-        <button class="btn btn-ghost btn-sm"
-          onclick="clearDocSelection(${projectId},${sourceId})">Auswahl aufheben</button>
-        <span class="sep"></span>
-        <button class="btn btn-ghost btn-sm"
-          onclick="selectAllAndMark(${projectId},${sourceId})">Alle vormerken</button>
-      </div>
-
-      <div id="doc-list-src-${sourceId}">${renderSourceDocTable(docs, sourceId, projectId)}</div>
-    </div>
-  `;
-
-  if (syncStatus.status === 'running') {
-    startSyncPolling(projectId, sourceId);
-  }
-}
-
-// Einfache Tabelle ohne Checkboxen (z.B. Projekt-Übersicht)
-function renderDocTable(docs) {
-  if (!docs || docs.length === 0) {
-    return `<div class="empty-state"><div class="icon">📄</div><div>Keine Dokumente gefunden.</div></div>`;
-  }
-  return `<table class="doc-table">
-    <thead><tr>
-      <th>Name</th><th>Pfad</th><th>Status</th><th>Größe</th>
-    </tr></thead>
-    <tbody>${docs.map(d => `
-      <tr>
-        <td class="name-cell" title="${escAttr(d.original_name)}">${escHtml(d.original_name)}</td>
-        <td class="path-cell" title="${escAttr(d.source_path||'')}">${escHtml(d.source_path||'—')}</td>
-        <td>${renderStatusBadge(d.status, d.selected_for_indexing)}</td>
-        <td style="color:var(--text-dim)">${d.size_bytes ? Math.round(d.size_bytes/1024)+'KB' : '—'}</td>
-      </tr>`).join('')}
-    </tbody>
-  </table>`;
-}
-
-// Tabelle mit Checkboxen + SP-Felder (Quellen-View)
-function renderSourceDocTable(docs, sourceId, projectId) {
-  if (!docs || docs.length === 0) {
-    return `<div class="empty-state"><div class="icon">📄</div><div>Noch keine Dokumente — starte einen Snapshot.</div></div>`;
-  }
-  const showSp   = !!_spFieldsVisible[sourceId];
-  const spFields = (showSp && _spFieldNames[sourceId]) || [];
-
-  const spHeaders = spFields.map(f =>
-    `<th style="max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(f)}">${escHtml(f)}</th>`
-  ).join('');
-
-  const rows = docs.map(d => {
-    const sel   = _selectedDocs.has(d.id);
-    const rowBg = sel ? 'background:var(--panel2)' : '';
-    const nameHtml = d.sp_web_url
-      ? `<a href="${escAttr(d.sp_web_url)}" target="_blank"
-           style="color:var(--text-bright);text-decoration:none"
-           title="${escAttr(d.original_name)}">${escHtml(d.original_name)}</a>`
-      : `<span style="color:var(--text-bright)">${escHtml(d.original_name)}</span>`;
-    const modDate = d.sp_modified_at ? d.sp_modified_at.slice(0,10) : '—';
-    const modBy   = d.sp_modified_by
-      ? escHtml(d.sp_modified_by.length > 16 ? d.sp_modified_by.slice(0,14)+'…' : d.sp_modified_by)
-      : '—';
-    const spCells = spFields.map(f =>
-      `<td style="color:var(--text-dim);font-size:11px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-           title="${escAttr((d.sp_fields||{})[f]||'')}">${escHtml((d.sp_fields||{})[f]||'')}</td>`
-    ).join('');
-
-    return `<tr data-doc-id="${d.id}" style="${rowBg}">
-      <td style="width:32px;padding:4px 8px">
-        <input type="checkbox" class="doc-cb" data-id="${d.id}" ${sel?'checked':''}
-          onchange="toggleDocCb(this,${projectId},${sourceId})">
-      </td>
-      <td class="name-cell" title="${escAttr(d.original_name)}">${nameHtml}</td>
-      <td class="path-cell" title="${escAttr(d.source_path||'')}">${escHtml(d.source_path||'—')}</td>
-      <td>${renderStatusBadge(d.status, d.selected_for_indexing)}</td>
-      <td style="color:var(--text-dim)">${d.size_bytes ? Math.round(d.size_bytes/1024)+'KB' : '—'}</td>
-      <td style="color:var(--text-dim);font-size:11px;white-space:nowrap">${modDate}</td>
-      <td style="color:var(--text-dim);font-size:11px">${modBy}</td>
-      ${spCells}
-    </tr>`;
-  }).join('');
-
-  return `<table class="doc-table">
-    <thead><tr>
-      <th style="width:32px"><input type="checkbox" id="cb-all-${sourceId}"
-        onclick="toggleAllDocs(event,${projectId},${sourceId})"></th>
-      <th>Name</th><th>Pfad</th><th>Status</th><th>Größe</th>
-      <th>Geändert</th><th>Von</th>${spHeaders}
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
-}
-
-function renderStatusBadge(status, selectedForIndexing) {
-  const badge = `<span class="status-badge status-${escAttr(status)}">${escHtml(status)}</span>`;
-  return selectedForIndexing
-    ? badge + ' <span class="status-badge status-queued" title="Zum Indexieren vorgemerkt">📌 queue</span>'
-    : badge;
-}
-
-// =========================================================================
-// Sync (Snapshot / Delta)
-// =========================================================================
-async function startSync(projectId, sourceId, mode) {
-  const btnId = mode === 'snapshot' ? `btn-snapshot-${sourceId}` : `btn-delta-${sourceId}`;
-  const btn = document.getElementById(btnId);
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ …'; }
-
-  const res = await apiFetch(`/api/sources/${sourceId}/${mode}`, { method: 'POST' });
-  const bar = document.getElementById(`sync-status-bar-${sourceId}`);
-  if (bar) bar.innerHTML = renderSyncStatusText(res);
-
-  if (res.status === 'gestartet' || res.status === 'running' || res.status === 'already_running') {
-    startSyncPolling(projectId, sourceId);
-  }
-  if (btn) { btn.disabled = false; btn.textContent = mode === 'snapshot' ? '📸 Snapshot' : '⟳ Delta Sync'; }
-}
-
-function renderSyncStatusText(status) {
-  if (!status || status.status === 'idle') {
-    return 'Kein aktiver Sync. Starte einen Snapshot (erste Ausführung) oder Delta Sync (nur Änderungen).';
-  }
-  if (status.status === 'running') {
-    const m = status.mode === 'snapshot' ? 'Snapshot' : 'Delta Sync';
-    return `<span class="spinner-inline"></span> <strong>${m}</strong> läuft …`;
-  }
-  if (status.status === 'done') {
-    const r = status.result || {};
-    if (status.mode === 'snapshot') {
-      return `✅ <strong>Snapshot</strong> abgeschlossen · <strong>${r.files_new||0}</strong> neu · `
-           + `${r.files_updated_meta||0} aktualisiert · ${r.folders_upserted||0} Ordner`
-           + (r.errors?.length ? ` · <span style="color:var(--red)">${r.errors.length} Fehler</span>` : '');
-    } else {
-      return `✅ <strong>Delta Sync</strong> abgeschlossen · <strong>${r.files_new||0}</strong> neu · `
-           + `${r.files_updated_content||0} Inhalt geändert · ${r.files_updated_meta||0} Meta · `
-           + `${r.files_deleted||0} gelöscht`
-           + (r.errors?.length ? ` · <span style="color:var(--red)">${r.errors.length} Fehler</span>` : '');
-    }
-  }
-  if (status.status === 'error') {
-    return `❌ <strong>Fehler:</strong> ${escHtml(status.error || 'Unbekannt')}`;
-  }
-  if (status.status === 'already_running') {
-    return `⏳ ${escHtml(status.mode||'')} läuft bereits …`;
-  }
-  if (status.status === 'done' && status.mode === 'import') {
-    const r = status.result || {};
-    return `✅ <strong>JSON-Import</strong> abgeschlossen · <strong>${r.files_new||0}</strong> neu · `
-         + `${r.files_updated||0} aktualisiert · ${r.folders_upserted||0} Ordner`
-         + (r.errors?.length ? ` · <span style="color:var(--red)">${r.errors.length} Fehler</span>` : '');
-  }
-  if (status.status === 'running' && status.mode === 'import') {
-    return `<span class="spinner-inline"></span> <strong>JSON-Import</strong> läuft …`;
-  }
-  return escHtml(JSON.stringify(status));
-}
-
-// =========================================================================
-// Browser-Script für SP-Export
-// =========================================================================
-function generateBrowserScript(libName) {
-  const escaped = escHtml(libName || 'Dokumente');
-  return `(async function exportSP() {
-  const libName = prompt('Bibliotheksname:', '${escaped}');
-  if (!libName) return;
-  const site = window._spPageContextInfo?.webAbsoluteUrl
-    || location.origin + location.pathname.replace(/\\/[^\\/]*$/, '');
-  const sel = '$select=*,FileRef,FileLeafRef&$expand=Author,Editor,File,Folder';
-  let url = site + "/_api/web/lists/getbytitle('" + encodeURIComponent(libName)
-    + "')/items?" + sel + "&$top=5000&$orderby=ID";
-  const all = [];
-  while (url) {
-    console.log('Lade Seite', Math.ceil(all.length/5000)+1, '…', all.length, 'Items');
-    const r = await fetch(url, { headers: { Accept: 'application/json;odata=nometadata' } });
-    if (!r.ok) { console.error('Fehler:', r.status); break; }
-    const d = await r.json();
-    all.push(...(d.value || []));
-    url = d['odata.nextLink'] || null;
-  }
-  console.log('Fertig:', all.length, 'Items');
-  const a = Object.assign(document.createElement('a'), {
-    href: URL.createObjectURL(new Blob([JSON.stringify(all)],{type:'application/json'})),
-    download: 'sp_export_' + libName + '_' + Date.now() + '.json'
-  });
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-})();`;
-}
-
-function toggleBrowserScript(sourceId) {
-  const el = document.getElementById(`browser-script-${sourceId}`);
-  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}
-
-function copyBrowserScript(sourceId) {
-  const el = document.getElementById(`browser-script-code-${sourceId}`);
-  if (!el) return;
-  // Decode HTML entities for copy
-  const tmp = document.createElement('textarea');
-  tmp.value = el.textContent;
-  document.body.appendChild(tmp);
-  tmp.select();
-  document.execCommand('copy');
-  document.body.removeChild(tmp);
-  const btn = el.closest('div').querySelector('button');
-  if (btn) { btn.textContent = '✓ Kopiert'; setTimeout(() => btn.textContent = 'Kopieren', 2000); }
-}
-
-// =========================================================================
-// JSON-Upload
-// =========================================================================
-async function handleJsonUpload(event, projectId, sourceId) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-  event.target.value = '';  // Reset so same file can be re-selected
-
-  const bar = document.getElementById(`sync-status-bar-${sourceId}`);
-  if (bar) bar.innerHTML = `<span class="spinner-inline"></span> Lade '${escHtml(file.name)}' hoch …`;
-
-  const formData = new FormData();
-  formData.append('file', file);
-
+  // Projekt-Liste laden
   try {
-    const resp = await fetch(`/api/sources/${sourceId}/import-json`, {
-      method: 'POST',
-      body: formData,
-    });
-    const data = await resp.json();
-    if (bar) bar.innerHTML = renderSyncStatusText(data);
-    if (data.status === 'gestartet') {
-      startSyncPolling(projectId, sourceId);
-    }
-  } catch (err) {
-    if (bar) bar.innerHTML = `❌ Upload-Fehler: ${escHtml(String(err))}`;
+    state.projects = await api('/api/workspace/projects');
+  } catch (e) {
+    state.projects = [];
   }
-}
+  renderProjectSelect();
 
-function startSyncPolling(projectId, sourceId) {
-  if (_syncPollers[sourceId]) clearInterval(_syncPollers[sourceId]);
-  _syncPollers[sourceId] = setInterval(async () => {
-    const status = await apiFetch(`/api/sources/${sourceId}/sync-status`);
-    const bar = document.getElementById(`sync-status-bar-${sourceId}`);
-    if (bar) bar.innerHTML = renderSyncStatusText(status);
-
-    if (status.status !== 'running') {
-      clearInterval(_syncPollers[sourceId]);
-      delete _syncPollers[sourceId];
-      // Reload doc list
-      const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-      const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000${incl}`);
-      const countEl = document.getElementById(`doc-count-${sourceId}`);
-      if (countEl) countEl.textContent = `${docs.length} Dokument(e)`;
-      const el = document.getElementById(`doc-list-src-${sourceId}`);
-      if (el) el.innerHTML = renderSourceDocTable(docs, sourceId, projectId);
-      await loadExplorer();
-    }
-  }, 2000);
-}
-
-// =========================================================================
-// SP-Felder Toggle
-// =========================================================================
-async function toggleSpFields(projectId, sourceId) {
-  _spFieldsVisible[sourceId] = !_spFieldsVisible[sourceId];
-
-  if (_spFieldsVisible[sourceId] && !_spFieldNames[sourceId]) {
-    const fields = await apiFetch(`/api/sources/${sourceId}/sp-fields`);
-    _spFieldNames[sourceId] = fields;
-  }
-
-  const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-  const docs  = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000${incl}`);
-  const el    = document.getElementById(`doc-list-src-${sourceId}`);
-  if (el) el.innerHTML = renderSourceDocTable(docs, sourceId, projectId);
-
-  const btn = document.getElementById(`btn-sp-fields-${sourceId}`);
-  if (btn) btn.style.color = _spFieldsVisible[sourceId] ? 'var(--accent)' : '';
-}
-
-// =========================================================================
-// Dokument-Suche in Quellen-View
-// =========================================================================
-async function filterSourceDocs(projectId, sourceId) {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(async () => {
-    const q    = document.getElementById(`doc-search-src-${sourceId}`)?.value || '';
-    const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-    const docs = await apiFetch(
-      `/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000&search=${encodeURIComponent(q)}${incl}`
-    );
-    const countEl = document.getElementById(`doc-count-${sourceId}`);
-    if (countEl) countEl.textContent = `${docs.length} Dokument(e)`;
-    const el = document.getElementById(`doc-list-src-${sourceId}`);
-    if (el) el.innerHTML = renderSourceDocTable(docs, sourceId, projectId);
-  }, 300);
-}
-
-// =========================================================================
-// Checkbox-Logik
-// =========================================================================
-function toggleDocCb(checkbox, projectId, sourceId) {
-  const id = parseInt(checkbox.dataset.id);
-  const row = checkbox.closest('tr');
-  if (checkbox.checked) {
-    _selectedDocs.add(id);
-    if (row) row.style.background = 'var(--panel2)';
+  // Aktives Projekt aus LS oder erstes
+  const saved = localStorage.getItem(LS_KEY_PROJECT);
+  const found = state.projects.find(p => p.slug === saved);
+  const startSlug = found ? saved : (state.projects[0]?.slug || null);
+  if (startSlug) {
+    await switchProject(startSlug);
   } else {
-    _selectedDocs.delete(id);
-    if (row) row.style.background = '';
+    setSystemMessage('Kein Projekt vorhanden. Bitte im Terminal anlegen: <code>disco project init &lt;slug&gt;</code>');
   }
-  updateSelectionToolbar(projectId, sourceId);
-}
-
-function toggleAllDocs(event, projectId, sourceId) {
-  const checked = event.target.checked;
-  document.querySelectorAll('.doc-cb').forEach(cb => {
-    cb.checked = checked;
-    const id  = parseInt(cb.dataset.id);
-    const row = cb.closest('tr');
-    if (checked) {
-      _selectedDocs.add(id);
-      if (row) row.style.background = 'var(--panel2)';
-    } else {
-      _selectedDocs.delete(id);
-      if (row) row.style.background = '';
-    }
-  });
-  updateSelectionToolbar(projectId, sourceId);
-}
-
-function updateSelectionToolbar(projectId, sourceId) {
-  const toolbar   = document.getElementById(`sel-toolbar-${sourceId}`);
-  const countEl   = document.getElementById(`sel-count-${sourceId}`);
-  const n         = _selectedDocs.size;
-  if (!toolbar) return;
-  toolbar.style.display = n > 0 ? 'flex' : 'none';
-  if (countEl) countEl.textContent = `${n} ausgewählt`;
-}
-
-async function markSelectedForIndexing(projectId, sourceId) {
-  if (_selectedDocs.size === 0) return;
-  const ids = [..._selectedDocs];
-  const res = await apiFetch(`/api/projects/${projectId}/documents/select`, {
-    method: 'POST',
-    body: JSON.stringify({ ids, selected: true }),
-  });
-  if (res.error) { alert('Fehler: ' + res.error); return; }
-  _selectedDocs.clear();
-  // Reload table
-  const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-  const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000${incl}`);
-  const el   = document.getElementById(`doc-list-src-${sourceId}`);
-  if (el) el.innerHTML = renderSourceDocTable(docs, sourceId, projectId);
-  updateSelectionToolbar(projectId, sourceId);
-}
-
-async function selectAllAndMark(projectId, sourceId) {
-  const res = await apiFetch(`/api/projects/${projectId}/documents/select-all`, {
-    method: 'POST',
-    body: JSON.stringify({ selected: true, source_id: sourceId }),
-  });
-  if (res.error) { alert('Fehler: ' + res.error); return; }
-  const bar = document.getElementById(`sync-status-bar-${sourceId}`);
-  if (bar) bar.innerHTML = `✅ ${res.selected_total} Dokumente zum Indexieren vorgemerkt.`;
-  _selectedDocs.clear();
-  const incl = _spFieldsVisible[sourceId] ? '&include_sp_fields=true' : '';
-  const docs = await apiFetch(`/api/projects/${projectId}/documents?source_id=${sourceId}&limit=5000${incl}`);
-  const el   = document.getElementById(`doc-list-src-${sourceId}`);
-  if (el) el.innerHTML = renderSourceDocTable(docs, sourceId, projectId);
-  updateSelectionToolbar(projectId, sourceId);
-}
-
-function clearDocSelection(projectId, sourceId) {
-  _selectedDocs.clear();
-  document.querySelectorAll('.doc-cb').forEach(cb => {
-    cb.checked = false;
-    const row = cb.closest('tr');
-    if (row) row.style.background = '';
-  });
-  const cbAll = document.getElementById(`cb-all-${sourceId}`);
-  if (cbAll) cbAll.checked = false;
-  updateSelectionToolbar(projectId, sourceId);
-}
-
-// =========================================================================
-// Formulare
-// =========================================================================
-function renderNewProjectForm() {
-  const content = document.getElementById('main-content');
-  content.innerHTML = `
-    <div class="dashboard" style="max-width:500px">
-      <h1>Neues Projekt</h1>
-      <div style="margin-top:20px">
-        <div class="form-row">
-          <label>Name *</label>
-          <input type="text" id="new-project-name" placeholder="z.B. BEW-Dokumentation 2024" autofocus>
-        </div>
-        <div class="form-row">
-          <label>Beschreibung</label>
-          <textarea id="new-project-desc" placeholder="Optionale Beschreibung" rows="3"></textarea>
-        </div>
-        <button class="btn btn-primary" onclick="submitNewProject()">Projekt anlegen</button>
-        <button class="btn btn-ghost" style="margin-left:8px" onclick="openView('dashboard')">Abbrechen</button>
-        <div id="new-project-msg" style="margin-top:10px"></div>
-      </div>
-    </div>
-  `;
-}
-
-async function submitNewProject() {
-  const name = document.getElementById('new-project-name').value.trim();
-  const desc = document.getElementById('new-project-desc').value.trim();
-  const msg = document.getElementById('new-project-msg');
-  if (!name) { msg.innerHTML = '<div class="alert alert-warn">Bitte einen Namen eingeben.</div>'; return; }
-  const result = await apiFetch('/api/projects', { method: 'POST', body: JSON.stringify({ name, description: desc || null }) });
-  if (result.error) { msg.innerHTML = `<div class="alert alert-warn">${escHtml(result.error)}</div>`; return; }
-  await loadExplorer();
-  selectProject(result.id);
-}
-
-function renderNewSourceForm() {
-  const project = state.projects.find(p => p.id === state.activeProjectId);
-  const content = document.getElementById('main-content');
-  content.innerHTML = `
-    <div class="dashboard" style="max-width:500px">
-      <h1>SharePoint-Quelle hinzufügen</h1>
-      ${project ? `<p class="subtitle">Projekt: ${escHtml(project.name)}</p>` : `<div class="alert alert-warn">Bitte zuerst ein Projekt auswählen.</div>`}
-      <div style="margin-top:16px">
-        <div class="form-row">
-          <label>Anzeigename *</label>
-          <input type="text" id="new-src-name" placeholder="z.B. Technische Dokumentation">
-        </div>
-        <div class="form-row">
-          <label>SharePoint Site-URL *</label>
-          <input type="text" id="new-src-url" placeholder="https://tenant.sharepoint.com/sites/MySite">
-        </div>
-        <div class="form-row">
-          <label>Bibliotheksname</label>
-          <input type="text" id="new-src-lib" placeholder="Dokumente" value="Dokumente">
-        </div>
-        <button class="btn btn-primary" onclick="submitNewSource()" ${!project?'disabled':''}>Quelle hinzufügen</button>
-        <button class="btn btn-ghost" style="margin-left:8px" onclick="openView('dashboard')">Abbrechen</button>
-        <div id="new-src-msg" style="margin-top:10px"></div>
-      </div>
-    </div>
-  `;
-}
-
-async function submitNewSource() {
-  const projectId = state.activeProjectId;
-  if (!projectId) return;
-  const name = document.getElementById('new-src-name').value.trim();
-  const siteUrl = document.getElementById('new-src-url').value.trim();
-  const lib = document.getElementById('new-src-lib').value.trim() || 'Dokumente';
-  const msg = document.getElementById('new-src-msg');
-  if (!name || !siteUrl) { msg.innerHTML = '<div class="alert alert-warn">Name und Site-URL sind erforderlich.</div>'; return; }
-  const result = await apiFetch(`/api/projects/${projectId}/sources`, {
-    method: 'POST',
-    body: JSON.stringify({ name, site_url: siteUrl, library_name: lib }),
-  });
-  if (result.error) { msg.innerHTML = `<div class="alert alert-warn">${escHtml(result.error)}</div>`; return; }
-  await loadExplorer();
-  openSourceView(projectId, result.id, result.name);
-}
-
-// =========================================================================
-// Chat — Multi-Thread Foundry-Agent (Phase 2a)
-// =========================================================================
-let currentAgentBubble = null;
-let currentAgentText = '';
-// Laufende Tool-Calls im aktuellen Turn: call_id -> {name, el (details), statusEl, resultEl}
-const _activeToolCalls = {};
-
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('chat-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-  });
 });
 
-// ------------------ Thread-Management ------------------
-
-async function initChat() {
-  // 1. Bestehende Threads laden
-  try {
-    const res = await fetch('/api/threads?limit=50');
-    state.threads = await res.json();
-  } catch (e) {
-    state.threads = [];
-  }
-
-  if (state.threads.length === 0) {
-    // Frisch starten: einen leeren Thread anlegen
-    await createNewThread();
-  } else {
-    // Aktuellsten Thread oeffnen
-    await switchThread(state.threads[0].id);
-  }
+// =========================================================================
+// Projekt-Switch
+// =========================================================================
+function renderProjectSelect() {
+  const sel = document.getElementById('project-select');
+  sel.innerHTML = state.projects.map(p =>
+    `<option value="${escAttr(p.slug)}">${escHtml(p.name)} (${p.slug})</option>`
+  ).join('');
 }
 
-async function createNewThread(title) {
-  try {
-    const res = await fetch('/api/threads', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ title: title || 'Neuer Chat' }),
-    });
-    const t = await res.json();
-    state.threads.unshift(t);
-    await switchThread(t.id);
-  } catch (e) {
-    console.error('createNewThread', e);
-  }
+async function onProjectChange() {
+  const slug = document.getElementById('project-select').value;
+  await switchProject(slug);
 }
 
-async function switchThread(threadId) {
-  if (!threadId) return;
-  state.activeThreadId = threadId;
-  renderThreadTabs();
-  await loadThreadMessages(threadId);
-  connectWS(threadId);
-  const input = document.getElementById('chat-input');
-  if (input) input.focus();
-}
+async function switchProject(slug) {
+  state.activeProjectSlug = slug;
+  localStorage.setItem(LS_KEY_PROJECT, slug);
+  document.getElementById('project-select').value = slug;
+  document.getElementById('chat-project-tag').textContent = slug ? `Projekt: ${slug}` : '(kein Projekt)';
 
-async function closeCurrentThread() {
-  if (!state.activeThreadId) return;
-  const id = state.activeThreadId;
-  if (!confirm('Diesen Chat schliessen (archivieren)?')) return;
-  try {
-    await fetch(`/api/threads/${id}`, { method: 'DELETE' });
-  } catch (e) {}
-  state.threads = state.threads.filter(t => t.id !== id);
+  // Chat zumachen, Threads + Tree neu laden
+  if (state.ws) { try { state.ws.close(); } catch(e) {} state.ws = null; }
+  state.activeThreadId = null;
+  state.wsThreadId = null;
+  setSystemMessage('Projekt gewechselt zu <strong>' + escHtml(slug) + '</strong>.');
+
+  await Promise.all([loadExplorer(slug), loadChats(slug), loadDbTables(slug)]);
+
+  // Wenn keine Threads: einen neuen anlegen
   if (state.threads.length === 0) {
     await createNewThread();
   } else {
-    await switchThread(state.threads[0].id);
+    // Neuesten öffnen
+    await openThread(state.threads[0].id);
   }
 }
 
-function renderThreadTabs() {
-  const container = document.getElementById('chat-tabs');
-  const newBtn = container.querySelector('.chat-tab-new');
-  // Alle Tabs (ohne + Button) entfernen
-  Array.from(container.children).forEach(ch => {
-    if (!ch.classList.contains('chat-tab-new')) ch.remove();
-  });
-  for (const t of state.threads) {
-    const div = document.createElement('div');
-    div.className = 'chat-tab' + (t.id === state.activeThreadId ? ' active' : '');
-    div.onclick = (e) => {
-      if (e.target.classList.contains('tab-close')) return;
-      switchThread(t.id);
+// =========================================================================
+// Explorer
+// =========================================================================
+async function loadExplorer(slug) {
+  const container = document.getElementById('explorer-tree');
+  container.innerHTML = '<span class="muted">lade …</span>';
+  try {
+    const tree = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/tree`);
+    container.innerHTML = '';
+    container.appendChild(renderTreeNode(tree, true));
+  } catch (e) {
+    container.innerHTML = '<span class="err">Fehler beim Laden des Explorers.</span>';
+  }
+}
+
+function renderTreeNode(node, isRoot=false) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tree-node';
+  const row = document.createElement('div');
+  row.className = 'tree-row ' + node.type;
+
+  if (node.type === 'dir') {
+    const toggle = document.createElement('span');
+    toggle.className = 'tree-toggle';
+    toggle.textContent = isRoot ? '▾' : '▸';
+    row.appendChild(toggle);
+    row.appendChild(spanIcon('📁'));
+    row.appendChild(spanName(node.name + '/'));
+    const childWrap = document.createElement('div');
+    childWrap.className = 'tree-node-children';
+    childWrap.style.display = isRoot ? 'block' : 'none';
+    (node.children || []).forEach(c => childWrap.appendChild(renderTreeNode(c, false)));
+    toggle.onclick = (e) => {
+      e.stopPropagation();
+      const open = childWrap.style.display !== 'none';
+      childWrap.style.display = open ? 'none' : 'block';
+      toggle.textContent = open ? '▸' : '▾';
     };
-    div.innerHTML = `
-      <span class="tab-title" title="${escAttr(t.title)}">${escHtml(t.title)}</span>
-      <span class="tab-close" onclick="event.stopPropagation(); archiveThread(${t.id})" title="Tab schliessen">×</span>
+    row.onclick = () => toggle.click();
+    wrap.appendChild(row);
+    wrap.appendChild(childWrap);
+  } else {
+    row.appendChild(spanIcon(fileIcon(node.name)));
+    row.appendChild(spanName(node.name));
+    const sz = document.createElement('span');
+    sz.className = 'tree-size';
+    sz.textContent = humanSize(node.size);
+    row.appendChild(sz);
+    row.title = node.path + (node.modified ? '\n' + node.modified : '');
+    row.onclick = () => openFileInViewer(node.path, node.name);
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+function spanIcon(emoji) { const s = document.createElement('span'); s.className = 'tree-icon'; s.textContent = emoji; return s; }
+function spanName(text) { const s = document.createElement('span'); s.className = 'tree-name'; s.textContent = text; return s; }
+function fileIcon(name) {
+  const e = (name.split('.').pop() || '').toLowerCase();
+  if (['md','txt'].includes(e)) return '📄';
+  if (['xlsx','xlsm','csv'].includes(e)) return '📊';
+  if (['pdf'].includes(e)) return '📕';
+  if (['db','sqlite'].includes(e)) return '🗄️';
+  if (['png','jpg','jpeg','svg'].includes(e)) return '🖼️';
+  if (['json'].includes(e)) return '📋';
+  return '📄';
+}
+function humanSize(b) {
+  if (b == null) return '';
+  if (b < 1024) return b + ' B';
+  if (b < 1024*1024) return (b/1024).toFixed(1) + ' k';
+  return (b/(1024*1024)).toFixed(1) + ' M';
+}
+
+// =========================================================================
+// Chat-Liste
+// =========================================================================
+async function loadChats(slug) {
+  state.threads = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/threads`);
+  renderChatList();
+}
+
+function renderChatList() {
+  const c = document.getElementById('chat-list');
+  if (!state.threads.length) {
+    c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Noch keine Chats. Mit + neuen anlegen.</div>';
+    return;
+  }
+  c.innerHTML = '';
+  for (const t of state.threads) {
+    const row = document.createElement('div');
+    row.className = 'sb-row' + (t.id === state.activeThreadId ? ' active' : '');
+    row.innerHTML = `
+      <span class="icon">💬</span>
+      <span class="label" title="${escAttr(t.title)}">${escHtml(t.title)}</span>
+      <span class="meta" title="löschen" onclick="event.stopPropagation();deleteThread(${t.id})">×</span>
     `;
-    container.insertBefore(div, newBtn);
+    row.onclick = (e) => { if (!e.target.classList.contains('meta')) openThread(t.id); };
+    c.appendChild(row);
   }
 }
 
-async function archiveThread(threadId) {
-  try {
-    await fetch(`/api/threads/${threadId}`, { method: 'DELETE' });
-  } catch (e) {}
+async function createNewThread() {
+  if (!state.activeProjectSlug) {
+    alert('Kein Projekt aktiv.');
+    return;
+  }
+  // project_id aus state holen
+  const project = state.projects.find(p => p.slug === state.activeProjectSlug);
+  if (!project || !project.db_id) {
+    alert('Projekt hat keine DB-ID. Lege es erst per CLI an: disco project init ' + state.activeProjectSlug);
+    return;
+  }
+  const t = await api('/api/threads', {
+    method: 'POST',
+    body: { title: 'Neuer Chat', project_id: project.db_id }
+  });
+  state.threads.unshift(t);
+  await openThread(t.id);
+}
+
+async function openThread(threadId) {
+  state.activeThreadId = threadId;
+  const t = state.threads.find(x => x.id === threadId);
+  document.getElementById('chat-title').textContent = (t?.title || 'Chat');
+  renderChatList();
+  await loadMessages(threadId);
+  connectWS(threadId);
+  document.getElementById('chat-input').focus();
+}
+
+async function deleteThread(threadId) {
+  if (!confirm('Chat löschen?')) return;
+  await fetch(`/api/threads/${threadId}?hard=true`, {method:'DELETE'});
   state.threads = state.threads.filter(t => t.id !== threadId);
   if (state.activeThreadId === threadId) {
-    if (state.threads.length === 0) {
-      await createNewThread();
-    } else {
-      await switchThread(state.threads[0].id);
-    }
+    if (state.threads.length) await openThread(state.threads[0].id);
+    else await createNewThread();
   } else {
-    renderThreadTabs();
+    renderChatList();
   }
 }
 
-async function loadThreadMessages(threadId) {
+// =========================================================================
+// Messages laden
+// =========================================================================
+async function loadMessages(threadId) {
   const msgs = document.getElementById('chat-messages');
   msgs.innerHTML = '';
   try {
-    const res = await fetch(`/api/threads/${threadId}/messages`);
-    const items = await res.json();
-    if (!Array.isArray(items) || items.length === 0) {
-      msgs.innerHTML = '<div class="msg system"><div class="bubble">Neuer Chat. Stelle eine Frage oder gib eine Aufgabe.</div></div>';
+    const items = await api(`/api/threads/${threadId}/messages`);
+    if (!items.length) {
+      setSystemMessage('Neuer Chat. Wie kann Disco helfen?');
       return;
     }
     for (const m of items) {
-      if (m.role === 'user') {
-        appendMessage('user', m.content || '');
-      } else if (m.role === 'assistant') {
+      if (m.role === 'user') appendMessage('user', m.content || '');
+      else if (m.role === 'assistant') {
         if (m.content) appendMessage('agent', m.content);
         if (Array.isArray(m.tool_calls)) {
           for (const tc of m.tool_calls) {
-            // Gespeicherter Tool-Call mit Result aus der DB rendern
             const result = findHistoricResult(items, tc.call_id);
             appendToolCallBlock(tc.call_id, tc.name, tc.arguments, result, 'completed');
           }
         }
       }
-      // tool-Nachrichten werden durch appendToolCallBlock bereits abgebildet
     }
   } catch (e) {
-    msgs.innerHTML = '<div class="msg system"><div class="bubble">Chat konnte nicht geladen werden.</div></div>';
+    setSystemMessage('Fehler beim Laden des Chat-Verlaufs.');
   }
 }
 
 function findHistoricResult(allMessages, callId) {
   for (const m of allMessages) {
     if (m.role === 'tool' && Array.isArray(m.tool_results)) {
-      for (const tr of m.tool_results) {
-        if (tr.call_id === callId) return tr.result;
-      }
+      for (const tr of m.tool_results) if (tr.call_id === callId) return tr.result;
     }
   }
   return null;
 }
 
-// ------------------ Senden + Event-Handling ------------------
+// =========================================================================
+// WebSocket
+// =========================================================================
+function connectWS(threadId) {
+  if (state.ws && state.wsThreadId !== threadId) {
+    try { state.ws.close(); } catch(e) {}
+    state.ws = null;
+  }
+  if (state.ws && state.wsThreadId === threadId) return;
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/chat?thread_id=${threadId}`);
+  state.ws = ws;
+  state.wsThreadId = threadId;
+  state.wsReady = false;
+
+  ws.onopen  = () => { state.wsReady = true; setStatus('Verbunden'); };
+  ws.onclose = () => {
+    state.wsReady = false;
+    if (state.wsThreadId === threadId && state.activeThreadId === threadId) {
+      setStatus('Verbindung getrennt — Reconnect in 2s …', 'warn');
+      setTimeout(() => connectWS(threadId), 2000);
+    }
+  };
+  ws.onerror = () => { state.wsReady = false; setStatus('WebSocket-Fehler', 'err'); };
+  ws.onmessage = (ev) => {
+    try { handleEvent(JSON.parse(ev.data)); }
+    catch(e) { console.error('Bad WS payload', e); }
+  };
+}
+
+// =========================================================================
+// Senden + Stream-Events
+// =========================================================================
+let currentBubble = null;
+let currentText = '';
+let typingEl = null;
+
+function initChatInput() {
+  const input = document.getElementById('chat-input');
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+}
 
 function sendMessage() {
+  if (!state.wsReady) { setStatus('Nicht verbunden', 'warn'); return; }
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
-  if (!text || !state.wsReady) return;
-
+  if (!text) return;
   input.value = '';
-  input.style.height = 'auto';
-
+  input.style.height = '';
   appendMessage('user', text);
-
-  const typing = appendTyping();
+  typingEl = appendTyping();
   state.ws.send(JSON.stringify({ text }));
-  currentAgentBubble = null;
-  currentAgentText = '';
-  state._typingEl = typing;
+  currentBubble = null; currentText = '';
+  setStatus('Disco denkt …');
 }
 
-function handleAgentChunk(data) {
-  if (state._typingEl) {
-    state._typingEl.remove();
-    state._typingEl = null;
-  }
-
-  switch (data.type) {
+function handleEvent(ev) {
+  if (typingEl) { typingEl.remove(); typingEl = null; }
+  switch (ev.type) {
     case 'text_delta':
-      if (!currentAgentBubble) {
-        const msg = appendMessage('agent', '');
-        currentAgentBubble = msg.querySelector('.bubble');
+      if (!currentBubble) {
+        const m = appendMessage('agent', '');
+        currentBubble = m.querySelector('.bubble');
       }
-      currentAgentText += data.text;
-      currentAgentBubble.innerHTML = markdownToHtml(currentAgentText);
+      currentText += ev.text;
+      currentBubble.innerHTML = renderMarkdown(currentText);
       scrollChat();
       break;
-
     case 'tool_call_start':
-      appendToolCallBlock(data.call_id, data.name, null, null, 'pending');
+      appendToolCallBlock(ev.call_id, ev.name, null, null, 'pending');
       break;
-
     case 'tool_call_args':
-      updateToolCallArgs(data.call_id, data.arguments);
+      updateToolArgs(ev.call_id, ev.arguments);
       break;
-
     case 'tool_result':
-      updateToolCallResult(data.call_id, data.result);
+      updateToolResult(ev.call_id, ev.result);
       break;
-
     case 'code_interpreter':
-      renderCodeInterpreterEvent(data);
+      renderCodeInterpreter(ev);
       break;
-
     case 'file_search':
-      renderFileSearchEvent(data);
+      renderFileSearch(ev);
       break;
-
-    case 'done':
-      currentAgentBubble = null;
-      currentAgentText = '';
-      // Thread-Titel ggf. refreshen (Server kann spaeter Auto-Titel setzen)
-      refreshThreadTitle(state.activeThreadId);
-      // Explorer ggf. neu laden (falls Agent Quellen angelegt hat o.ae.)
-      loadExplorer();
-      break;
-
     case 'error':
-      appendMessage('system', 'FEHLER: ' + (data.message || data.text || 'unbekannt'));
+      setSystemMessage('FEHLER: ' + (ev.message || ev.text || 'unbekannt'));
+      setStatus('Fehler', 'err');
       break;
-
-    default:
-      // Stumm ignorieren
+    case 'done':
+      currentBubble = null; currentText = '';
+      setStatus(`Bereit  ·  ${ev.tokens_input || 0}/${ev.tokens_output || 0} Tokens`);
+      // Nach Disco-Aktion: Sidebar refreshen, da neue Files/Tabellen entstanden sein koennten
+      if (state.activeProjectSlug) {
+        loadChats(state.activeProjectSlug);
+        loadExplorer(state.activeProjectSlug);
+        loadDbTables(state.activeProjectSlug);
+      }
       break;
   }
 }
 
-// ------------------ Render-Helfer ------------------
-
+// =========================================================================
+// Render-Helfer Chat
+// =========================================================================
 function appendMessage(role, text) {
   const msgs = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = `msg ${role}`;
+  const sender = role === 'user' ? 'Du' : role === 'agent' ? 'Disco' : 'System';
   div.innerHTML = `
-    <div class="sender">${role === 'user' ? 'Du' : role === 'agent' ? 'Agent' : 'System'}</div>
-    <div class="bubble">${markdownToHtml(text)}</div>
+    <div class="sender">${sender}</div>
+    <div class="bubble">${renderMarkdown(text)}</div>
   `;
   msgs.appendChild(div);
   scrollChat();
@@ -1717,7 +923,7 @@ function appendMessage(role, text) {
 function appendTyping() {
   const msgs = document.getElementById('chat-messages');
   const div = document.createElement('div');
-  div.className = 'typing-indicator';
+  div.className = 'typing';
   div.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
   msgs.appendChild(div);
   scrollChat();
@@ -1726,164 +932,540 @@ function appendTyping() {
 
 function appendToolCallBlock(callId, name, args, result, statusText) {
   const msgs = document.getElementById('chat-messages');
-  const details = document.createElement('details');
-  details.className = 'tool-call';
-  const argsStr = args ? JSON.stringify(args, null, 2) : '...';
+  const det = document.createElement('details');
+  det.className = 'tool-call';
+  const argsStr = args ? JSON.stringify(args, null, 2) : '…';
   const resStr = result ? (typeof result === 'string' ? result : JSON.stringify(result, null, 2)) : '';
-  const statusClass = (statusText === 'pending') ? 'pending' : '';
-  details.innerHTML = `
+  det.innerHTML = `
     <summary>
       <span class="tool-name">${escHtml(name)}</span>
-      <span class="tool-status ${statusClass}" data-role="status">${escHtml(statusText || 'pending')}</span>
+      <span class="tool-status ${statusText==='pending' ? 'pending' : ''}" data-r="status">${escHtml(statusText || 'pending')}</span>
     </summary>
     <div class="tool-body">
       <div class="tool-label">Argumente</div>
-      <div class="tool-args" data-role="args">${escHtml(argsStr)}</div>
+      <div class="tool-args" data-r="args">${escHtml(argsStr)}</div>
       <div class="tool-label">Ergebnis</div>
-      <div class="tool-result" data-role="result">${escHtml(resStr || '(ausstehend ...)')}</div>
+      <div class="tool-result" data-r="result">${escHtml(resStr || '(läuft …)')}</div>
     </div>
   `;
-  msgs.appendChild(details);
+  msgs.appendChild(det);
   _activeToolCalls[callId] = {
-    name,
-    el: details,
-    statusEl: details.querySelector('[data-role=status]'),
-    argsEl: details.querySelector('[data-role=args]'),
-    resultEl: details.querySelector('[data-role=result]'),
+    name, el: det,
+    statusEl: det.querySelector('[data-r=status]'),
+    argsEl: det.querySelector('[data-r=args]'),
+    resultEl: det.querySelector('[data-r=result]'),
   };
   scrollChat();
 }
-
-function updateToolCallArgs(callId, args) {
+function updateToolArgs(callId, args) {
   const tc = _activeToolCalls[callId];
-  if (!tc) return;
-  tc.argsEl.textContent = JSON.stringify(args, null, 2);
+  if (tc) tc.argsEl.textContent = JSON.stringify(args, null, 2);
 }
-
-function updateToolCallResult(callId, result) {
+function updateToolResult(callId, result) {
   const tc = _activeToolCalls[callId];
   if (!tc) return;
   let pretty = result;
-  try {
-    pretty = JSON.stringify(JSON.parse(result), null, 2);
-  } catch (e) {}
+  try { pretty = JSON.stringify(JSON.parse(result), null, 2); } catch(e) {}
   tc.resultEl.textContent = pretty;
   tc.statusEl.textContent = 'ok';
   tc.statusEl.classList.remove('pending');
 }
 
-function renderCodeInterpreterEvent(data) {
-  // data.phase: in_progress | code | interpreting | completed
+function renderCodeInterpreter(ev) {
   const msgs = document.getElementById('chat-messages');
-  const key = '_ci_current';
+  const key = '__ci_' + (state._ciCount = (state._ciCount || 0));
   let el = state[key];
-  if (data.phase === 'in_progress' || !el) {
+  if (ev.phase === 'in_progress' || !el) {
     el = document.createElement('details');
     el.className = 'tool-call code-interpreter';
     el.open = true;
     el.innerHTML = `
       <summary>
         <span class="tool-name">Code Interpreter</span>
-        <span class="tool-status pending" data-role="status">laeuft ...</span>
+        <span class="tool-status pending" data-r="status">läuft …</span>
       </summary>
       <div class="tool-body">
         <div class="tool-label">Code</div>
-        <div class="tool-args" data-role="code">(wird erstellt ...)</div>
-      </div>
-    `;
+        <div class="tool-args" data-r="code">(wird erstellt …)</div>
+      </div>`;
     msgs.appendChild(el);
     state[key] = el;
   }
-  if (data.phase === 'code' && data.code) {
-    el.querySelector('[data-role=code]').textContent = data.code;
-  }
-  if (data.phase === 'interpreting') {
-    el.querySelector('[data-role=status]').textContent = 'rechnet ...';
-  }
-  if (data.phase === 'completed') {
-    el.querySelector('[data-role=status]').textContent = 'fertig';
-    el.querySelector('[data-role=status]').classList.remove('pending');
-    state[key] = null;
+  if (ev.phase === 'code' && ev.code) el.querySelector('[data-r=code]').textContent = ev.code;
+  if (ev.phase === 'interpreting') el.querySelector('[data-r=status]').textContent = 'rechnet …';
+  if (ev.phase === 'completed') {
+    el.querySelector('[data-r=status]').textContent = 'fertig';
+    el.querySelector('[data-r=status]').classList.remove('pending');
+    state._ciCount++;
   }
   scrollChat();
 }
 
-function renderFileSearchEvent(data) {
+function renderFileSearch(ev) {
+  // analog zu Code-Interpreter, nur kosmetisch
   const msgs = document.getElementById('chat-messages');
-  const key = '_fs_current';
+  const key = '__fs_' + (state._fsCount = (state._fsCount || 0));
   let el = state[key];
-  if (data.phase === 'in_progress' || !el) {
+  if (ev.phase === 'in_progress' || !el) {
     el = document.createElement('details');
     el.className = 'tool-call file-search';
-    el.innerHTML = `
-      <summary>
-        <span class="tool-name">File Search</span>
-        <span class="tool-status pending" data-role="status">sucht ...</span>
-      </summary>
-      <div class="tool-body">
-        <div class="tool-label">Status</div>
-        <div class="tool-args" data-role="phase">in_progress</div>
-      </div>
-    `;
+    el.innerHTML = `<summary><span class="tool-name">File Search</span><span class="tool-status pending" data-r="status">…</span></summary>`;
     msgs.appendChild(el);
     state[key] = el;
   }
-  el.querySelector('[data-role=phase]').textContent = data.phase;
-  if (data.phase === 'completed') {
-    el.querySelector('[data-role=status]').textContent = 'fertig';
-    el.querySelector('[data-role=status]').classList.remove('pending');
-    state[key] = null;
-  }
+  el.querySelector('[data-r=status]').textContent = ev.phase;
+  if (ev.phase === 'completed') { el.querySelector('[data-r=status]').classList.remove('pending'); state._fsCount++; }
   scrollChat();
 }
 
-async function refreshThreadTitle(threadId) {
-  try {
-    const res = await fetch(`/api/threads/${threadId}`);
-    const t = await res.json();
-    const idx = state.threads.findIndex(x => x.id === threadId);
-    if (idx >= 0) {
-      state.threads[idx] = t;
-      renderThreadTabs();
-    }
-  } catch (e) {}
+function setSystemMessage(html) {
+  const m = document.createElement('div');
+  m.className = 'msg system';
+  m.innerHTML = `<div class="bubble">${html}</div>`;
+  document.getElementById('chat-messages').appendChild(m);
+  scrollChat();
+}
+
+function setStatus(text, cls) {
+  const s = document.getElementById('chat-status');
+  s.textContent = text;
+  s.className = cls === 'warn' ? 'warn' : (cls === 'err' ? 'err' : 'muted');
 }
 
 function scrollChat() {
-  const msgs = document.getElementById('chat-messages');
-  msgs.scrollTop = msgs.scrollHeight;
+  const m = document.getElementById('chat-messages');
+  m.scrollTop = m.scrollHeight;
 }
 
 // =========================================================================
-// Mini-Markdown-Renderer
+// Viewer
 // =========================================================================
-function markdownToHtml(text) {
-  if (!text) return '';
-  return text
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^#{1,3} (.+)$/gm, '<strong style="color:var(--text-bright)">$1</strong>')
-    .replace(/^[-•] (.+)$/gm, '• $1')
-    .replace(/\n/g, '<br>');
+function fileUrl(slug, path) {
+  return `/api/workspace/projects/${encodeURIComponent(slug)}/file?path=${encodeURIComponent(path)}`;
+}
+
+async function openFileInViewer(path, name) {
+  if (!state.activeProjectSlug) return;
+  setViewerTitle(name, path);
+  ensureViewerOpen();
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const url = fileUrl(state.activeProjectSlug, path);
+
+  setViewerHtml('<div class="viewer-body muted">lade …</div>');
+  try {
+    if (['md','markdown'].includes(ext)) await renderMarkdownFile(url);
+    else if (ext === 'csv') await renderCsvFile(url);
+    else if (['json'].includes(ext)) await renderJsonFile(url);
+    else if (['xlsx','xlsm','xls'].includes(ext)) await renderExcelFile(url);
+    else if (ext === 'pdf') await renderPdfFile(url);
+    else if (['png','jpg','jpeg','gif','svg','webp'].includes(ext)) renderImage(url);
+    else await renderTextFile(url);
+  } catch (e) {
+    setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
+  }
+}
+
+function setViewerTitle(name, path) {
+  const t = document.getElementById('viewer-title');
+  t.textContent = name;
+  t.title = path || '';
+}
+
+function setViewerHtml(html) {
+  document.getElementById('viewer-content').innerHTML = html;
+}
+
+function ensureViewerOpen() {
+  document.getElementById('app').classList.remove('viewer-collapsed');
+}
+
+function closeViewer() {
+  setViewerTitle('Viewer', '');
+  setViewerHtml(`
+    <div id="viewer-empty">
+      Keine Datei geöffnet.<br>
+      Klick im Explorer auf eine Datei oder Tabelle.
+    </div>`);
+}
+
+// ----- Markdown ----------------------------------------------------------
+async function renderMarkdownFile(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} beim Laden`);
+  const text = await r.text();
+  state._mdSource = text;
+  state._mdRendered = false;        // Default: Quelltext
+  drawMarkdownView();
+}
+
+function drawMarkdownView() {
+  const text = state._mdSource || '';
+  const rendered = state._mdRendered;
+  const toolbar = `
+    <div class="viewer-toolbar">
+      <span>${text.length.toLocaleString('de-DE')} Zeichen</span>
+      <span class="spacer"></span>
+      <button onclick="toggleMarkdownView()">
+        ${rendered ? '⟶ Quelltext' : '⟶ Gerendert'}
+      </button>
+    </div>`;
+  const body = rendered
+    ? `<div class="viewer-body viewer-md">${renderMarkdown(text)}</div>`
+    : `<pre class="viewer-pre">${escHtml(text)}</pre>`;
+  setViewerHtml(toolbar + body);
+}
+
+function toggleMarkdownView() {
+  state._mdRendered = !state._mdRendered;
+  drawMarkdownView();
+}
+
+// ----- CSV ---------------------------------------------------------------
+async function renderCsvFile(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} beim Laden`);
+  const text = await r.text();
+  const parsed = Papa.parse(text, { header: false, skipEmptyLines: true });
+  const rows = parsed.data;
+  if (!rows.length) { setViewerHtml('<div class="viewer-body muted">(leer)</div>'); return; }
+  // Heuristik: erste Zeile ist Header
+  const header = rows[0];
+  const body = rows.slice(1);
+  let h = `<div class="viewer-toolbar">${body.length} Zeilen × ${header.length} Spalten<span class="spacer"></span></div>`;
+  h += `<div style="overflow:auto"><table class="viewer-table"><thead><tr>`;
+  for (const c of header) h += `<th>${escHtml(c)}</th>`;
+  h += `</tr></thead><tbody>`;
+  // Begrenzen auf erste 1000 Zeilen, Performance
+  const max = Math.min(body.length, 1000);
+  for (let i = 0; i < max; i++) {
+    h += '<tr>';
+    for (const c of body[i]) h += `<td title="${escAttr(c)}">${escHtml(c)}</td>`;
+    h += '</tr>';
+  }
+  h += `</tbody></table></div>`;
+  if (body.length > max) {
+    h += `<div class="viewer-pagination muted">${body.length - max} weitere Zeilen ausgeblendet (Performance-Limit)</div>`;
+  }
+  setViewerHtml(h);
+}
+
+// ----- JSON / TXT --------------------------------------------------------
+async function renderJsonFile(url) {
+  const r = await fetch(url);
+  const text = await r.text();
+  let pretty = text;
+  try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch(e) {}
+  setViewerHtml(`<pre class="viewer-pre">${escHtml(pretty)}</pre>`);
+}
+async function renderTextFile(url) {
+  const r = await fetch(url);
+  const text = await r.text();
+  setViewerHtml(`<pre class="viewer-pre">${escHtml(text)}</pre>`);
+}
+
+function renderImage(url) {
+  setViewerHtml(`<div class="viewer-body" style="text-align:center"><img src="${url}" style="max-width:100%;border:1px solid var(--border)"></div>`);
+}
+
+// ----- Excel via SheetJS -------------------------------------------------
+async function renderExcelFile(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} beim Laden`);
+  const buf = await r.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  if (!wb.SheetNames.length) { setViewerHtml('<div class="viewer-body muted">(keine Sheets)</div>'); return; }
+
+  state._xlsx = wb;
+  state._xlsxSheet = wb.SheetNames[0];
+  renderExcelSheet();
+}
+
+function renderExcelSheet() {
+  const wb = state._xlsx; if (!wb) return;
+  const sheetName = state._xlsxSheet;
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+  // Toolbar mit Sheet-Auswahl
+  let h = '<div class="viewer-toolbar">';
+  h += '<label>Sheet:</label><select id="xlsx-sheet-sel">';
+  for (const n of wb.SheetNames) {
+    h += `<option value="${escAttr(n)}"${n===sheetName?' selected':''}>${escHtml(n)}</option>`;
+  }
+  h += '</select>';
+  h += `<span class="spacer"></span>${rows.length} Zeilen`;
+  h += '</div>';
+
+  if (!rows.length) {
+    h += '<div class="viewer-body muted">(leer)</div>';
+    setViewerHtml(h);
+    document.getElementById('xlsx-sheet-sel').onchange = onExcelSheetChange;
+    return;
+  }
+  // Erste Zeile als Header rendern
+  const maxCols = Math.max(...rows.map(r => r.length));
+  h += '<div style="overflow:auto"><table class="viewer-table"><thead><tr>';
+  for (let i = 0; i < maxCols; i++) {
+    const v = rows[0][i] ?? '';
+    h += `<th>${escHtml(v)}</th>`;
+  }
+  h += '</tr></thead><tbody>';
+  const max = Math.min(rows.length, 1000);
+  for (let i = 1; i < max; i++) {
+    h += '<tr>';
+    for (let j = 0; j < maxCols; j++) {
+      const v = rows[i][j] ?? '';
+      h += `<td title="${escAttr(v)}">${escHtml(v)}</td>`;
+    }
+    h += '</tr>';
+  }
+  h += '</tbody></table></div>';
+  if (rows.length > max) {
+    h += `<div class="viewer-pagination muted">${rows.length - max} weitere Zeilen ausgeblendet</div>`;
+  }
+  setViewerHtml(h);
+  document.getElementById('xlsx-sheet-sel').onchange = onExcelSheetChange;
+}
+function onExcelSheetChange(e) {
+  state._xlsxSheet = e.target.value;
+  renderExcelSheet();
+}
+
+// ----- PDF via pdf.js ----------------------------------------------------
+async function renderPdfFile(url) {
+  if (!window.pdfjsLib) { setViewerHtml('<div class="viewer-body err">pdf.js nicht geladen</div>'); return; }
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} beim Laden`);
+  const buf = await r.arrayBuffer();
+  const task = window.pdfjsLib.getDocument({ data: buf });
+  const pdf = await task.promise;
+
+  state._pdf = pdf;
+  state._pdfPage = 1;
+  state._pdfTotal = pdf.numPages;
+
+  setViewerHtml(`
+    <div class="viewer-toolbar">
+      <button onclick="pdfPrev()">‹</button>
+      <span>Seite <span id="pdf-page">1</span> / ${pdf.numPages}</span>
+      <button onclick="pdfNext()">›</button>
+      <span class="spacer"></span>
+      <label>Zoom:</label>
+      <select id="pdf-zoom" onchange="renderPdfPage()">
+        <option value="0.75">75%</option>
+        <option value="1.0">100%</option>
+        <option value="1.25" selected>125%</option>
+        <option value="1.5">150%</option>
+        <option value="2.0">200%</option>
+      </select>
+    </div>
+    <div id="pdf-canvas-container"></div>
+  `);
+  await renderPdfPage();
+}
+async function renderPdfPage() {
+  if (!state._pdf) return;
+  const page = await state._pdf.getPage(state._pdfPage);
+  const zoom = parseFloat(document.getElementById('pdf-zoom').value || '1.25');
+  const viewport = page.getViewport({ scale: zoom });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  const c = document.getElementById('pdf-canvas-container');
+  c.innerHTML = '';
+  c.appendChild(canvas);
+  document.getElementById('pdf-page').textContent = state._pdfPage;
+}
+function pdfPrev() { if (state._pdfPage > 1) { state._pdfPage--; renderPdfPage(); } }
+function pdfNext() { if (state._pdfPage < state._pdfTotal) { state._pdfPage++; renderPdfPage(); } }
+
+// =========================================================================
+// DB-Tabellen-Liste in Sidebar + Tabellen-Viewer
+// =========================================================================
+async function loadDbTables(slug) {
+  const c = document.getElementById('db-tables-list');
+  c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  try {
+    const tables = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/db/tables`);
+    if (!Array.isArray(tables) || !tables.length) {
+      c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Keine work_*/agent_*-Tabellen.</div>';
+      return;
+    }
+    c.innerHTML = '';
+    for (const t of tables) {
+      const row = document.createElement('div');
+      row.className = 'tree-row file';
+      row.innerHTML = `
+        <span class="tree-icon">▤</span>
+        <span class="tree-name" title="${escAttr(t.columns.join(', '))}">${escHtml(t.name)}</span>
+        <span class="tree-size">${t.row_count}</span>
+      `;
+      row.onclick = () => openTableInViewer(t.name);
+      c.appendChild(row);
+    }
+  } catch (e) {
+    c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
+  }
+}
+
+async function openTableInViewer(table) {
+  if (!state.activeProjectSlug) return;
+  setViewerTitle('▤ ' + table, 'Projekt-DB');
+  ensureViewerOpen();
+  state._dbTable = table;
+  state._dbOffset = 0;
+  state._dbLimit = 100;
+  state._dbOrderBy = null;
+  state._dbOrderDir = 'ASC';
+  await loadDbRows();
+}
+
+async function loadDbRows() {
+  const slug = state.activeProjectSlug;
+  const t = state._dbTable;
+  let url = `/api/workspace/projects/${encodeURIComponent(slug)}/db/rows?table=${encodeURIComponent(t)}`
+          + `&limit=${state._dbLimit}&offset=${state._dbOffset}`;
+  if (state._dbOrderBy) url += `&order_by=${encodeURIComponent(state._dbOrderBy)}&order_dir=${state._dbOrderDir}`;
+  setViewerHtml('<div class="viewer-body muted">lade …</div>');
+  try {
+    const data = await api(url);
+    if (data.error) throw new Error(data.error);
+    renderDbTable(data);
+  } catch (e) {
+    setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
+  }
+}
+
+function renderDbTable(data) {
+  const { table, total, limit, offset, columns, rows } = data;
+  let h = `<div class="viewer-toolbar">
+    Tabelle <strong>${escHtml(table)}</strong>
+    <span class="spacer"></span>
+    ${total.toLocaleString('de-DE')} Zeilen total
+  </div>`;
+  h += '<div style="overflow:auto"><table class="viewer-table"><thead><tr>';
+  for (const col of columns) {
+    const isOrd = state._dbOrderBy === col;
+    const arrow = isOrd ? (state._dbOrderDir === 'ASC' ? ' ▲' : ' ▼') : '';
+    h += `<th onclick="dbToggleSort('${escAttr(col)}')">${escHtml(col)}${arrow}</th>`;
+  }
+  h += '</tr></thead><tbody>';
+  for (const r of rows) {
+    h += '<tr>';
+    for (const col of columns) {
+      const v = r[col];
+      const display = v === null ? '<span class="muted">NULL</span>' : escHtml(String(v));
+      h += `<td title="${escAttr(String(v ?? ''))}">${display}</td>`;
+    }
+    h += '</tr>';
+  }
+  h += '</tbody></table></div>';
+  // Pagination
+  const from = offset + 1;
+  const to = Math.min(offset + rows.length, total);
+  const hasPrev = offset > 0;
+  const hasNext = to < total;
+  h += `<div class="viewer-pagination">
+    <button onclick="dbPage(-1)" ${hasPrev?'':'disabled'}>‹ Zurück</button>
+    <span class="muted">${from.toLocaleString('de-DE')} – ${to.toLocaleString('de-DE')} von ${total.toLocaleString('de-DE')}</span>
+    <button onclick="dbPage(1)" ${hasNext?'':'disabled'}>Weiter ›</button>
+    <span class="spacer"></span>
+    <label>Pro Seite:</label>
+    <select onchange="dbSetLimit(this.value)">
+      ${[50,100,250,500].map(n => `<option value="${n}" ${n===limit?'selected':''}>${n}</option>`).join('')}
+    </select>
+  </div>`;
+  setViewerHtml(h);
+}
+function dbPage(dir) {
+  state._dbOffset = Math.max(0, state._dbOffset + dir * state._dbLimit);
+  loadDbRows();
+}
+function dbSetLimit(n) {
+  state._dbLimit = parseInt(n, 10);
+  state._dbOffset = 0;
+  loadDbRows();
+}
+function dbToggleSort(col) {
+  if (state._dbOrderBy === col) {
+    state._dbOrderDir = state._dbOrderDir === 'ASC' ? 'DESC' : 'ASC';
+  } else {
+    state._dbOrderBy = col;
+    state._dbOrderDir = 'ASC';
+  }
+  state._dbOffset = 0;
+  loadDbRows();
 }
 
 // =========================================================================
-// Hilfsfunktionen
+// Splitter (resize)
+// =========================================================================
+function initSplitters() {
+  // Defaults: 25% Sidebar, 25% Viewer (Mitte = 50% via 1fr).
+  // Beim ersten Start (kein LS-Wert) anhand Viewport-Breite berechnen.
+  const vw = window.innerWidth;
+  const swDefault = Math.max(220, Math.floor(vw * 0.25));
+  const vwDefault = Math.max(280, Math.floor(vw * 0.25));
+  const sw = parseInt(localStorage.getItem(LS_KEY_SIDEBAR_W) || String(swDefault), 10);
+  const vwS = parseInt(localStorage.getItem(LS_KEY_VIEWER_W)  || String(vwDefault), 10);
+  document.documentElement.style.setProperty('--sidebar-w', sw + 'px');
+  document.documentElement.style.setProperty('--viewer-w',  vwS + 'px');
+
+  setupSplitter('splitter-left',  '--sidebar-w', LS_KEY_SIDEBAR_W, 'left');
+  setupSplitter('splitter-right', '--viewer-w',  LS_KEY_VIEWER_W,  'right');
+}
+
+function setupSplitter(id, cssVar, lsKey, side) {
+  const el = document.getElementById(id);
+  let dragging = false; let startX = 0; let startW = 0;
+  el.addEventListener('mousedown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    let delta = e.clientX - startX;
+    if (side === 'right') delta = -delta;
+    let w = Math.max(0, Math.min(700, startW + delta));
+    document.documentElement.style.setProperty(cssVar, w + 'px');
+  });
+  document.addEventListener('mouseup', () => {
+    if (dragging) {
+      dragging = false;
+      document.body.style.userSelect = '';
+      const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
+      localStorage.setItem(lsKey, String(w));
+    }
+  });
+}
+
+function toggleSidebar() {
+  document.getElementById('app').classList.toggle('sidebar-collapsed');
+}
+function toggleViewer() {
+  document.getElementById('app').classList.toggle('viewer-collapsed');
+}
+
+// =========================================================================
+// Misc
 // =========================================================================
 function escHtml(s) {
-  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 function escAttr(s) {
-  return String(s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return String(s ?? '').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// =========================================================================
-// Init
-// =========================================================================
-initChat();
-loadExplorer().then(() => openView('dashboard'));
+// hljs-Languages registrieren
+if (window.hljs) {
+  if (window.hljs.registerLanguage) {
+    // bereits per CDN-Loader geladen — siehe head
+  }
+}
 </script>
 </body>
 </html>

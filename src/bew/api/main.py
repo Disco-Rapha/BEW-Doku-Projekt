@@ -434,6 +434,258 @@ async def api_archive_thread(thread_id: int, hard: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# REST-API: Workspace / Projekte / Explorer
+# ---------------------------------------------------------------------------
+
+@app.get("/api/workspace/projects")
+async def api_workspace_projects():
+    """Liste aller Projekte im Disco-Workspace (mit Datei-Zaehlern)."""
+    from ..workspace import list_workspace_projects
+    return list_workspace_projects()
+
+
+@app.get("/api/workspace/projects/{slug}/tree")
+async def api_workspace_tree(slug: str, max_depth: int = 4):
+    """Verzeichnisbaum eines Projekts (rekursiv, ohne Inhalte).
+
+    Liefert ein Tree-Dict mit Knoten:
+      {name, path (relativ zum Projekt), type: 'dir'|'file',
+       size?, modified?, children?: [...]}
+    """
+    from ..workspace import validate_slug
+    from ..config import settings
+    from datetime import datetime
+
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    root = (settings.projects_dir / slug).resolve()
+    if not root.exists() or not root.is_dir():
+        return {"error": f"Projekt '{slug}' nicht gefunden"}
+
+    def _build(p: Path, depth: int) -> dict:
+        node = {
+            "name": p.name if p != root else slug,
+            "path": str(p.relative_to(root)) if p != root else "",
+            "type": "dir",
+        }
+        if depth >= max_depth:
+            node["children"] = []
+            node["truncated"] = True
+            return node
+        children: list[dict] = []
+        try:
+            entries = sorted(
+                p.iterdir(),
+                key=lambda x: (not x.is_dir(), x.name.lower()),
+            )
+        except OSError:
+            entries = []
+        for child in entries:
+            if child.is_dir():
+                children.append(_build(child, depth + 1))
+            else:
+                try:
+                    st = child.stat()
+                    children.append({
+                        "name": child.name,
+                        "path": str(child.relative_to(root)),
+                        "type": "file",
+                        "size": st.st_size,
+                        "modified": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                    })
+                except OSError:
+                    continue
+        node["children"] = children
+        return node
+
+    return _build(root, 0)
+
+
+def _resolve_project_root(slug: str) -> Path:
+    """Helper: Slug -> abs. Projekt-Pfad. Wirft HTTPException-aequivalent."""
+    from ..workspace import validate_slug
+    slug = validate_slug(slug)
+    root = (settings.projects_dir / slug).resolve()
+    if not root.exists() or not root.is_dir():
+        raise FileNotFoundError(f"Projekt '{slug}' nicht gefunden")
+    return root
+
+
+def _safe_path_in_root(root: Path, rel_path: str) -> Path:
+    """Path-Traversal-Schutz: rel_path muss unter root bleiben."""
+    if not rel_path:
+        raise ValueError("path ist erforderlich")
+    candidate = (root / rel_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise ValueError(f"Pfad ausserhalb des Projekts: {rel_path!r}")
+    if not candidate.exists():
+        raise FileNotFoundError(f"Datei nicht gefunden: {rel_path!r}")
+    return candidate
+
+
+# Mime-Map fuer haeufige Endungen — Browser entscheidet danach
+_MIME_BY_EXT = {
+    ".md": "text/markdown; charset=utf-8",
+    ".markdown": "text/markdown; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+    ".xls": "application/vnd.ms-excel",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+}
+
+
+@app.get("/api/workspace/projects/{slug}/file")
+async def api_workspace_file(slug: str, path: str):
+    """Liefert eine Datei aus einem Projekt aus.
+
+    Content-Type wird per Endung gesetzt; Browser/UI entscheidet anhand davon
+    wie gerendert wird (Markdown/CSV/PDF/Excel/...).
+    """
+    from fastapi.responses import FileResponse, PlainTextResponse
+
+    try:
+        root = _resolve_project_root(slug)
+        target = _safe_path_in_root(root, path)
+    except (ValueError, FileNotFoundError) as exc:
+        return PlainTextResponse(str(exc), status_code=404)
+
+    ext = target.suffix.lower()
+    mime = _MIME_BY_EXT.get(ext, "application/octet-stream")
+    # Schutz: keine riesigen Files inline ausliefern
+    size = target.stat().st_size
+    if size > 50 * 1024 * 1024:  # 50 MB
+        return PlainTextResponse(
+            f"Datei zu gross fuer Inline-View ({size:,} B). Limit 50 MB.",
+            status_code=413,
+        )
+    return FileResponse(str(target), media_type=mime, filename=target.name)
+
+
+@app.get("/api/workspace/projects/{slug}/db/tables")
+async def api_workspace_db_tables(slug: str):
+    """Liste der Tabellen in der Projekt-data.db (ohne Internals)."""
+    try:
+        root = _resolve_project_root(slug)
+    except (ValueError, FileNotFoundError) as exc:
+        return {"error": str(exc)}
+    db = root / "data.db"
+    if not db.exists():
+        return []
+    import sqlite3
+    c = sqlite3.connect(str(db))
+    try:
+        rows = c.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_disco_%' "
+            "ORDER BY name"
+        ).fetchall()
+        out: list[dict] = []
+        for (name,) in rows:
+            cnt = c.execute(f"SELECT COUNT(*) FROM \"{name}\"").fetchone()[0]
+            cols = [r[1] for r in c.execute(f"PRAGMA table_info(\"{name}\")").fetchall()]
+            out.append({"name": name, "row_count": cnt, "columns": cols})
+    finally:
+        c.close()
+    return out
+
+
+@app.get("/api/workspace/projects/{slug}/db/rows")
+async def api_workspace_db_rows(
+    slug: str,
+    table: str,
+    limit: int = 100,
+    offset: int = 0,
+    order_by: str | None = None,
+    order_dir: str = "ASC",
+):
+    """Paginiertes SELECT * aus einer Tabelle der Projekt-DB."""
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table or ""):
+        return {"error": f"Ungueltiger Tabellenname: {table!r}"}
+    if order_by is not None and not _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", order_by):
+        return {"error": f"Ungueltige Sortierspalte: {order_by!r}"}
+    if order_dir.upper() not in ("ASC", "DESC"):
+        return {"error": "order_dir muss ASC oder DESC sein"}
+
+    try:
+        root = _resolve_project_root(slug)
+    except (ValueError, FileNotFoundError) as exc:
+        return {"error": str(exc)}
+    db = root / "data.db"
+    if not db.exists():
+        return {"error": "data.db existiert nicht"}
+
+    import sqlite3
+    c = sqlite3.connect(str(db))
+    c.row_factory = sqlite3.Row
+    try:
+        # Existenz pruefen
+        if not c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone():
+            return {"error": f"Tabelle '{table}' nicht gefunden"}
+        total = c.execute(f"SELECT COUNT(*) FROM \"{table}\"").fetchone()[0]
+        sql = f"SELECT * FROM \"{table}\""
+        if order_by:
+            sql += f" ORDER BY \"{order_by}\" {order_dir.upper()}"
+        sql += f" LIMIT {int(limit)} OFFSET {int(offset)}"
+        rows = c.execute(sql).fetchall()
+        cols = [d[0] for d in (c.execute(sql).description or [])]
+        return {
+            "table": table,
+            "total": total,
+            "limit": int(limit),
+            "offset": int(offset),
+            "columns": cols,
+            "rows": [dict(r) for r in rows],
+        }
+    finally:
+        c.close()
+
+
+@app.get("/api/workspace/projects/{slug}/threads")
+async def api_workspace_threads(slug: str, include_archived: bool = False):
+    """Alle Chat-Threads, die einem Projekt zugeordnet sind."""
+    from ..workspace import validate_slug
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    # slug -> project_id
+    c = connect()
+    try:
+        row = c.execute(
+            "SELECT id FROM projects WHERE slug = ?", (slug,)
+        ).fetchone()
+    finally:
+        c.close()
+    if not row:
+        return {"error": f"Projekt '{slug}' nicht in der system.db"}
+
+    return chat_repo.list_threads(
+        include_archived=include_archived,
+        project_id=row["id"],
+        limit=200,
+    )
+
+
+# ---------------------------------------------------------------------------
 # WebSocket: Chat-Agent (Foundry)
 # ---------------------------------------------------------------------------
 

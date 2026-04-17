@@ -65,7 +65,14 @@ WRITE_WHITELIST: set[str] = {
 # Namespace-Praefixe, unter denen der Agent frei schalten und walten darf:
 # CREATE TABLE, CREATE INDEX, DROP TABLE, INSERT, UPDATE, DELETE sind frei.
 # Alle anderen Tabellen sind geschuetzt.
-AGENT_NAMESPACE_PREFIXES: tuple[str, ...] = ("work_", "agent_")
+#
+# Drei Arten:
+#   work_*     — temporaer (Session-Arbeit, Zwischenstaende)
+#   agent_*    — dauerhafte Arbeitsdaten (Reports, Findings, agent_-Memory)
+#   context_*  — Lookup-Tabellen aus context/-Dateien (DCC-Katalog,
+#                KKS-Hierarchie, Hersteller-Aliasse, Materialklassen)
+#                Gedacht fuer "Arbeitsgrundlagen", die bleiben und referenziert werden.
+AGENT_NAMESPACE_PREFIXES: tuple[str, ...] = ("work_", "agent_", "context_")
 
 # Verbotene SQL-Tokens fuer sqlite_query (case-insensitive, ganzes Wort)
 FORBIDDEN_READ_KEYWORDS = {

@@ -1,4 +1,4 @@
-"""Foundry-Agent fuer BEW Doku Projekt.
+"""Disco-Agent (Foundry/GPT-5).
 
 Oeffentliche API:
   - AgentService: Klasse, die einen Foundry-Thread fuehrt und Custom Functions

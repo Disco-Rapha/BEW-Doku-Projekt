@@ -1,3 +1,3 @@
-"""BEW Doku Projekt — lokale PDF-Verarbeitungs-Pipeline."""
+"""Disco — agentisches Desktop-System fuer technische Dokumentation."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

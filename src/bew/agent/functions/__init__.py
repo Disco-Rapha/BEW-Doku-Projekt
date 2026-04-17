@@ -167,3 +167,5 @@ from . import pdf     # noqa: E402,F401 — pdf_extract_text
 from . import notes   # noqa: E402,F401 — project_notes_read, project_notes_append
 from . import imports  # noqa: E402,F401 — xlsx_inspect, import_xlsx_to_table, import_csv_to_table
 from . import skills   # noqa: E402,F401 — list_skills, load_skill
+from . import sources   # noqa: E402,F401 — sources_register, attach_metadata, detect_duplicates
+from . import executor  # noqa: E402,F401 — run_python

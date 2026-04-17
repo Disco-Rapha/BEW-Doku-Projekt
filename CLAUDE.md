@@ -1,117 +1,303 @@
-# CLAUDE.md — Projektkontext für Claude Code
+# CLAUDE.md — Disco: Produktvision, Stand, Konventionen
 
-## Was ist das?
+## Was ist Disco?
 
-Lokales **agentisches Dokumenten-Management-System** für technische Kunden­dokumentationen. Zielgröße: Zehntausende bis Hunderttausende Dokumente pro Kunde. KI-Arbeit läuft über **Azure Document Intelligence** (PDF → Markdown) und **Azure OpenAI** (Indexierung, Klassifikation, Reports); Synchronisation mit SharePoint läuft über **Microsoft Graph API**; **Orchestrierung und Datenhaltung sind lokal** in SQLite. Ein **Claude-API-Agent** im Web-UI steuert Tasks (Dokumente suchen, DB-Abfragen, Sync auslösen).
+**Disco** ist ein agentisches Desktop-System für die Verarbeitung
+technischer Dokumentation in Großprojekten. Es läuft lokal auf dem
+Rechner des Nutzers, mit Anbindung an Sprachmodelle und AI-Services
+aus Microsoft Azure (Sweden Central, DSGVO/EU).
 
-Der Nutzer ist **kein Programmierer**, aber technisch versiert. Er entscheidet Architekturfragen aktiv mit, will aber nicht tief in den Code einsteigen. **Antworten auf Deutsch.** Vor größeren Änderungen am Schema oder an der Modulstruktur: **fragen**, nicht annehmen.
+**Zweck:** Projektmitarbeiter in Großprojekten (Kraftwerke, Industrie-
+anlagen, Infrastruktur) bei der Bewältigung großer Dokumentenmengen
+unterstützen — Zehntausende PDFs, Excels, Zeichnungen aus verschiedenen
+Quellen, die gesichtet, klassifiziert, abgeglichen und in strukturierte
+Ergebnisse überführt werden müssen.
 
-## Aktueller Stand
+**Vorbild:** Claude Cowork (Anthropic), aber gezielt auf den Zweck
+"große Dokumentenmengen aus verschiedenen Quellen managen" zugeschnitten.
 
-- **Schema-Version: v3** (siehe `migrations/`)
-- **Phase 1 (in Arbeit):** SharePoint-Connector mit Metadaten-Snapshot + Delta-Sync. Keine Dateidownloads — nur Metadaten.
-- **Phase 2 (offen):** Dokumenten-Download + Azure Document Intelligence (PDF → Markdown) + Azure OpenAI (Metadaten, Klassifikation).
-- **Phase 3 (offen):** Export-Pipeline zurück nach SharePoint.
+**Nutzer:** Kein Programmierer, aber technisch versiert. Entscheidet
+Architekturfragen aktiv mit, will aber nicht tief in den Code einsteigen.
+**Antworten auf Deutsch.** Vor größeren Änderungen am Schema oder an der
+Modulstruktur: **fragen**, nicht annehmen.
 
-## Architektur (laut `project_direction.md`)
+---
 
-**3-Panel-Web-UI** (à la VS Code):
-- **Links:** Explorer (Projekte → Quellen → Ordner → Dokumente als Baum).
-- **Mitte:** Dokument-Viewer, Task-Ergebnisse, Dashboard.
-- **Rechts:** Chat mit Claude-API-Agent (claude-sonnet-4-6, Tool Use).
+## Wie Disco funktioniert
 
-Der Agent ist **Operator, nicht nur Assistent** — er führt Tasks aus, startet Syncs, fragt DB ab.
+### 1. Projekt erstellen
+
+Ein Disco-Projekt hat einen konkreten Zweck, z. B.:
+- "Aus 3 Datenquellen Dokumente anhand ihres Inhalts klassifizieren
+  und in eine neue Ordnerstruktur überführen"
+- "SOLL/IST-Abgleich der technischen Dokumentation gegen VGB S 831"
+- "Dokumenten-Index aufbauen mit Hersteller-/Typ-Zuordnung"
+
+Das Projekt lebt als Verzeichnis im Workspace (`~/Disco/projects/<slug>/`)
+mit fester Struktur:
+
+```
+<projekt>/
+├── README.md          ← Nutzer pflegt: Projektziel, Kontext
+├── NOTES.md           ← Disco führt fort: chronologisches Logbuch
+├── sources/           ← Quelldokumente (IST-Bestand)
+│   └── _meta/         ← Begleit-Metadaten (Excel/CSV)
+├── context/           ← Arbeitsgrundlagen (Normen, Kataloge)
+│   └── _manifest.md   ← Agent-gepflegte Übersicht
+├── work/              ← Discos freier Arbeitsraum + Skripte
+├── exports/           ← Endprodukte für den Nutzer
+├── data.db            ← Projekt-DB (work_*/agent_*/context_*)
+└── .disco/            ← Discos "Hirn" (memory, plans, sessions)
+```
+
+### 2. Quellen anbinden
+
+Quelldateien werden als Paket in `sources/` abgelegt (manuell oder
+später via SharePoint-Sync). Disco registriert sie in einer **Registry**
+(`agent_sources`): Pfad, SHA-256-Hash, Größe, Status, Begleit-Metadaten.
+Bei jedem neuen Paket erkennt er Delta (neu/geändert/gelöscht) automatisch
+über Hash-Vergleich.
+
+Typische Realität: Generalunternehmer liefert kontinuierlich neue
+Dokumente. Duplikate, Revisionen, Format-Konversionen (DWG→PDF),
+kommentierte Kopien — ein Dokumenten-Chaos über Monate. Disco hält
+Ordnung über die Registry + Relations-Tabelle (`duplicate-of`,
+`replaces`, `derived-from`, etc.).
+
+### 3. Kontext aufbauen
+
+Im `context/`-Ordner liegen Arbeitsgrundlagen — nicht zu bearbeitende
+Dateien, sondern Nachschlagewerke:
+- Dokumentationsstandards (VGB S 831, DIN-Normen)
+- Zielordnerstrukturen (wohin was einsortiert wird)
+- Referenztabellen (DCC-Katalog, KKS-Hierarchie)
+- Richtlinien (Standard-Dokumentensatz)
+
+Disco analysiert, zusammenfasst und indiziert den Kontext automatisch.
+Lookup-Tabellen werden in die Projekt-DB importiert (`context_*`).
+Das Manifest (`context/_manifest.md`) listet alles auf und erklärt,
+wann welche Datei relevant ist.
+
+### 4. LLM-ready machen
+
+Bevor ein LLM über die Daten "reasonen" kann, müssen sie aufbereitet
+werden:
+- Excel → Tabellen in der Projekt-DB
+- PDF → Text extrahieren (pypdf lokal, Azure Document Intelligence
+  für OCR bei Scan-PDFs)
+- Index aufbauen (später: Hybrid-Search mit Embeddings + FTS5)
+- Semantische Suche ermöglichen
+
+### 5. Disco arbeitet
+
+Der Agent (Foundry-Portal-Agent "bew-doku-agent", Modell GPT-5 in
+Sweden Central) hat **echten Schreibzugriff** auf das Projekt:
+- Dateien lesen, schreiben, verschieben
+- DB-Tabellen anlegen, auswerten, joinen
+- **Python-Skripte schreiben und lokal ausführen** (für große Dateien
+  und Bulk-Ops — genau wie Claude Code seinen Bash-Tool nutzt)
+- Excel-Reports mit professioneller Formatierung generieren
+- Erkenntnisse in NOTES und Memory festhalten
+
+Arbeitsweise: **proaktiv, transparent, selbstkritisch.** Disco kündigt
+an was er tut, führt es aus, und meldet das Ergebnis — mit echtem
+Tool-Result als Wahrheitsquelle, keine Halluzination.
+
+### 6. Pipelines (noch nicht implementiert — nächste große Phase)
+
+Pipelines sind für **Heavy-Lifting-Repetitivaufgaben** mit LLMs:
+- Pro Dokument ein LLM-Call (Klassifikation, Zusammenfassung,
+  Daten-Extraktion)
+- Über Tausende Dokumente, über Stunden laufend
+- Disco baut die Pipeline auf, überprüft sie, überwacht den
+  Durchlauf, steuert bei Problemen nach
+
+Architektur: separater Worker-Prozess, Job-Queue, Status-Tracking,
+Resume bei Abbruch. Das "Arbeitstier" (direktes gpt-5-Deployment,
+ohne Agent-Overhead) läuft die Pipeline, Disco (der Agent) koordiniert.
+
+---
+
+## Was bereits gebaut ist (Stand 2026-04-17)
+
+### Infrastruktur
+- [x] **Workspace-Trennung**: Code-Repo (GitHub) ↔ Daten-Workspace (`~/Disco/`)
+- [x] **Foundry-Agent**: Portal-Agent "bew-doku-agent" mit agent_reference,
+      tunebarer System-Prompt, versioniert (aktuell v16)
+- [x] **Projekt-Sandbox**: fs_*/sqlite_*-Tools arbeiten nur innerhalb des
+      aktiven Projekts (contextvars-basiert, echte Mandantentrennung)
+- [x] **Projekt-DB pro Projekt**: `data.db` mit Template-Migrationen
+      (agent_sources, agent_source_metadata, agent_source_relations,
+      agent_source_scans, agent_script_runs)
+- [x] **CLI**: `disco project init/list/show`, `disco agent chat --project`,
+      `disco agent setup/threads` (`bew` als Alias)
+- [x] **Web-UI**: 3-Panel-Layout (Sidebar + Chat + Viewer), Chat mit
+      Markdown/Code/Tabellen-Rendering, Explorer-Tree, DB-Tabellen-Browser,
+      Viewer für MD/CSV/JSON/Excel/PDF
+
+### Agent-Tools (28 Custom Functions + Code Interpreter)
+- [x] **Dateisystem**: fs_list/read/write/mkdir/delete, fs_read_bytes/write_bytes
+- [x] **Datenbank**: sqlite_query (READ-ONLY), sqlite_write (work_*/agent_*/context_* Namespace)
+- [x] **Import**: xlsx_inspect, import_xlsx_to_table, import_csv_to_table
+- [x] **Export**: build_xlsx_from_tables (Multi-Sheet, Header-Style, AutoFilter, Status-Farben)
+- [x] **Sources-Registry**: sources_register (Hash-basierte Delta-Detection),
+      sources_attach_metadata (Begleit-Excel, Option-C-Matching),
+      sources_detect_duplicates (sha256-Gruppen → duplicate-of-Relations)
+- [x] **PDF**: pdf_extract_text (pypdf, Seiten-Range)
+- [x] **Lokale Python-Ausführung**: run_python (file-basiert + inline, Audit-Trail,
+      Env-Filtering, Timeout). Disco schreibt Skripte, führt sie lokal aus, debuggt.
+- [x] **Skills**: list_skills/load_skill (lazy-loaded Playbooks)
+- [x] **Projekt-Gedächtnis**: project_notes_read/append
+- [x] **Domain**: list_projects, get_project_details, search_documents, etc.
+
+### Skills (kuratierte Playbooks)
+- [x] `project-onboarding` — Session-Start-Routine (README + NOTES + memory + context)
+- [x] `sources-onboarding` — Quellen registrieren + Metadaten + Duplikate
+- [x] `context-onboarding` — Kontext-Dateien sichten + Manifest pflegen
+- [x] `excel-reporter` — Multi-Sheet-Excel via build_xlsx_from_tables
+- [x] `python-executor` — Skripte schreiben, ausführen, debuggen
+
+### Erkenntnisse aus der Entwicklung
+
+1. **Code Interpreter-Sandbox ≠ Host-Filesystem.** Der Azure-CI hat
+   keinen Zugriff auf `data/`. Lösung: server-seitige Tools für
+   Import/Export (statt base64-Bridging), run_python für lokale Ausführung.
+
+2. **GPT-5 Output-Limit für Tool-Arguments.** Base64-Strings > ~50 KB
+   werden beim Transfer CI → Tool-Argument abgeschnitten.
+   Lösung: `build_xlsx_from_tables` (Spec → Server baut), kein CI+base64.
+
+3. **MAX_TOOL_ROUNDS.** Skill-getriebene Workflows brauchen 12+ Rounds.
+   Von 12 auf 24 erhöht. Abort-Handling: offene Function-Calls werden
+   mit synthetischem Output geschlossen, damit die Conversation nicht hängt.
+
+4. **Große Dateien (> 1 MB) dürfen NICHT per fs_read in den Chat-Kontext.**
+   Sprengt das Token-Limit. Lösung: run_python für lokales Parsing,
+   Ergebnisse in die DB, nicht in den Chat.
+
+5. **Portal-Agent als Single Source of Truth** für System-Prompt + Tools.
+   Code referenziert per `agent_reference`, Portal-Edits wirken sofort.
+   Versioniert (v1…v16), Rollback möglich.
+
+6. **Skills > freie Improvisation.** GPT-5 arbeitet zuverlässiger wenn
+   ein kuratiertes Playbook den Workflow vorgibt, statt frei zu improvisieren.
+   Trigger-Tabelle im System-Prompt leitet Disco zum richtigen Skill.
+
+7. **Tabellen-Namespace sauber trennen:** work_* (temporär), agent_*
+   (dauerhaft), context_* (Lookup-Tabellen). Keine Schreibzugriffe auf
+   Kern-Tabellen ohne explizite Whitelist.
+
+---
 
 ## Stack
 
 - Python 3.11+, `uv` als Paketmanager
-- **SQLite** (`db/bew.db`) — keine manuellen Schema-Änderungen, nur via Migration
-- **FastAPI + WebSocket** für das Haupt-UI (`src/bew/api/`)
-- **Streamlit** als Fallback-UI (`src/bew/ui/`)
-- **Datasette** als Read-only-DB-Browser auf `localhost:8001`
-- **MSAL** für OAuth2 Device-Flow gegen Microsoft Entra ID
-- **httpx** für Microsoft Graph API
-- **anthropic** Python-SDK für den Agent
+- **SQLite** — system.db (zentral) + data.db (pro Projekt)
+- **FastAPI + WebSocket** für Web-UI (`src/bew/api/`)
+- **Azure OpenAI Responses API** (via Foundry-Projekt-Endpoint + API-Key)
+- **Foundry Agent Service** — Portal-Agent mit agent_reference
+- **openpyxl** — Excel lesen/schreiben
+- **pypdf** — PDF-Text-Extraktion
+- **markdown-it + highlight.js + DOMPurify** — Chat-Rendering (CDN)
+- **SheetJS + pdf.js + PapaParse** — Viewer-Rendering (CDN)
+- **MSAL** — OAuth2 Device-Flow für SharePoint (Phase 1)
+- **httpx** — Microsoft Graph API
 
 ## Modulstruktur
 
 | Pfad | Zweck |
 |------|-------|
-| `src/bew/cli.py` | CLI mit Gruppen `db`, `project`, `source`, `sync`, `auth`, `sp` |
-| `src/bew/db.py` | SQLite-Verbindung und Migrations-Runner |
-| `src/bew/config.py` | Settings aus `.env` via pydantic-settings |
-| `src/bew/projects.py` | CRUD für `projects` |
-| `src/bew/sources.py` | CRUD für `sources` und `source_folders` |
-| `src/bew/sharepoint/auth.py` | `MSALTokenManager` — Device-Flow-Login, Token-Cache |
-| `src/bew/sharepoint/graph.py` | `GraphClient` — thin wrapper um Graph-API |
-| `src/bew/sharepoint/sync.py` | `SharePointSyncer` — Snapshot + Delta, Einstieg `.run()` |
-| `src/bew/sharepoint/import_json.py` | `SharePointJSONImporter` — Fallback aus REST/XML-Exporten |
-| `src/bew/api/main.py` | FastAPI-App, REST-Endpoints, WebSocket-Chat |
-| `src/bew/api/agent.py` | Claude-API-Agent mit Tool Use (6 Tools) |
-| `src/bew/api/static/index.html` | 3-Panel-Frontend (HTML/CSS/JS, kein Framework) |
-| `src/bew/ui/` | Streamlit-Fallback mit Seiten `projects`, `sources`, `documents` |
-| `migrations/001_initial.sql` | documents, processing_events, schema_version |
-| `migrations/002_projects_sources_sharepoint.sql` | projects, sources, source_folders, documents-FKs |
-| `migrations/003_sp_metadata_snapshot.sql` | documents nullable sha256 + SP-Metadaten, document_sp_fields, sp_delta_link |
+| `src/bew/cli.py` | CLI: `disco project/agent/db` (+ `bew` als Alias) |
+| `src/bew/db.py` | SQLite-Verbindung + Migrations-Runner (system.db) |
+| `src/bew/config.py` | Settings: DISCO_WORKSPACE, Foundry, Azure |
+| `src/bew/workspace.py` | Projekt-Lifecycle: init, list, show, seed_sample |
+| `src/bew/agent/core.py` | AgentService: Foundry Responses API + Tool-Loop |
+| `src/bew/agent/context.py` | Projekt-Sandbox via contextvars |
+| `src/bew/agent/system_prompt.md` | Discos Persönlichkeit + Regeln |
+| `src/bew/agent/functions/` | 28 Custom Functions (data, fs, imports, executor, sources, skills, ...) |
+| `src/bew/chat/repo.py` | Thread- + Message-Persistenz |
+| `src/bew/api/main.py` | FastAPI: REST + WebSocket + Workspace-API |
+| `src/bew/api/static/index.html` | Web-UI (Vanilla-JS, 3-Panel) |
+| `skills/` | Kuratierte Playbooks (Markdown) |
+| `migrations/` | System-DB-Migrationen (001–005) |
+| `migrations/project/` | Projekt-DB-Template-Migrationen (001–003) |
+| `scripts/foundry_setup.py` | Portal-Agent-Registrierung (REST + API-Key) |
 
-## Schema (v3, verkürzt)
+## Workspace-Trennung
 
 ```
-projects  (id, name, description, status)
-sources   (id, project_id, name, source_type, config_json, status, last_synced_at, sp_delta_link)
-source_folders (id, source_id, parent_id, sp_item_id, name, sp_path, sp_web_url)
-documents (id, sha256, original_name, size_bytes, mime_type, status,
-           sp_modified_at, sp_created_at, sp_modified_by, sp_created_by,
-           sp_web_url, sp_quick_xor_hash, sp_content_type, sp_list_item_id,
-           selected_for_indexing,
-           project_id, source_id, source_item_id, source_path, markdown_path)
-document_sp_fields (id, document_id, field_name, field_value)
-processing_events  (id, document_id, step, status, tokens_used, duration_ms,
-                    error_message, payload_json)
+~/Claude/BEW Doku Projekt/    ← Code-Repo (GitHub-synced)
+├── src/, skills/, migrations/, scripts/
+
+~/Disco/                       ← Daten-Workspace (NIEMALS in Git)
+├── system.db                  ← zentrale DB (Threads, Projekte)
+├── logs/
+└── projects/
+    ├── ibl-lagerhalle/        ← ein Projekt (1764 Dateien)
+    ├── vattenfall-reuter/
+    └── ...
 ```
 
-Dokument-Lebenszyklus (`documents.status`):
-`discovered` → (Download) → `downloaded` → (Azure) → `indexed` | `needs_reindex` | `deleted` | `failed`.
+Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
 
 ## Konventionen
 
-1. **Secrets niemals committen.** Alles Sensible in `.env` (gitignored). `.env.example` bleibt aktuell.
-2. **Schema-Änderungen nur über neue Migrationen** `migrations/NNN_name.sql`. Bestehende Migrationen sind immutable.
-3. **Daten liegen als Dateien, DB hält Pfade** (PDFs in `data/raw/`, Markdown in `data/markdown/`).
-4. **Kundendaten niemals in Git.** `Sharepoint Download/` und Token-Caches sind gitignored.
-5. **Pipeline-Schritte idempotent** — bei 10k+ Dokumenten und Graph-/Azure-Rate-Limits essenziell.
-6. **Nachvollziehbarkeit.** Jeder Azure-Aufruf wird in `processing_events` geloggt.
-7. **Einstiegspunkt Sync:** `SharePointSyncer.run()` wählt Snapshot (erster Lauf) oder Delta (folgende) automatisch.
-8. **Vor neuen Features fragen:** in welche Phase gehört das — oder ist es Fundament?
+1. **Secrets niemals committen.** `.env` ist gitignored.
+2. **Schema-Änderungen nur über Migrationen** — system.db: `migrations/NNN_*.sql`,
+   Projekt-DB: `migrations/project/NNN_*.sql`. Bestehende sind immutable.
+3. **Kundendaten niemals in Git.** Alles unter `~/Disco/` bleibt lokal.
+4. **Idempotenz.** Tools, Scans, Imports müssen bei Wiederholung dasselbe
+   Ergebnis liefern.
+5. **Nachvollziehbarkeit.** Jeder Scan → `agent_source_scans`, jedes
+   Skript → `agent_script_runs`, jeder Chat → `chat_messages`.
+6. **Vor neuen Features fragen:** in welche Phase gehört das?
 
 ## Häufige Kommandos
 
 ```bash
-uv sync                                    # Abhängigkeiten installieren/aktualisieren
-uv run bew db init                         # DB anlegen / Migrationen anwenden
-uv run bew db status                       # Schema-Version + Tabellen
+uv sync                                        # Dependencies
+disco project list                             # Alle Projekte
+disco project init <slug> --name "..." [--sample]  # Neues Projekt
+disco project show <slug>                      # Details
+disco agent chat --project <slug>              # CLI-Chat im Sandbox
+disco agent setup                              # Portal-Agent-Version pushen
+disco agent threads                            # Alle Threads
+disco db init                                  # System-DB-Migrationen
+disco db status                                # Schema-Version
 
-uv run bew project list                    # Alle aktiven Projekte
-uv run bew project create --name "…"       # Neues Projekt
-uv run bew source add --project N --name "…" --site-url https://… --library "…"
-uv run bew source list --project N
-uv run bew source show --id N
-uv run bew sync run --source N             # Smart Sync (snapshot oder delta)
-
-uv run bew auth login                      # Microsoft 365 Device-Flow
-uv run bew auth status
-
-uv run bew sp import-json --source N <datei>   # Fallback aus XML/JSON-Export
-
-bash scripts/run-datasette.sh              # Datasette auf localhost:8001
-uv run streamlit run src/bew/ui/app.py     # Streamlit-UI (Fallback)
-# Haupt-UI: uv run bew-server               (FastAPI — nach Fertigstellung)
+# Server (eigenes Terminal, --reload für Live-Updates):
+uv run uvicorn bew.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+## Was als Nächstes kommt
+
+### Pipelines (Phase 2c — nächste große Phase)
+- Job-Queue + Worker-Prozess für Bulk-LLM-Operationen
+- Job-Typen: `llm_classify`, `markdown_extract`, `embedding_index`
+- Disco triggert + überwacht, das "Arbeitstier" (direktes gpt-5-Deployment) arbeitet
+- Status-Tracking, Resume bei Abbruch, parallele Jobs
+
+### Hybrid-Search (Phase 2c)
+- Ein Suchdienst pro Projekt über alle Dateien (sources + context)
+- Sparse (FTS5 / BM25) + Dense (Azure OpenAI Embeddings)
+- Chunk-basiert (~500-800 Tokens), mit Metadaten (Pfad, Seite, Kind)
+- `.disco/search-index/chunks.db`
+
+### Frontend-Polish
+- Viewer: Editor-Modus für Tabellen (Filter, Sort, Edit)
+- Settings-Pane (Modell, Foundry-Endpoint)
+- Drag&Drop Files in Explorer
+- Excel-Download direkt aus dem Chat
+
+### Weitere Skills
+- `dokument-klassifikator` — DCC-/Gewerks-Klassifikation
+- `sql-analyst` — Ad-hoc-SQL-Analysen mit Visualisierung
+- `soll-ist-abgleich` — SOLL/IST-Vergleich gegen IBL
 
 ## Was NICHT tun
 
-- Keine Azure-/Graph-Calls ohne Logging in `processing_events`.
-- Keine Tabellen ohne Migration anlegen.
-- Kein `git add -A` bei Unsicherheit — die `.gitignore` ist wichtig, aber besser einzeln stagen.
-- Kein Wechsel auf Postgres ohne Architektur-Gespräch mit dem Nutzer.
-- Keine Commits, die `data/`, `Sharepoint Download/`, `.env` oder Token-Caches enthalten.
+- Keine Kundendaten ins Repo committen.
+- Keine Tabellen ohne Namespace-Prefix (work_*/agent_*/context_*).
+- Kein `git add -A` — die `.gitignore` ist wichtig, aber einzeln stagen ist sicherer.
+- Kein Wechsel auf Postgres ohne Architektur-Gespräch.
+- Keine Azure-/Graph-Calls ohne Logging.

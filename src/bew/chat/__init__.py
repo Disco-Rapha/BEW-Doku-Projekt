@@ -1,6 +1,6 @@
 """Chat-Persistenz für den Foundry-Agent.
 
-Threads und Messages werden lokal in bew.db gespiegelt
+Threads und Messages werden lokal in der system.db gespiegelt
 (Migration 004). Foundry hält die Conversation-History zusätzlich
 serverseitig — der lokale Mirror dient für UI-Rendering, Datasette-
 Inspektion und Offline-Analyse.
