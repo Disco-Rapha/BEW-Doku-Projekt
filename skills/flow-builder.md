@@ -18,6 +18,30 @@ Flow zu entwickeln: vom Zweck-Gespräch bis zum überwachten Full-Run
 **Wann NICHT Flow:** einzelne Analysen, einmalige Berechnungen,
 schnelle Checks — dafür reichen `run_python` oder direkte SQL.
 
+## Eiserne Regeln (nicht verhandelbar)
+
+1. **`runner.py` MUSS den echten Arbeitscode enthalten** — keinen
+   Template-Stub mit `TODO`-Kommentaren. Wer den Flow baut, baut ihn
+   fertig, oder baut ihn gar nicht.
+2. **Mini-Lauf und Voll-Lauf starten IMMER ueber `flow_run(...)`**, nie
+   ueber `run_python`. `run_python` ist fuer Einmalanalysen, nicht fuer
+   Flow-Items. Sonst hast Du keinen Eintrag in `agent_flow_runs`, kein
+   Fortschritt, keine Pause/Resume, keine Kostentrackung — also nichts
+   von dem, was der Flow leisten soll.
+3. **Keine halluzinierten Imports.** SDK-Calls (Azure DI, Azure OpenAI)
+   gehen ueber die offiziellen Pakete — Signaturen stehen im Skill
+   `sdk-reference` (lade ihn **vor** dem ersten DI-/LLM-Call).
+4. **Credentials ueber `from bew.config import settings`** oder
+   `os.getenv(...)` — der `runner_host` laedt `.env` beim Start, also
+   funktionieren beide. Bevorzugt `settings` (typisiert).
+5. **Nach JEDEM LLM-Call Kosten buchen.** Eine Zeile, ohne Ausnahme:
+   `run.add_cost_from_azure_response(response)`. Ohne diese Zeile bleibt
+   `total_cost_eur = 0` und das UAT-Budget-Monitoring ist blind
+   (UAT-Bug #10 — zweimal gefixt, jetzt SDK-seitig geloest).
+6. **INSERTs in `agent_*`-Tabellen ueber `run.db.insert_row(table, dict)`**,
+   nicht mit handgezaehlten `?`-Tupeln. Sonst reproduzierst Du den
+   `17 values for 18 columns`-Klassiker aus UAT-Bug #6.
+
 ## Die fünf Phasen
 
 | Phase | Wer treibt | Was passiert |
@@ -93,22 +117,49 @@ fs_read({"path": "flows/<name>/runner.py"})
 fs_write({"path": "flows/<name>/runner.py", "content": "..."})
 ```
 
+**Wichtig — vor dem ersten SDK-Call:** Wenn der Flow Azure DI oder
+Azure OpenAI aufruft, lade **jetzt** den Skill `sdk-reference`. Die
+korrekten Signaturen stehen dort — aus dem Kopf zu tippen fuehrt
+zu Halluzinationen (`bew.services.*`-Imports, falsche Parameter
+wie `content=data` statt `body=data`, erfundene Methoden wie
+`begin_analyze_document_from_stream`).
+
 **Tipps für den Runner:**
+- Der Runner.py **enthaelt echten Code**. Kein `# TODO: DI-Call hier
+  einfuegen`-Stub. Was im Gespraech besprochen wurde, kommt in den
+  Runner rein, komplett. Wenn Teile unklar sind: Skill `sdk-reference`
+  lesen, **dann** fertig schreiben.
 - Input-Query ist flow-spezifisch — wenn der Nutzer eine Queue-Logik
   will (z. B. Spalte `flow_trigger_dcc`), baue die direkt ins SQL.
 - Für LLM-Calls: nutze `response_format=json_schema` — dann entfällt
-  eigenes JSON-Parsing.
-- Pro Item: `run.add_cost(eur=..., tokens_in=..., tokens_out=...)`
-  aufrufen, damit Budget-Limit greift.
+  eigenes JSON-Parsing (Details im Skill `sdk-reference`).
+- **Kosten-Tracking ist Pflicht** — nach jedem LLM-Call:
+  ```python
+  tokens_in, tokens_out, eur = run.add_cost_from_azure_response(response)
+  ```
+  Der Helper extrahiert usage, berechnet EUR aus `MODEL_PRICING_USD_PER_MTOK`
+  und ruft intern `run.add_cost(...)`. Fuer nicht-Azure-APIs bleibt
+  `run.add_cost(eur=..., tokens_in=..., tokens_out=...)` direkt.
+- **DB-Writes ueber `run.db.insert_row(table, dict)`** mit `on_conflict="update:..."`
+  fuer Upserts — Details und Parameter-Varianten im Skill `sdk-reference`.
 - Bei Datei-Operationen: `run.read_file(rel_path)` bleibt im Projekt.
+- Credentials: `from bew.config import settings` (bevorzugt) oder
+  `os.getenv(...)` — beides geht, `runner_host` laedt `.env` fuer Dich.
 
 ## Phase 3 — Test-Run
 
-**Immer** mit kleiner Stichprobe beginnen:
+**Immer** mit kleiner Stichprobe beginnen. Und **immer** ueber
+`flow_run`, nie ueber `run_python`:
 
 ```text
 flow_run(flow_name='<name>', title='Test-Run 5 Items', config={'limit': 5, 'budget_eur': 2})
 ```
+
+**Warum nicht `run_python`?** Weil `run_python` am Flow-System vorbei
+laeuft: kein Eintrag in `agent_flow_runs`, kein Fortschritt sichtbar,
+keine Pause/Resume moeglich, keine Idempotenz. Wenn Du parallel zum
+"echten" Flow mit `run_python` dieselbe Arbeit machst, baust Du eine
+Flow-Huelle — kein Flow. **Genau das ist UAT-Bug #1.**
 
 Dann warten (1-2 Sekunden), Status prüfen:
 

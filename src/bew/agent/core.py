@@ -1,27 +1,27 @@
 """AgentService — der Haupt-Agent auf Basis der Azure OpenAI Responses API.
 
-Architektur (Phase 2a):
+Architektur (Migration 006+):
 
     User-Message                                Foundry (Sweden Central)
        |                                                 |
        v                                                 v
-    AgentService.run_turn(thread_id, text)
+    AgentService.run_turn(project_slug, text)
        |
-       |  1. AIProjectClient (azure-ai-projects)
-       |     -> get_openai_client() liefert authentifizierten OpenAI-Client
+       |  1. AIProjectClient / OpenAI-Client
+       |     -> authentifiziert gegen Foundry-Projekt-Endpoint
        |
        |  2. responses.create(stream=True,
        |        model=<deployment>,
        |        input=<user_text_oder_tool_outputs>,
        |        instructions=<system_prompt>,
-       |        tools=[code_interpreter, file_search, *custom_functions],
-       |        previous_response_id=<letzte_id_oder_None>)
+       |        tools=[code_interpreter, *custom_functions],
+       |        previous_response_id=<aus project_chat_state oder None>)
        |
        |  3. Event-Loop:
        |        - text.delta         -> yield text-Chunk
        |        - function_call.done -> via `dispatch(...)` ausfuehren
        |        - code_interpreter.* -> yield status
-       |        - response.completed -> previous_response_id merken, pruefen
+       |        - response.completed -> foundry_response_id merken, pruefen
        |                                ob Tool-Calls anstehen
        |
        |  4. Wenn Tool-Calls anstehen: neue Runde mit
@@ -30,19 +30,21 @@ Architektur (Phase 2a):
        v
     yields typed events an die UI-Schicht
 
-Persistenz:
-  - BEW-thread_id -> Foundry-Conversation wird via
-    `chat_threads.foundry_thread_id` gespeichert (erste Response erzeugt die
-    Conversation-ID).
-  - Jede User-/Assistant-/Tool-Nachricht wird zusaetzlich lokal in
-    `chat_messages` gespiegelt.
+Persistenz (1-Chat-pro-Projekt, Migration 006):
+  - `project_chat_state` haelt pro Projekt-Slug den letzten
+    `foundry_response_id` (wird bei jeder fertigen Response aktualisiert)
+    + eine Token-Schaetzung fuer die Kompressions-Warnung.
+  - `chat_messages` spiegelt alle User-/Assistant-/Tool-Nachrichten
+    lokal (mit `project_slug` als Foreign Key, nicht mehr `thread_id`).
+    Bei Kompression werden Messages mit `is_compacted=1` markiert, nicht
+    geloescht (Audit-Trail bleibt in der DB).
 
 Wichtige Abgrenzung:
   - Der AgentService kennt keine WebSockets, kein FastAPI. Er ist reine
     Bibliothek. Die WebSocket-Schicht (`src/bew/api/main.py`) konsumiert
     die Events und streamt sie als JSON an den Browser.
-  - Synchron implementiert; FastAPI kann sync-Generatoren via
-    `anyio.to_thread.run_sync` konsumieren.
+  - Synchron implementiert; FastAPI kann sync-Generatoren via Worker-Thread
+    + asyncio.Queue konsumieren.
 """
 
 from __future__ import annotations
@@ -147,6 +149,7 @@ class DoneEvent(AgentEvent):
     response_id: str | None = None
     tokens_input: int | None = None
     tokens_output: int | None = None
+    total_token_estimate: int | None = None  # aktueller Chat-Fill nach diesem Turn
     type: str = "done"
 
 
@@ -160,7 +163,7 @@ class AgentService:
 
     Nutzung:
         svc = AgentService()
-        for event in svc.run_turn(thread_id=17, user_text="Hi"):
+        for event in svc.run_turn(project_slug="ibl-lagerhalle", user_text="Hi"):
             ... # event: AgentEvent
     """
 
@@ -323,93 +326,154 @@ class AgentService:
 
     def run_turn(
         self,
-        thread_id: int,
+        project_slug: str,
         user_text: str,
         file_search_vector_store_ids: list[str] | None = None,
+        _system_trigger: dict[str, Any] | None = None,
     ) -> Iterator[AgentEvent]:
         """Fuehrt einen kompletten Turn aus (User-Nachricht -> Assistant-Antwort).
 
+        Ein Chat ist an ein Projekt gebunden (`project_slug`). Der
+        letzte `foundry_response_id` wird in `project_chat_state`
+        gehalten und als `previous_response_id` im naechsten Turn
+        wiederverwendet — so entsteht die Conversation-Kette bei
+        Foundry.
+
         Spiegelt User- und Assistant-Nachrichten in `chat_messages`.
         Yield'et typisierte Events fuer die UI.
+
+        `_system_trigger` ist Teil der internen API fuer
+        `run_system_turn()` — typische Caller setzen es NICHT. Wenn
+        es gesetzt ist, erwartet run_turn ein Dict mit Keys:
+
+            {"kind": "heartbeat"|"first_item"|..., "summary": "kurz fuer UI",
+             "is_system": True}
+
+        In diesem Fall wird die Message mit role='system' persistiert
+        (statt 'user'), der Developer-Context-Block erhaelt einen
+        SYSTEM-TRIGGER-Hinweis, und der ContextVar
+        `is_system_triggered()` steht fuer die Dauer des Turns auf
+        True (wird von `flow_run` zum Ablehnen genutzt).
         """
+        if not project_slug or not project_slug.strip():
+            yield ErrorEvent(
+                message="Kein aktives Projekt. Jeder Chat braucht einen project_slug."
+            )
+            return
+        project_slug = project_slug.strip()
+
         try:
             self._ensure_clients()
         except Exception as exc:
             yield ErrorEvent(message=str(exc))
             return
 
-        # User-Message persistieren
-        thread = chat_repo.get_thread(thread_id)
-        chat_repo.append_message(thread_id, role="user", content=user_text)
+        # State holen (legt bei Bedarf an) + Eingangs-Message persistieren.
+        # Bei System-Trigger speichern wir eine role='system'-Message mit
+        # der kurzen Zusammenfassung (summary), nicht den vollen
+        # Trigger-Kontext. Die volle Trigger-Info geht als user_text
+        # direkt in den Foundry-Call, damit das Modell sie sieht.
+        state = chat_repo.get_or_create_state(project_slug)
+        if _system_trigger:
+            chat_repo.append_message(
+                project_slug,
+                role="system",
+                content=_system_trigger.get("summary") or "[System-Trigger]",
+            )
+        else:
+            chat_repo.append_message(project_slug, role="user", content=user_text)
 
-        # Projekt-Kontext bestimmen: wenn der Thread einer project_id
-        # zugeordnet ist, holen wir den slug und aktivieren den
-        # Sandbox-Modus fuer alle Tool-Aufrufe in diesem Turn.
-        project_slug: str | None = None
-        if thread.get("project_id"):
-            from ..db import connect as system_connect
-            sysconn = system_connect()
-            try:
-                row = sysconn.execute(
-                    "SELECT slug FROM projects WHERE id = ?",
-                    (thread["project_id"],),
-                ).fetchone()
-                if row and row["slug"]:
-                    project_slug = row["slug"]
-            finally:
-                sysconn.close()
-            if project_slug:
-                logger.info(
-                    "run_turn thread=%s project_slug=%s (Sandbox aktiv)",
-                    thread_id, project_slug,
-                )
+        logger.info(
+            "run_turn project=%s prev_response_id=%s token_estimate=%d%s (Sandbox aktiv)",
+            project_slug,
+            state.get("foundry_response_id") or "-",
+            state.get("token_estimate") or 0,
+            " [SYSTEM-TRIGGER]" if _system_trigger else "",
+        )
 
         # Projekt-Kontext aktivieren — gilt fuer alle Tool-Aufrufe in
-        # diesem Turn (fs_*, sqlite_*). Reset im finally am Ende von
-        # run_turn (siehe unten).
-        from .context import _current_project
+        # diesem Turn (fs_*, sqlite_*, memory_*). Reset im finally am Ende.
+        from .context import _current_project, _is_system_triggered
         _ctx_token = _current_project.set(project_slug)
+        _sys_token = _is_system_triggered.set(bool(_system_trigger))
 
-        previous_response_id: str | None = thread.get("foundry_thread_id")
-        # Bei uns wird foundry_thread_id als previous_response_id der letzten
-        # Assistant-Antwort verwendet. Name "foundry_thread_id" bleibt aus
-        # Schema-Gruenden (Migration 004), auch wenn es technisch eine
-        # response_id aus der Responses API ist.
+        previous_response_id: str | None = state.get("foundry_response_id")
 
-        # Projekt-Kontext als developer-Message prependen (nur wenn Sandbox aktiv).
+        # Projekt-Kontext als developer-Message prependen.
         # Damit weiss Disco in jedem Turn ohne Nachfrage, in welchem Projekt er
         # arbeitet — und er bekommt beruecksichtigt, dass list_projects /
         # get_project_details / search_documents / list_documents in dieser
         # Session NUR das aktive Projekt zeigen.
         current_input: str | list[dict]
-        if project_slug:
-            from ..projects import get_project_by_slug
-            _p_info = get_project_by_slug(project_slug)
-            if _p_info is not None:
-                _ctx_text = (
-                    "[AKTIVES PROJEKT — aus Sandbox-Kontext]\n"
-                    f"slug: {_p_info.get('slug')}\n"
-                    f"id: {_p_info['id']}\n"
-                    f"name: {_p_info['name']}\n"
-                    f"description: {_p_info.get('description') or '—'}\n\n"
-                    "Du arbeitest bereits IN diesem Projekt. fs_*- und "
-                    "sqlite_*-Tools sind auf dessen Verzeichnis bzw. "
-                    "data.db gescoped. "
-                    "Frage den Nutzer NICHT 'in welchem Projekt arbeiten wir' "
-                    "— das ist oben bereits gesetzt. Rufe list_projects "
-                    "NICHT als Start-Check auf (es liefert in der Sandbox "
-                    "ohnehin nur dieses eine Projekt). "
-                    "Andere Projekte existieren fuer Dich in dieser Sitzung "
-                    "nicht."
-                )
+        from ..projects import get_project_by_slug
+        _p_info = get_project_by_slug(project_slug)
+        # Optionaler Zusatz-Block fuer System-Trigger. Disco muss explizit
+        # verstehen, dass er NICHT vom User angesprochen wurde, sondern
+        # vom System wegen eines Flow-Ereignisses. Die Nachricht erklaert
+        # Arbeitsweise + die asymmetrische Auto-Aktions-Regel (cancel/pause
+        # ok, neu starten verboten).
+        trigger_block = ""
+        if _system_trigger:
+            kind = _system_trigger.get("kind", "unknown")
+            trigger_block = (
+                "\n\n[SYSTEM-TRIGGER — kein Nutzer-Input]\n"
+                f"kind: {kind}\n"
+                "Du wurdest vom System aufgeweckt, weil ein Flow-Ereignis "
+                "eingetreten ist. Dein Auftrag:\n"
+                "  1. Trigger-Kontext unten lesen.\n"
+                "  2. Kurz pruefen (NOTES, Skills, flow_status), ob die "
+                "Ergebnisse den Erwartungen entsprechen.\n"
+                "  3. Knapp im Chat mitteilen, was Du gesehen hast — der "
+                "Nutzer liest das asynchron.\n\n"
+                "REGELN fuer den System-Turn:\n"
+                "  - flow_pause und flow_cancel DARFST Du autonom aufrufen, "
+                "wenn Du einen systematischen Fehler siehst (Cost-Protection).\n"
+                "  - flow_run (neuer Run) ist GESPERRT — Kosten erfordern "
+                "menschliche Freigabe. Schreib stattdessen eine Empfehlung "
+                "in den Chat.\n"
+                "  - Halte Dich kurz. Ein System-Turn ist ein Statusbericht, "
+                "kein vollstaendiger Deep-Dive.\n"
+            )
+
+        if _p_info is not None:
+            _ctx_text = (
+                "[AKTIVES PROJEKT — aus Sandbox-Kontext]\n"
+                f"slug: {_p_info.get('slug')}\n"
+                f"id: {_p_info['id']}\n"
+                f"name: {_p_info['name']}\n"
+                f"description: {_p_info.get('description') or '—'}\n\n"
+                "Du arbeitest bereits IN diesem Projekt. fs_*- und "
+                "sqlite_*-Tools sind auf dessen Verzeichnis bzw. "
+                "data.db gescoped. memory_*-Tools schreiben in "
+                ".disco/memory/ dieses Projekts. "
+                "Frage den Nutzer NICHT 'in welchem Projekt arbeiten wir' "
+                "— das ist oben bereits gesetzt. Rufe list_projects "
+                "NICHT als Start-Check auf (es liefert in der Sandbox "
+                "ohnehin nur dieses eine Projekt). "
+                "Andere Projekte existieren fuer Dich in dieser Sitzung "
+                "nicht."
+                + trigger_block
+            )
+            current_input = [
+                {"type": "message", "role": "developer", "content": _ctx_text},
+                {"type": "message", "role": "user", "content": user_text},
+            ]
+        else:
+            # Projekt nur im Workspace, nicht in system.db — trotzdem arbeiten
+            if _system_trigger:
+                # Ohne Projekt-Info-Block muessen wir den Trigger-Block
+                # separat als developer-Message schicken, damit Disco die
+                # System-Trigger-Regeln kennt.
                 current_input = [
-                    {"type": "message", "role": "developer", "content": _ctx_text},
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": trigger_block.strip(),
+                    },
                     {"type": "message", "role": "user", "content": user_text},
                 ]
             else:
                 current_input = user_text
-        else:
-            current_input = user_text
 
         # Zwei Wege:
         #   (A) Portal-Agent per ID: Modell + Prompt + Tools kommen aus dem
@@ -670,10 +734,10 @@ class AgentService:
                         "Turn wurde sauber beendet — Du kannst direkt einen neuen Prompt senden."
             )
 
-        # Assistant-Antwort zusammen persistieren
+        # Assistant-Antwort persistieren
         full_text = "".join(assistant_text_buf)
         chat_repo.append_message(
-            thread_id=thread_id,
+            project_slug=project_slug,
             role="assistant",
             content=full_text if full_text else None,
             tool_calls=recorded_tool_calls or None,
@@ -683,26 +747,84 @@ class AgentService:
         )
         if recorded_tool_results:
             chat_repo.append_message(
-                thread_id=thread_id,
+                project_slug=project_slug,
                 role="tool",
                 tool_results=recorded_tool_results,
             )
 
-        # Foundry-Response-ID im Thread speichern (fuer naechsten Turn)
+        # Foundry-Response-ID im project_chat_state speichern (fuer naechsten Turn)
         if last_response_id:
-            chat_repo.set_foundry_thread_id(thread_id, last_response_id)
+            chat_repo.set_response_id(project_slug, last_response_id)
+
+        # Aktuellen Token-Fill fuer die UI holen (70/90-Warnung)
+        current_state = chat_repo.get_state(project_slug)
+        current_token_estimate = (
+            int(current_state["token_estimate"]) if current_state else None
+        )
 
         yield DoneEvent(
             response_id=last_response_id,
             tokens_input=(last_usage or {}).get("input") if last_usage else None,
             tokens_output=(last_usage or {}).get("output") if last_usage else None,
+            total_token_estimate=current_token_estimate,
         )
 
-        # Projekt-Kontext zuruecksetzen (verhindert Leak in andere Turns)
+        # Projekt-Kontext + System-Trigger-Flag zuruecksetzen
+        # (verhindert Leak in andere Turns)
         try:
             _current_project.reset(_ctx_token)
         except Exception:
             pass
+        try:
+            _is_system_triggered.reset(_sys_token)
+        except Exception:
+            pass
+
+    # -------------------- System-Trigger --------------------
+
+    def run_system_turn(
+        self,
+        project_slug: str,
+        trigger_kind: str,
+        trigger_summary: str,
+        trigger_context: str,
+    ) -> Iterator[AgentEvent]:
+        """Fuehrt einen vom System ausgeloesten Turn aus.
+
+        Wird von `flow_notifications.process_pending_notifications()`
+        gerufen, wenn ein Worker eine Notification in die DB gelegt hat
+        (erstes Item fertig, Heartbeat, Run beendet, ...).
+
+        Unterschiede zu run_turn:
+          - Input-Message wird als role='system' persistiert (die UI kann
+            sie als Trigger-Bubble rendern, nicht als User-Nachricht).
+          - Developer-Context erklaert die System-Trigger-Regeln (asym-
+            metrische Auto-Aktion).
+          - Der ContextVar `is_system_triggered()` steht auf True, damit
+            `flow_run` autonome Neustarts verweigern kann.
+
+        Parameter
+        ---------
+        trigger_kind : str
+            first_item | second_item | half | heartbeat | status_change |
+            done | failed
+        trigger_summary : str
+            Kurz (eine Zeile), wird im Chat als role='system'-Message
+            persistiert. Beispiel: "Heartbeat Run #5 — 3/100 fertig nach 1 min".
+        trigger_context : str
+            Voller Trigger-Text mit Run-Stand, letzten Items, Logs,
+            Flow-README-Excerpt, urspruenglicher Erwartung. Wird als
+            user_text an Foundry geschickt (aber nicht persistiert).
+        """
+        yield from self.run_turn(
+            project_slug=project_slug,
+            user_text=trigger_context,
+            _system_trigger={
+                "kind": trigger_kind,
+                "summary": trigger_summary,
+                "is_system": True,
+            },
+        )
 
 
 # Modul-weites Singleton — leichter Wiederverwendungsfall aus FastAPI

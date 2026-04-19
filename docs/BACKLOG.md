@@ -566,6 +566,22 @@ können welche Engine pro Datei oder global genutzt wird.
 - Kosten-Transparenz: pro Engine die geschätzten Kosten anzeigen
 - docling mit GPU/MPS testen für weitere Beschleunigung
 
+**ToDo — Docling produktiv verfuegbar machen** (aus UAT-Session 2026-04-19):
+- Dependency ist bereits in `pyproject.toml` (`docling>=2.90.0`), aber
+  **kein Produkt-Pfad nutzt sie aktuell** — nur ad-hoc Benchmark-Skripte
+  im `ibl-lagerhalle`-Projekt.
+- **Option A (Tool):** neue Custom Function
+  `markdown_extract_docling(pdf_path, engine_options)` in
+  `src/bew/agent/functions/` — nutzt lokales docling, schreibt Markdown
+  zurueck oder in Tabelle.
+- **Option B (Skill/Flow):** Skill `markdown-extractor` mit Engine-Auswahl
+  + generischer Flow `markdown-extract` der pro Item die gewaehlte Engine
+  aufruft (docling/di-standard/di-highres/pypdf).
+- Im UAT-Projekt `uat-2026-04-19` hat der User Flow 1 mit DI-HighRes gewaehlt
+  (DI ist der erprobte Pfad), aber Docling soll als **gleichwertige Option**
+  zur Verfuegung stehen — bewusste Entscheidung pro Projekt/Lauf.
+- Nicht bloss installieren — auch **aufrufbar** vom Agent/Flow aus.
+
 ### High-Resolution-Modus für DI (Teil der Engine-Auswahl oben)
 
 Azure Document Intelligence unterstützt verschiedene Qualitätsstufen.
@@ -664,4 +680,60 @@ echten sensiblen Quellen notwendig.
 
 ---
 
-*Letzte Aktualisierung: 2026-04-17*
+## Flows / Worker-System
+
+### Flow-Stoppen-Button im Frontend — UMGESETZT 2026-04-19 (spaet) als Run-Streifen
+
+**Geloest** durch persistenten Run-Streifen unter dem Chat-Header
+(`#run-strip` in `index.html`, neuer Endpoint `/api/workspace/active-runs`):
+
+- Streifen zeigt projekt-uebergreifend alle Runs in Status `running`/`paused`,
+  Polling 3 s.
+- Pro Run eine Zeile: Status-Punkt, #ID, Flow-Name, Projekt-Tag, Progress-Bar,
+  done/total, ⏱ Laufzeit, 💶 Kosten (mit Budget-Anzeige + over-budget-Highlight),
+  `[⏸ Pause]` und `[✕ Cancel]`.
+- Cancel zeigt Bestaetigungs-Modal („Done-Items bleiben"). Force-Variante
+  bewusst NICHT im Streifen — nur ueber Run-Detail-Panel zugaenglich.
+- Bei Status-Wechsel zu `done`/`failed`/`cancelled` → Toast unten rechts
+  mit Final-Stats und Direkt-Link „Details oeffnen".
+- Klick auf #ID oder „Details oeffnen" wechselt Projekt (falls noetig)
+  und oeffnet den Run im Viewer.
+
+Optionaler Folge-Slot (sobald Bedarf):
+- WebSocket-Push statt Polling (heute 1 GET/3 s, fuer 1-3 parallele
+  Runs voellig unkritisch).
+- Resume-Button mit echter Funktion (heute zeigt der Button bei pause
+  einen Hinweis, manueller Resume ueber „Neuen Run starten" + Idempotenz).
+
+### Parallele Flow-Runs (Priorität: mittel — aus UAT 2026-04-19)
+
+Aktuell faehrt Disco Flows strikt sequentiell: er startet einen Flow,
+wartet bis er durch ist, dann den naechsten. Bei einem Projekt mit
+mehreren unabhaengigen Pipelines (z.B. DCC-Klassifikation + Metadaten-
+Extraktion + Excel-Export) wuerde paralleles Laufen die Wartezeit
+spuerbar verkuerzen — v.a. weil die LLM-Flows je Dokument die meiste
+Zeit auf Azure warten (I/O-bound).
+
+Anforderung aus UAT-Session 2026-04-19:
+> "merke dir noch, dass es die moeglichkeit geben soll mehrere flows
+> gleichzeitig laufen zu lassen"
+
+Offene Designpunkte:
+- **Scope:** darf ein einzelner Flow parallel zu sich selbst laufen
+  (2 Runs desselben Flows)? Oder nur unterschiedliche Flows?
+- **Isolation:** jeder Flow hat eigenen Worker-Prozess — SQLite-Writes
+  muessen WAL-Mode-tolerant sein (sollte bereits der Fall sein, pruefen).
+- **UI:** Flow-Panel muss mehrere laufende Runs gleichzeitig anzeigen.
+  Aktuell ist unklar, ob die Flow-Ansicht das rendert.
+- **Budget-Tracking:** globales Kosten-Budget vs. per-Run?
+- **Abhaengigkeiten:** darf ich Flow-B starten bevor Flow-A done ist,
+  wenn Flow-B auf Daten von Flow-A liest? Vermutlich ja (der User weiss
+  was er tut), aber Warnhinweis im Chat waere nett.
+
+Test-Szenario: in `uat-2026-04-19` DCC-Klassifikation und Metadaten-
+Extraktion gleichzeitig anwerfen — beide lesen aus `agent_md_extracts`,
+schreiben in unterschiedliche Tabellen, keine Kollision.
+
+---
+
+*Letzte Aktualisierung: 2026-04-19*

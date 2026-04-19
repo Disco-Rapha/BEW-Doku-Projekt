@@ -1,33 +1,35 @@
-"""Chat-Persistenz für den Foundry-Agent.
+"""Chat-Persistenz fuer den Foundry-Agent.
 
-Threads und Messages werden lokal in der system.db gespiegelt
-(Migration 004). Foundry hält die Conversation-History zusätzlich
-serverseitig — der lokale Mirror dient für UI-Rendering, Datasette-
-Inspektion und Offline-Analyse.
+Ein Projekt = ein persistenter Chat. Messages werden in der system.db
+gehalten, bei Kompression via is_compacted=1 als archiviert markiert
+(nicht geloescht). Der letzte Foundry-Response-Handle fuer
+previous_response_id liegt in project_chat_state.
 """
 
 from .repo import (
     append_message,
-    archive_thread,
-    create_thread,
-    delete_thread,
-    get_thread,
-    get_thread_by_foundry_id,
-    list_messages,
-    list_threads,
-    set_foundry_thread_id,
-    update_thread_title,
+    delete_state,
+    get_or_create_state,
+    get_state,
+    last_active_message_id,
+    list_active_messages,
+    list_all_messages,
+    mark_compacted,
+    recompute_token_estimate,
+    set_response_id,
+    update_token_estimate,
 )
 
 __all__ = [
     "append_message",
-    "archive_thread",
-    "create_thread",
-    "delete_thread",
-    "get_thread",
-    "get_thread_by_foundry_id",
-    "list_messages",
-    "list_threads",
-    "set_foundry_thread_id",
-    "update_thread_title",
+    "delete_state",
+    "get_or_create_state",
+    "get_state",
+    "last_active_message_id",
+    "list_active_messages",
+    "list_all_messages",
+    "mark_compacted",
+    "recompute_token_estimate",
+    "set_response_id",
+    "update_token_estimate",
 ]

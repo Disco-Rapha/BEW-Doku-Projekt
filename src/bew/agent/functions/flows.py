@@ -450,6 +450,20 @@ def _flow_run(
     title: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Asymmetric Auto-Action: wenn dieser Turn vom System getriggert wurde
+    # (flow_notifications, nicht User), darf Disco NICHT autonom neue Runs
+    # starten. Cancel/Pause ist ok (Cost-Protection), aber Starts kosten
+    # Geld und muessen vom Menschen freigegeben werden.
+    from ..context import is_system_triggered
+
+    if is_system_triggered():
+        raise ValueError(
+            "flow_run blockiert: Du wurdest vom System getriggert und darfst "
+            "keine neuen Runs starten (Cost-Protection). Wenn Du findest, "
+            "dass ein neuer Run noetig ist, schreib das als Empfehlung — der "
+            "User startet ihn manuell."
+        )
+
     project_root = _active_project_root()
     try:
         run = flow_service.create_run(

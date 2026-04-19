@@ -162,6 +162,209 @@ a:hover { text-decoration: underline; }
   padding: 2px 6px; background: var(--panel2);
   border: 1px solid var(--border); border-radius: 3px;
 }
+#chat-token-counter {
+  font-family: var(--mono); font-size: 11px;
+  padding: 2px 8px; border-radius: 3px;
+  background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: help;
+}
+#chat-token-counter.warn {
+  background: rgba(250,204,21,0.15);
+  border-color: rgba(250,204,21,0.5);
+  color: var(--yellow);
+}
+#chat-token-counter.critical {
+  background: rgba(239,68,68,0.15);
+  border-color: rgba(239,68,68,0.5);
+  color: var(--red);
+  font-weight: 600;
+  animation: pulse-critical 2s infinite;
+}
+@keyframes pulse-critical {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.0); }
+  50%      { box-shadow: 0 0 0 4px rgba(239,68,68,0.25); }
+}
+#btn-compact {
+  font-size: 11px; padding: 3px 10px;
+  background: var(--panel2); border: 1px solid var(--border);
+}
+#btn-compact:hover {
+  background: var(--accent2); border-color: var(--accent2); color: #fff;
+}
+#btn-compact.urgent {
+  background: var(--yellow); border-color: var(--yellow); color: #000;
+}
+#btn-compact.urgent:hover { background: #eab308; border-color: #eab308; }
+
+/* ============= Run-Streifen (aktive Flow-Runs) ============= */
+#run-strip {
+  display: none;   /* JS blendet ein, sobald ein Run aktiv ist */
+  flex-direction: column;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#run-strip.has-runs { display: flex; }
+.run-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 14px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.run-row:last-child { border-bottom: none; }
+.run-row.status-running { background: rgba(74,222,128,0.06); }
+.run-row.status-paused  { background: rgba(250,204,21,0.08); }
+.run-row.status-failed  { background: rgba(239,68,68,0.10); }
+.run-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  flex-shrink: 0;
+}
+.run-row.status-running .run-dot {
+  background: var(--green);
+  animation: run-pulse 2s ease-in-out infinite;
+}
+.run-row.status-paused  .run-dot { background: var(--yellow); }
+.run-row.status-failed  .run-dot { background: var(--red); }
+@keyframes run-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0.0); }
+  50%      { box-shadow: 0 0 0 5px rgba(74,222,128,0.25); }
+}
+.run-id {
+  font-family: var(--mono); color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.run-id:hover { color: var(--accent); text-decoration: underline; }
+.run-flow {
+  color: var(--text-bright); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 220px;
+}
+.run-project {
+  color: var(--text-dim); font-size: 11px;
+  padding: 1px 6px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 3px;
+  white-space: nowrap;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+}
+.run-progress {
+  flex: 1; min-width: 120px;
+  display: flex; align-items: center; gap: 8px;
+}
+.run-bar {
+  flex: 1; height: 4px; border-radius: 2px;
+  background: var(--panel2); overflow: hidden; min-width: 60px;
+}
+.run-bar-fill {
+  height: 100%; background: var(--green);
+  transition: width 0.3s ease;
+}
+.run-row.status-paused .run-bar-fill { background: var(--yellow); }
+.run-row.status-failed .run-bar-fill { background: var(--red); }
+.run-counts {
+  font-family: var(--mono); color: var(--text-dim);
+  white-space: nowrap;
+}
+.run-counts .run-failed { color: var(--red); margin-left: 4px; }
+.run-meta {
+  display: flex; gap: 10px; color: var(--text-dim);
+  white-space: nowrap;
+}
+.run-cost {
+  font-family: var(--mono);
+  color: var(--text);
+}
+.run-cost.over-budget { color: var(--red); font-weight: 600; }
+.run-actions {
+  display: flex; gap: 4px;
+  flex-shrink: 0;
+}
+.run-btn {
+  font-size: 11px; padding: 3px 8px;
+  background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 3px; cursor: pointer;
+  white-space: nowrap;
+}
+.run-btn:hover { background: var(--border); color: var(--text-bright); }
+.run-btn.run-btn-danger:hover {
+  background: var(--red); border-color: var(--red); color: #fff;
+}
+.run-btn:disabled {
+  opacity: 0.4; cursor: not-allowed;
+}
+
+/* ============= Run-Toast ============= */
+#run-toast-container {
+  position: fixed;
+  bottom: 20px; right: 20px;
+  z-index: 9999;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.run-toast {
+  pointer-events: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  border-radius: 4px;
+  padding: 10px 14px;
+  min-width: 280px; max-width: 420px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  animation: toast-in 0.2s ease-out;
+}
+.run-toast.status-failed { border-left-color: var(--red); }
+.run-toast.status-cancelled { border-left-color: var(--text-dim); }
+.run-toast-title {
+  font-weight: 600; color: var(--text-bright);
+  margin-bottom: 3px;
+}
+.run-toast-body { color: var(--text-dim); }
+.run-toast-close {
+  float: right; cursor: pointer; color: var(--text-dim);
+  background: none; border: none; font-size: 14px;
+  padding: 0 0 0 10px;
+}
+.run-toast-close:hover { color: var(--text-bright); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Kompressions-Divider in der Message-Liste */
+.compact-divider {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0; margin: 6px 0;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  color: var(--text-dim); font-size: 11px; font-style: italic;
+  justify-content: center;
+}
+
+/* Modal (Kompression) */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px; padding: 18px 22px;
+  max-width: 520px; width: 90%;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  color: var(--text);
+}
+.modal h3 { margin: 0 0 10px 0; color: var(--text-bright); font-size: 16px; }
+.modal p { margin: 8px 0; line-height: 1.5; }
+.modal .muted { font-size: 11px; }
+.modal-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 14px;
+}
+.modal-actions button { padding: 6px 14px; }
 #chat-messages {
   flex: 1; overflow-y: auto;
   padding: 14px 20px;
@@ -175,6 +378,10 @@ a:hover { text-decoration: underline; }
 .msg.user .sender { color: var(--accent); }
 .msg.agent .sender { color: var(--green); }
 .msg.system .sender { color: var(--text-dim); }
+/* Mehrteilige Disco-Antworten: "DISCO"-Label nur beim ersten Element zeigen.
+   Live-Kommentar-Bubbles zwischen Tool-Blocks bekommen kein redundantes Label. */
+.msg.agent + .msg.agent > .sender,
+.tool-call + .msg.agent > .sender { display: none; }
 .msg .bubble {
   background: var(--panel2);
   border-radius: 6px;
@@ -397,6 +604,89 @@ a:hover { text-decoration: underline; }
   position: sticky; bottom: 0;
 }
 .viewer-pagination button[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+/* ============= Flows ============= */
+.flow-row .meta {
+  min-width: 14px; text-align: center;
+  font-family: var(--mono); font-size: 10px;
+}
+.flow-row.has-running .icon { color: var(--green); }
+.flow-row.has-running .label::after {
+  content: ' ●'; color: var(--green); font-size: 8px; vertical-align: middle;
+}
+.status-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; line-height: 14px;
+}
+.status-pending   { background: rgba(136,136,136,0.25); color: #bbb; }
+.status-running   { background: rgba(37,99,235,0.25);   color: #5b9aff; }
+.status-paused    { background: rgba(250,204,21,0.25);  color: #facc15; }
+.status-done      { background: rgba(74,222,128,0.25);  color: #4ade80; }
+.status-cancelled { background: rgba(136,136,136,0.25); color: #bbb; }
+.status-failed    { background: rgba(239,68,68,0.25);   color: #ef4444; }
+.status-skipped   { background: rgba(250,204,21,0.18);  color: #ca8a04; }
+
+.flow-progress {
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 3px; height: 10px; position: relative; overflow: hidden;
+}
+.flow-progress-bar {
+  height: 100%; background: var(--accent); transition: width 0.3s ease;
+}
+.flow-progress.paused .flow-progress-bar  { background: var(--yellow); }
+.flow-progress.done   .flow-progress-bar  { background: var(--green); }
+.flow-progress.failed .flow-progress-bar  { background: var(--red); }
+
+.flow-stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px; margin: 10px 0;
+}
+.flow-stat {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 4px; padding: 8px 10px;
+}
+.flow-stat .lbl { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
+.flow-stat .val { font-size: 16px; color: var(--text-bright); font-family: var(--mono); }
+
+.flow-section { padding: 0 14px 14px; }
+.flow-section h3 {
+  margin: 14px 0 6px; color: var(--text-bright);
+  font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border); padding-bottom: 4px;
+}
+
+.flow-runs-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.flow-runs-table th, .flow-runs-table td {
+  border-bottom: 1px solid var(--border); padding: 4px 6px;
+  text-align: left; white-space: nowrap;
+}
+.flow-runs-table th { color: var(--text-dim); font-weight: 600; font-size: 10px; text-transform: uppercase; }
+.flow-runs-table tr.clickable { cursor: pointer; }
+.flow-runs-table tr.clickable:hover td { background: var(--panel2); }
+
+.flow-controls {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  margin: 10px 0;
+}
+.flow-logs {
+  background: #0a0a0a; border: 1px solid var(--border); border-radius: 3px;
+  padding: 10px; font-family: var(--mono); font-size: 11px;
+  max-height: 260px; overflow-y: auto; white-space: pre-wrap;
+  color: #ddd;
+}
+
+.flow-items-list {
+  font-family: var(--mono); font-size: 11px; line-height: 1.7;
+}
+.flow-items-list .row {
+  display: grid; grid-template-columns: 40px 80px 1fr auto;
+  gap: 8px; padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.flow-items-list .row:hover { background: var(--panel2); }
+.flow-items-list .row .ref { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-items-list .row .err { color: var(--red); font-size: 10px; }
 </style>
 </head>
 <body>
@@ -423,12 +713,12 @@ a:hover { text-decoration: underline; }
       <div id="db-tables-list" class="tree"></div>
     </div>
 
-    <div class="sb-section scrollable" id="chats-section">
+    <div class="sb-section scrollable" id="flows-section">
       <div class="sb-title sb-toolbar">
-        <span>Chats</span>
-        <button class="icon-btn" title="Neuer Chat" onclick="createNewThread()">+</button>
+        <span>Flows</span>
+        <button class="icon-btn" title="Liste aktualisieren" onclick="loadFlows(state.activeProjectSlug)">↻</button>
       </div>
-      <div id="chat-list"></div>
+      <div id="flows-list"></div>
     </div>
 
     <div class="sb-section">
@@ -451,8 +741,14 @@ a:hover { text-decoration: underline; }
       <button class="icon-btn" title="Sidebar ein-/ausblenden" onclick="toggleSidebar()">☰</button>
       <span id="chat-title">Disco</span>
       <span id="chat-project-tag">(kein Projekt)</span>
+      <span class="spacer" style="flex:1"></span>
+      <span id="chat-token-counter" title="Aktueller Chat-Fuellstand. Warnung bei 70 %, kritisch bei 90 %.">0 / 180k · 0 %</span>
+      <button id="btn-compact" title="Chat komprimieren — wichtige Erkenntnisse in Memory-Bank schreiben, dann Verlauf einklappen" onclick="openCompactModal()">🗜 Komprimieren</button>
       <button class="icon-btn" title="Viewer ein-/ausblenden" onclick="toggleViewer()">▭</button>
     </div>
+
+    <!-- Run-Streifen: zeigt aktive Flow-Runs projekt-uebergreifend. JS fuellt dynamisch. -->
+    <div id="run-strip"></div>
 
     <div id="chat-messages">
       <div class="msg system"><div class="bubble">Verbindung wird hergestellt …</div></div>
@@ -490,6 +786,9 @@ a:hover { text-decoration: underline; }
 </div>
 
 
+<!-- Toast-Container fuer Run-Benachrichtigungen -->
+<div id="run-toast-container"></div>
+
 <!-- ====================== Skripte ====================== -->
 <script>
 'use strict';
@@ -500,12 +799,13 @@ a:hover { text-decoration: underline; }
 const state = {
   projects: [],
   activeProjectSlug: null,
-  threads: [],            // Threads des aktiven Projekts
-  activeThreadId: null,
+  // Chat-State: 1 persistenter Chat pro Projekt (Migration 006)
+  chatState: null,        // {token_estimate, token_budget, percent, warn_level, foundry_response_id, ...}
   ws: null,
-  wsThreadId: null,
+  wsProjectSlug: null,    // Slug, fuer den der aktuelle WS offen ist
   wsReady: false,
   md: null,               // markdown-it Renderer
+  _criticalWarningShown: false,  // damit das Auto-Modal nicht spammt
 };
 
 const _activeToolCalls = {};   // call_id -> {name, el, statusEl, argsEl, resultEl}
@@ -604,22 +904,175 @@ async function switchProject(slug) {
   state.activeProjectSlug = slug;
   localStorage.setItem(LS_KEY_PROJECT, slug);
   document.getElementById('project-select').value = slug;
-  document.getElementById('chat-project-tag').textContent = slug ? `Projekt: ${slug}` : '(kein Projekt)';
 
-  // Chat zumachen, Threads + Tree neu laden
+  // Projektname im Chat-Header
+  const proj = state.projects.find(p => p.slug === slug);
+  document.getElementById('chat-title').textContent = proj ? proj.name : 'Disco';
+  document.getElementById('chat-project-tag').textContent = slug ? slug : '(kein Projekt)';
+
+  // Chat schliessen, warning-state zuruecksetzen
   if (state.ws) { try { state.ws.close(); } catch(e) {} state.ws = null; }
-  state.activeThreadId = null;
-  state.wsThreadId = null;
-  setSystemMessage('Projekt gewechselt zu <strong>' + escHtml(slug) + '</strong>.');
+  state.wsProjectSlug = null;
+  state._criticalWarningShown = false;
 
-  await Promise.all([loadExplorer(slug), loadChats(slug), loadDbTables(slug)]);
+  // Chat-Messages leeren + Platzhalter zeigen
+  const msgs = document.getElementById('chat-messages');
+  msgs.innerHTML = '';
 
-  // Wenn keine Threads: einen neuen anlegen
-  if (state.threads.length === 0) {
-    await createNewThread();
+  // Parallel: Chat-State + Messages + Explorer + DB-Tabellen + Flows laden
+  await Promise.all([
+    loadChatState(slug),
+    loadMessages(slug),
+    loadExplorer(slug),
+    loadDbTables(slug),
+    loadFlows(slug),
+  ]);
+
+  // WebSocket verbinden (ein persistenter Chat pro Projekt)
+  connectWS(slug);
+
+  // Eingabe fokussieren
+  document.getElementById('chat-input').focus();
+}
+
+// =========================================================================
+// Chat-State: Token-Counter + Warn-Badges (Migration 006)
+// =========================================================================
+async function loadChatState(slug) {
+  try {
+    const s = await api(`/api/projects/${encodeURIComponent(slug)}/chat/state`);
+    state.chatState = s;
+    updateTokenCounter(s);
+  } catch (e) {
+    state.chatState = null;
+  }
+}
+
+function updateTokenCounter(s) {
+  const el = document.getElementById('chat-token-counter');
+  const btn = document.getElementById('btn-compact');
+  if (!el) return;
+  if (!s) {
+    el.textContent = '– / 180k · 0 %';
+    el.className = '';
+    btn.classList.remove('urgent');
+    return;
+  }
+  const tok = s.token_estimate || 0;
+  const budget = s.token_budget || 180000;
+  const pct = Math.round((s.percent || 0) * 100);
+  el.textContent = `${_fmtTokens(tok)} / ${_fmtTokens(budget)} · ${pct} %`;
+  el.className = '';
+  btn.classList.remove('urgent');
+  if (s.warn_level === 'warn') {
+    el.classList.add('warn');
+  } else if (s.warn_level === 'critical') {
+    el.classList.add('critical');
+    btn.classList.add('urgent');
+    // Einmalig automatisches Vorschlags-Modal
+    if (!state._criticalWarningShown) {
+      state._criticalWarningShown = true;
+      setTimeout(() => openCompactModal(true), 400);
+    }
   } else {
-    // Neuesten öffnen
-    await openThread(state.threads[0].id);
+    state._criticalWarningShown = false;
+  }
+}
+
+function _fmtTokens(n) {
+  if (n == null) return '0';
+  if (n < 1000) return String(n);
+  if (n < 10000) return (n/1000).toFixed(1).replace('.', ',') + 'k';
+  return Math.round(n/1000) + 'k';
+}
+
+// ----- Compact-Modal -----------------------------------------------------
+function openCompactModal(auto) {
+  // Doppelung vermeiden
+  if (document.getElementById('compact-modal')) return;
+  const s = state.chatState || {};
+  const pct = Math.round((s.percent || 0) * 100);
+  const tok = _fmtTokens(s.token_estimate || 0);
+  const budget = _fmtTokens(s.token_budget || 180000);
+
+  const autoHint = auto
+    ? `<p class="err"><b>Kritischer Fuellstand erreicht (${pct} %).</b>
+        Disco sollte bald komprimieren, sonst drohen Token-Limit-Fehler.</p>`
+    : '';
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'compact-modal';
+  backdrop.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Chat komprimieren</h3>
+      ${autoHint}
+      <p>Aktueller Fuellstand: <b>${tok} / ${budget}</b> (${pct} %).</p>
+      <p>Beim Komprimieren wird Disco gebeten, die wichtigsten Erkenntnisse
+         aus dem bisherigen Verlauf in die Memory-Bank
+         (<code>.disco/memory/</code>) zu schreiben. Anschliessend wird
+         der sichtbare Verlauf eingeklappt — der Agent arbeitet mit
+         frischem Kontext weiter und liest die Memory-Bank neu ein.</p>
+      <p class="muted">Der Verlauf bleibt in der Projekt-DB erhalten
+         (<code>is_compacted = 1</code>), nur der Agent-Kontext wird
+         geleert.</p>
+      <div class="modal-actions">
+        <button onclick="closeCompactModal()">Abbrechen</button>
+        <button class="btn-primary" onclick="runCompaction()">Disco mit Kompression beauftragen</button>
+      </div>
+    </div>`;
+  backdrop.onclick = closeCompactModal;
+  document.body.appendChild(backdrop);
+}
+
+function closeCompactModal() {
+  const el = document.getElementById('compact-modal');
+  if (el) el.remove();
+}
+
+function runCompaction() {
+  // Strategie: Disco bekommt via Chat-Prompt den Auftrag. ER schreibt
+  // Memory-Bank-Updates (memory_write) und ruft am Ende chat_compact_finish
+  // auf. Alternativ: direkter POST /chat/compact (harter Cut ohne Memory-
+  // Update — falls der Nutzer weiss, dass er nichts braucht).
+  closeCompactModal();
+  const prompt = 'Bitte komprimiere jetzt den Chat: Fasse die wichtigsten '
+    + 'Erkenntnisse, offenen Entscheidungen und naechsten Schritte in der '
+    + 'Memory-Bank zusammen (memory_write / memory_append_adr nach Bedarf). '
+    + 'Halte activeContext.md und progress.md aktuell. Danach nur einen '
+    + 'kurzen Bestaetigungstext in den Chat schreiben — der Frontend-Code '
+    + 'erledigt das technische Zuruecksetzen anschliessend.';
+  const input = document.getElementById('chat-input');
+  input.value = prompt;
+  // Hinweis fuer den Nutzer
+  setSystemMessage('Kompressions-Auftrag ist ins Eingabefeld eingesetzt. '
+    + 'Pruefe den Text und druecke Enter (oder klicke Senden) um '
+    + 'Disco zu beauftragen. Nach Disco\'s Bestaetigung den Verlauf '
+    + 'via <button onclick="hardCompact()" style="font-size:11px;padding:2px 8px;">⏹ Harter Cut</button> einklappen.');
+  input.focus();
+}
+
+// Harter Cut OHNE Memory-Update (nur wenn der Nutzer wirklich will)
+async function hardCompact() {
+  if (!state.activeProjectSlug) return;
+  if (!confirm('Wirklich alle aktuellen Messages als komprimiert markieren? '
+    + 'Der Verlauf bleibt in der DB, verschwindet aber aus dem Agent-Kontext. '
+    + 'Dieser Schritt ist nicht automatisch an eine Memory-Update geknuepft '
+    + '— nur durchfuehren wenn Disco bereits alles Wichtige in die Memory-Bank '
+    + 'geschrieben hat.')) return;
+  try {
+    const r = await fetch(
+      `/api/projects/${encodeURIComponent(state.activeProjectSlug)}/chat/compact`,
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})}
+    );
+    const d = await r.json();
+    if (d.error) { alert('Fehler: ' + d.error); return; }
+    setSystemMessage(`Verlauf komprimiert: ${d.marked_compacted} Messages eingeklappt. Neuer Token-Fill ≈ ${_fmtTokens(d.new_token_estimate || 0)}.`);
+    // State + Messages neu laden
+    await loadChatState(state.activeProjectSlug);
+    await loadMessages(state.activeProjectSlug);
+  } catch (e) {
+    alert('Kompression fehlgeschlagen: ' + e.message);
   }
 }
 
@@ -697,84 +1150,20 @@ function humanSize(b) {
 }
 
 // =========================================================================
-// Chat-Liste
+// Messages laden (1 persistenter Chat pro Projekt — Migration 006)
 // =========================================================================
-async function loadChats(slug) {
-  state.threads = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/threads`);
-  renderChatList();
-}
-
-function renderChatList() {
-  const c = document.getElementById('chat-list');
-  if (!state.threads.length) {
-    c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Noch keine Chats. Mit + neuen anlegen.</div>';
-    return;
-  }
-  c.innerHTML = '';
-  for (const t of state.threads) {
-    const row = document.createElement('div');
-    row.className = 'sb-row' + (t.id === state.activeThreadId ? ' active' : '');
-    row.innerHTML = `
-      <span class="icon">💬</span>
-      <span class="label" title="${escAttr(t.title)}">${escHtml(t.title)}</span>
-      <span class="meta" title="löschen" onclick="event.stopPropagation();deleteThread(${t.id})">×</span>
-    `;
-    row.onclick = (e) => { if (!e.target.classList.contains('meta')) openThread(t.id); };
-    c.appendChild(row);
-  }
-}
-
-async function createNewThread() {
-  if (!state.activeProjectSlug) {
-    alert('Kein Projekt aktiv.');
-    return;
-  }
-  // project_id aus state holen
-  const project = state.projects.find(p => p.slug === state.activeProjectSlug);
-  if (!project || !project.db_id) {
-    alert('Projekt hat keine DB-ID. Lege es erst per CLI an: disco project init ' + state.activeProjectSlug);
-    return;
-  }
-  const t = await api('/api/threads', {
-    method: 'POST',
-    body: { title: 'Neuer Chat', project_id: project.db_id }
-  });
-  state.threads.unshift(t);
-  await openThread(t.id);
-}
-
-async function openThread(threadId) {
-  state.activeThreadId = threadId;
-  const t = state.threads.find(x => x.id === threadId);
-  document.getElementById('chat-title').textContent = (t?.title || 'Chat');
-  renderChatList();
-  await loadMessages(threadId);
-  connectWS(threadId);
-  document.getElementById('chat-input').focus();
-}
-
-async function deleteThread(threadId) {
-  if (!confirm('Chat löschen?')) return;
-  await fetch(`/api/threads/${threadId}?hard=true`, {method:'DELETE'});
-  state.threads = state.threads.filter(t => t.id !== threadId);
-  if (state.activeThreadId === threadId) {
-    if (state.threads.length) await openThread(state.threads[0].id);
-    else await createNewThread();
-  } else {
-    renderChatList();
-  }
-}
-
-// =========================================================================
-// Messages laden
-// =========================================================================
-async function loadMessages(threadId) {
+async function loadMessages(slug) {
   const msgs = document.getElementById('chat-messages');
   msgs.innerHTML = '';
+  if (!slug) return;
   try {
-    const items = await api(`/api/threads/${threadId}/messages`);
+    // Nur aktive (nicht-komprimierte) Messages laden. Fuer einen UI-Divider
+    // mit komprimiertem Verlauf koennten wir spaeter include_compacted=1
+    // nehmen.
+    const items = await api(`/api/projects/${encodeURIComponent(slug)}/chat/messages`);
+    if (items.error) throw new Error(items.error);
     if (!items.length) {
-      setSystemMessage('Neuer Chat. Wie kann Disco helfen?');
+      setSystemMessage('Neuer Projekt-Chat. Wie kann Disco helfen?');
       return;
     }
     for (const m of items) {
@@ -790,7 +1179,7 @@ async function loadMessages(threadId) {
       }
     }
   } catch (e) {
-    setSystemMessage('Fehler beim Laden des Chat-Verlaufs.');
+    setSystemMessage('Fehler beim Laden des Chat-Verlaufs: ' + escHtml(e.message));
   }
 }
 
@@ -804,27 +1193,29 @@ function findHistoricResult(allMessages, callId) {
 }
 
 // =========================================================================
-// WebSocket
+// WebSocket (1 persistenter Chat pro Projekt)
 // =========================================================================
-function connectWS(threadId) {
-  if (state.ws && state.wsThreadId !== threadId) {
+function connectWS(slug) {
+  if (!slug) return;
+  if (state.ws && state.wsProjectSlug !== slug) {
     try { state.ws.close(); } catch(e) {}
     state.ws = null;
   }
-  if (state.ws && state.wsThreadId === threadId) return;
+  if (state.ws && state.wsProjectSlug === slug) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${location.host}/ws/chat?thread_id=${threadId}`);
+  const ws = new WebSocket(`${proto}//${location.host}/ws/chat?project=${encodeURIComponent(slug)}`);
   state.ws = ws;
-  state.wsThreadId = threadId;
+  state.wsProjectSlug = slug;
   state.wsReady = false;
 
   ws.onopen  = () => { state.wsReady = true; setStatus('Verbunden'); };
   ws.onclose = () => {
     state.wsReady = false;
-    if (state.wsThreadId === threadId && state.activeThreadId === threadId) {
+    // Nur auto-reconnecten wenn das Projekt noch das aktive ist
+    if (state.wsProjectSlug === slug && state.activeProjectSlug === slug) {
       setStatus('Verbindung getrennt — Reconnect in 2s …', 'warn');
-      setTimeout(() => connectWS(threadId), 2000);
+      setTimeout(() => connectWS(slug), 2000);
     }
   };
   ws.onerror = () => { state.wsReady = false; setStatus('WebSocket-Fehler', 'err'); };
@@ -882,7 +1273,7 @@ function stopResponse() {
   setStatus('Abgebrochen — neuen Prompt senden um fortzufahren');
   // WebSocket nach kurzer Pause neu verbinden
   setTimeout(() => {
-    if (state.activeThreadId) connectWS(state.activeThreadId);
+    if (state.activeProjectSlug) connectWS(state.activeProjectSlug);
   }, 1000);
 }
 
@@ -904,6 +1295,10 @@ function handleEvent(ev) {
       scrollChat();
       break;
     case 'tool_call_start':
+      // Laufende Text-Bubble schliessen, damit nachfolgender Live-Kommentar
+      // in einer NEUEN Bubble unter dem Tool-Block landet (chronologische
+      // Ansicht: Ansage → Tool → Ansage → Tool → ...).
+      currentBubble = null; currentText = '';
       appendToolCallBlock(ev.call_id, ev.name, null, null, 'pending');
       break;
     case 'tool_call_args':
@@ -913,9 +1308,11 @@ function handleEvent(ev) {
       updateToolResult(ev.call_id, ev.result);
       break;
     case 'code_interpreter':
+      currentBubble = null; currentText = '';
       renderCodeInterpreter(ev);
       break;
     case 'file_search':
+      currentBubble = null; currentText = '';
       renderFileSearch(ev);
       break;
     case 'error':
@@ -926,12 +1323,24 @@ function handleEvent(ev) {
       currentBubble = null; currentText = '';
       state._isStreaming = false;
       showStopButton(false);
-      setStatus(`Bereit  ·  ${ev.tokens_input || 0}/${ev.tokens_output || 0} Tokens`);
-      // Nach Disco-Aktion: alles refreshen
+      setStatus(`Bereit  ·  ${ev.tokens_input || 0}/${ev.tokens_output || 0} Tokens (Turn)`);
+      // Token-Counter aktualisieren (kumulativer Chat-Fuellstand)
+      if (ev.total_token_estimate != null && state.chatState) {
+        state.chatState.token_estimate = ev.total_token_estimate;
+        const budget = state.chatState.token_budget || 180000;
+        const pct = budget ? ev.total_token_estimate / budget : 0;
+        state.chatState.percent = pct;
+        state.chatState.warn_level = pct >= 0.90 ? 'critical' : (pct >= 0.70 ? 'warn' : 'ok');
+        updateTokenCounter(state.chatState);
+      } else if (state.activeProjectSlug) {
+        // Fallback: neu vom Server holen
+        loadChatState(state.activeProjectSlug);
+      }
+      // Nach Disco-Aktion: alles refreshen (Threads sind Geschichte — Migration 006)
       if (state.activeProjectSlug) {
-        loadChats(state.activeProjectSlug);
         loadExplorer(state.activeProjectSlug);
         loadDbTables(state.activeProjectSlug);
+        loadFlows(state.activeProjectSlug);
         // Viewer auto-refresh: wenn eine Datei offen ist, nochmal laden
         refreshOpenViewer();
       }
@@ -1525,6 +1934,560 @@ if (window.hljs) {
   if (window.hljs.registerLanguage) {
     // bereits per CDN-Loader geladen — siehe head
   }
+}
+
+// =========================================================================
+// Flows — Sidebar-Liste, Flow-Details, Run-Details, Polling
+// =========================================================================
+state._flowPoll = null;           // setInterval-Handle fuer Polling
+state._flowView = null;           // 'flow'|'run'|null
+state._flowViewName = null;       // Flow-Name oder null
+state._flowViewRunId = null;      // Run-ID oder null
+
+async function loadFlows(slug) {
+  const c = document.getElementById('flows-list');
+  if (!slug) { c.innerHTML = ''; return; }
+  c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  try {
+    const data = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/flows`);
+    if (!data.flows || !data.flows.length) {
+      c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Noch keine Flows.<br>Via Chat: „erstelle einen Flow …"</div>';
+      return;
+    }
+    c.innerHTML = '';
+    for (const f of data.flows) {
+      const row = document.createElement('div');
+      const running = f.running_run_id ? ' has-running' : '';
+      row.className = 'sb-row flow-row' + running;
+      row.innerHTML = `
+        <span class="icon">⚙</span>
+        <span class="label" title="${escAttr(f.readme_excerpt || f.name)}">${escHtml(f.name)}</span>
+        <span class="meta" title="Anzahl Runs">${f.run_count}</span>
+      `;
+      row.onclick = () => openFlowInViewer(f.name);
+      c.appendChild(row);
+    }
+  } catch (e) {
+    c.innerHTML = '<span class="err" style="font-size:11px">Fehler beim Laden.</span>';
+  }
+}
+
+// ----- Flow-Details-Ansicht ---------------------------------------------
+async function openFlowInViewer(flowName) {
+  if (!state.activeProjectSlug) return;
+  _stopFlowPoll();
+  state._flowView = 'flow';
+  state._flowViewName = flowName;
+  state._flowViewRunId = null;
+  state._viewerOpenFile = null;
+  state._viewerOpenTable = null;
+  setViewerTitle('⚙ ' + flowName, 'Flow');
+  ensureViewerOpen();
+  await renderFlowDetails();
+}
+
+async function renderFlowDetails() {
+  const slug = state.activeProjectSlug;
+  const name = state._flowViewName;
+  if (!slug || !name) return;
+  setViewerHtml('<div class="viewer-body muted">lade …</div>');
+  try {
+    const d = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/flows/${encodeURIComponent(name)}`);
+    if (d.error && !d.name) throw new Error(d.error);
+
+    const readmeHtml = d.readme_content
+      ? `<div class="viewer-md">${renderMarkdown(d.readme_content)}</div>`
+      : '<div class="muted">(Keine README.md)</div>';
+
+    const hasRun = (d.recent_runs || []).some(r => r.status === 'running' || r.status === 'pending');
+    const startBtn = hasRun
+      ? '<button disabled title="Es laeuft bereits ein Run">▶ Run laeuft …</button>'
+      : `<button class="btn-primary" onclick="startFlowRun('${escAttr(name)}')">▶ Neuen Run starten</button>`;
+
+    const runsRows = (d.recent_runs || []).map(r => {
+      const cost = (r.total_cost_eur || 0).toFixed(2);
+      const prog = r.total_items > 0
+        ? `${r.done_items || 0}/${r.total_items}${r.failed_items ? ' · '+r.failed_items+'f' : ''}`
+        : '–';
+      return `
+        <tr class="clickable" onclick="openRunInViewer(${r.id})">
+          <td>${r.id}</td>
+          <td><span class="status-badge status-${escHtml(r.status)}">${escHtml(r.status)}</span></td>
+          <td title="${escAttr(r.title || '')}">${escHtml(r.title || '(ohne Titel)')}</td>
+          <td>${prog}</td>
+          <td>${cost} €</td>
+          <td class="muted">${escHtml((r.created_at || '').substring(5, 16))}</td>
+        </tr>`;
+    }).join('');
+
+    const runsTable = runsRows
+      ? `<table class="flow-runs-table">
+           <thead><tr><th>ID</th><th>Status</th><th>Titel</th><th>Items</th><th>Kosten</th><th>Start</th></tr></thead>
+           <tbody>${runsRows}</tbody>
+         </table>`
+      : '<div class="muted">Noch keine Runs.</div>';
+
+    setViewerHtml(`
+      <div class="viewer-toolbar">
+        <span>Flow · ${escHtml(d.path)}</span>
+        <span class="spacer"></span>
+        <button onclick="renderFlowDetails()">↻ Neu laden</button>
+        <button onclick="closeFlowView()">× Schliessen</button>
+      </div>
+      <div class="flow-section">
+        <div class="flow-controls">${startBtn}</div>
+        <h3>README.md</h3>
+        ${readmeHtml}
+        <h3>Letzte Runs (${(d.recent_runs||[]).length})</h3>
+        ${runsTable}
+      </div>
+    `);
+  } catch (e) {
+    setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
+  }
+}
+
+async function startFlowRun(flowName) {
+  const slug = state.activeProjectSlug;
+  const defaultTitle = `Run ${new Date().toISOString().replace('T',' ').substring(0,16)}`;
+  const title = prompt('Titel fuer den Run:', defaultTitle);
+  if (title === null) return;  // abgebrochen
+  const configStr = prompt('Config (JSON) oder leer lassen:', '');
+  if (configStr === null) return;
+  let config = null;
+  if (configStr.trim()) {
+    try { config = JSON.parse(configStr); }
+    catch (e) { alert('Ungueltiges JSON in config: ' + e.message); return; }
+  }
+  try {
+    const body = { title: title.trim() || null };
+    if (config) body.config = config;
+    const resp = await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/flows/${encodeURIComponent(flowName)}/runs`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (data.error && !data.id) { alert('Fehler: ' + data.error); return; }
+    await openRunInViewer(data.id);
+    // Nach ~1.5s nochmal laden — Worker wechselt idR von pending auf running
+    setTimeout(() => loadFlows(slug), 1500);
+  } catch (e) {
+    alert('Start fehlgeschlagen: ' + e.message);
+  }
+}
+
+// ----- Run-Details-Ansicht ----------------------------------------------
+async function openRunInViewer(runId) {
+  if (!state.activeProjectSlug) return;
+  _stopFlowPoll();
+  state._flowView = 'run';
+  state._flowViewRunId = runId;
+  setViewerTitle(`▶ Run ${runId}`, 'Flow-Run');
+  ensureViewerOpen();
+  await renderRunDetails();
+  _startFlowPoll();
+}
+
+async function renderRunDetails() {
+  const slug = state.activeProjectSlug;
+  const id = state._flowViewRunId;
+  if (!slug || !id) return;
+  try {
+    const [run, itemsData, logsData] = await Promise.all([
+      api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${id}`),
+      api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${id}/items?limit=100`),
+      api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${id}/logs?tail=40`),
+    ]);
+    // Unterscheidung API-Error (kein `id`) vs Run-eigener Error (hat `id`).
+    if (run.error && !run.id) throw new Error(run.error);
+
+    const total = run.total_items || 0;
+    const done = run.done_items || 0;
+    const failed = run.failed_items || 0;
+    const skipped = run.skipped_items || 0;
+    const pct = total > 0 ? Math.min(100, Math.round((done + failed + skipped) / total * 100)) : 0;
+    const progClass = run.status === 'paused' ? 'paused'
+                    : run.status === 'failed' ? 'failed'
+                    : run.status === 'done'   ? 'done'
+                    : '';
+
+    // Controls je nach Status
+    let ctl = '';
+    if (run.status === 'running' || run.status === 'pending') {
+      ctl = `<button onclick="runPause(${id})">⏸ Pause</button>
+             <button onclick="runCancel(${id}, false)">■ Cancel</button>
+             <button class="btn-stop" onclick="runCancel(${id}, true)">✕ Force-Kill</button>`;
+    } else if (run.status === 'paused') {
+      ctl = `<button class="btn-primary" disabled title="Resume via CLI: disco flow run &lt;name&gt; (noch kein UI-Resume)">▶ Pausiert</button>
+             <button onclick="runCancel(${id}, false)">■ Cancel</button>
+             <button class="btn-stop" onclick="runCancel(${id}, true)">✕ Force-Kill</button>`;
+    } else {
+      ctl = `<span class="muted">Run beendet. Status: <span class="status-badge status-${escHtml(run.status)}">${escHtml(run.status)}</span></span>`;
+    }
+
+    const cfgStr = run.config ? JSON.stringify(run.config) : '(leer)';
+    const errorBlk = run.error
+      ? `<div class="flow-section"><h3>Fehler</h3><pre class="viewer-pre" style="color:var(--red)">${escHtml(run.error)}</pre></div>`
+      : '';
+
+    // Items-Liste (bis zu 100, neueste unten). Bei done: alles. Bei running: Verlauf.
+    const items = itemsData.items || [];
+    const itemRows = items.map(it => {
+      const short = (it.input_ref || '').length > 80 ? (it.input_ref.substring(0, 77) + '…') : it.input_ref;
+      const err = it.error ? `<span class="err" title="${escAttr(it.error)}">${escHtml(it.error.substring(0,60))}</span>` : '';
+      return `<div class="row">
+        <span>#${it.id}</span>
+        <span class="status-badge status-${escHtml(it.status)}">${escHtml(it.status)}</span>
+        <span class="ref" title="${escAttr(it.input_ref)}">${escHtml(short)}</span>
+        <span>${err}</span>
+      </div>`;
+    }).join('');
+
+    setViewerHtml(`
+      <div class="viewer-toolbar">
+        <span>Run ${id} · Flow <b>${escHtml(run.flow_name)}</b></span>
+        <span class="spacer"></span>
+        <button onclick="openFlowInViewer('${escAttr(run.flow_name)}')">⚙ Zum Flow</button>
+        <button onclick="renderRunDetails()">↻ Neu laden</button>
+        <button onclick="closeFlowView()">× Schliessen</button>
+      </div>
+      <div class="flow-section">
+        <h3>${escHtml(run.title || '(ohne Titel)')}</h3>
+        <div class="flow-stats-grid">
+          <div class="flow-stat"><div class="lbl">Status</div><div class="val"><span class="status-badge status-${escHtml(run.status)}">${escHtml(run.status)}</span></div></div>
+          <div class="flow-stat"><div class="lbl">Fortschritt</div><div class="val">${done}/${total || '?'}</div></div>
+          <div class="flow-stat"><div class="lbl">Fehler</div><div class="val">${failed}</div></div>
+          <div class="flow-stat"><div class="lbl">Skipped</div><div class="val">${skipped}</div></div>
+          <div class="flow-stat"><div class="lbl">Kosten</div><div class="val">${(run.total_cost_eur||0).toFixed(2)} €</div></div>
+          <div class="flow-stat"><div class="lbl">Tokens</div><div class="val">${(run.total_tokens_in||0).toLocaleString('de-DE')}/${(run.total_tokens_out||0).toLocaleString('de-DE')}</div></div>
+        </div>
+        <div class="flow-progress ${progClass}"><div class="flow-progress-bar" style="width:${pct}%"></div></div>
+        <div class="flow-controls">${ctl}</div>
+        <div class="muted" style="font-size:11px">Config: <code>${escHtml(cfgStr)}</code> · PID: ${run.worker_pid || '–'} · Start: ${escHtml(run.started_at || '–')} · Ende: ${escHtml(run.finished_at || '–')}</div>
+      </div>
+      ${errorBlk}
+      <div class="flow-section">
+        <h3>Log (tail 40)</h3>
+        <div class="flow-logs">${escHtml(logsData.log_text || '(kein Log)')}${logsData.stderr_text ? '\n--- stderr ---\n'+escHtml(logsData.stderr_text) : ''}</div>
+      </div>
+      <div class="flow-section">
+        <h3>Items (${items.length}${items.length >= 100 ? ' / 100+' : ''})</h3>
+        <div class="flow-items-list">${itemRows || '<div class="muted">Noch keine Items.</div>'}</div>
+      </div>
+    `);
+  } catch (e) {
+    setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
+  }
+}
+
+async function runPause(runId) {
+  const slug = state.activeProjectSlug;
+  try {
+    const r = await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/pause`, {method:'POST'});
+    const d = await r.json();
+    if (d.error && !d.id) alert('Pause-Fehler: ' + d.error);
+  } catch (e) { alert('Pause fehlgeschlagen: ' + e.message); }
+  await renderRunDetails();
+}
+
+async function runCancel(runId, force) {
+  const slug = state.activeProjectSlug;
+  const msg = force
+    ? 'Force-Kill: Worker wird per SIGTERM abgebrochen. Fortfahren?'
+    : 'Cancel: Worker stoppt am naechsten Item-Boundary. Fortfahren?';
+  if (!confirm(msg)) return;
+  try {
+    const r = await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/cancel`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({force: !!force}),
+    });
+    const d = await r.json();
+    if (d.error && !d.id) alert('Cancel-Fehler: ' + d.error);
+  } catch (e) { alert('Cancel fehlgeschlagen: ' + e.message); }
+  await renderRunDetails();
+  await loadFlows(slug);
+}
+
+// ----- Polling ----------------------------------------------------------
+function _startFlowPoll() {
+  _stopFlowPoll();
+  let tickCount = 0;
+  state._flowPoll = setInterval(async () => {
+    if (state._flowView !== 'run' || !state._flowViewRunId) {
+      _stopFlowPoll(); return;
+    }
+    try {
+      const slug = state.activeProjectSlug;
+      const r = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${state._flowViewRunId}`);
+      if (['running','pending','paused'].includes(r.status)) {
+        await renderRunDetails();
+        // Alle 4 Ticks (~10s) auch die Sidebar-Indikatoren aktualisieren.
+        if (++tickCount % 4 === 0) loadFlows(slug);
+      } else {
+        await renderRunDetails();  // einmal final aktualisieren
+        _stopFlowPoll();
+        loadFlows(slug);  // Sidebar: running-Indikator aus
+      }
+    } catch (e) { /* stillschweigend — nicht spammen */ }
+  }, 2500);
+}
+
+function _stopFlowPoll() {
+  if (state._flowPoll) { clearInterval(state._flowPoll); state._flowPoll = null; }
+}
+
+function closeFlowView() {
+  _stopFlowPoll();
+  state._flowView = null;
+  state._flowViewName = null;
+  state._flowViewRunId = null;
+  closeViewer();
+}
+
+// =========================================================================
+// Run-Streifen — projekt-uebergreifend, zeigt aktive Flow-Runs
+// Poll alle 3s /api/workspace/active-runs, rendert je Run eine Zeile.
+// =========================================================================
+
+state._runStripPoll = null;       // setInterval handle
+state._runStripLastRuns = new Map();  // key = "slug:id" → last snapshot fuer Status-Wechsel-Erkennung
+state._runStripPending = new Set();   // "slug:id" — User hat Pause/Cancel geklickt, UI sperren
+
+const RUN_STRIP_POLL_MS = 3000;
+
+function runStripInit() {
+  // Sofort einmal fetchen (sonst Blinken), dann Intervall.
+  runStripPoll();
+  if (state._runStripPoll) clearInterval(state._runStripPoll);
+  state._runStripPoll = setInterval(runStripPoll, RUN_STRIP_POLL_MS);
+}
+
+async function runStripPoll() {
+  let data;
+  try {
+    data = await api('/api/workspace/active-runs');
+  } catch (_e) {
+    return;  // still: API kurz weg, beim naechsten Tick wieder versuchen
+  }
+  if (!data || !Array.isArray(data.runs)) return;
+
+  // Status-Wechsel-Erkennung: alles was im letzten Snapshot war, aber nicht mehr
+  // in der aktiven Liste, ist fertig geworden → Toast.
+  const nowKeys = new Set(data.runs.map(r => `${r.project_slug}:${r.id}`));
+  for (const [key, prev] of state._runStripLastRuns.entries()) {
+    if (!nowKeys.has(key)) {
+      // Dieser Run ist verschwunden = Endstatus erreicht. Final-Snapshot holen.
+      runStripFetchFinal(prev).then(finalRun => {
+        if (finalRun) runStripToast(finalRun);
+      });
+      state._runStripPending.delete(key);
+    }
+  }
+
+  // Neuen Snapshot merken
+  const newMap = new Map();
+  for (const r of data.runs) {
+    newMap.set(`${r.project_slug}:${r.id}`, r);
+  }
+  state._runStripLastRuns = newMap;
+
+  runStripRender(data.runs);
+}
+
+async function runStripFetchFinal(prev) {
+  // prev ist ein Run aus dem letzten aktiven Snapshot. Wir holen seinen
+  // finalen Status (done/failed/cancelled) einmalig fuer den Toast.
+  try {
+    return await api(`/api/workspace/projects/${encodeURIComponent(prev.project_slug)}/runs/${prev.id}`);
+  } catch (_e) {
+    return null;
+  }
+}
+
+function runStripRender(runs) {
+  const strip = document.getElementById('run-strip');
+  if (!strip) return;
+  if (!runs.length) {
+    strip.classList.remove('has-runs');
+    strip.innerHTML = '';
+    return;
+  }
+  strip.classList.add('has-runs');
+  strip.innerHTML = runs.map(runStripRenderRow).join('');
+}
+
+function runStripRenderRow(r) {
+  const key = `${r.project_slug}:${r.id}`;
+  const status = r.status || 'running';
+  const total = r.total_items || 0;
+  const done = r.done_items || 0;
+  const failed = r.failed_items || 0;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const runtime = _runStripElapsed(r.started_at || r.created_at);
+  const cost = (r.total_cost_eur || 0).toFixed(2);
+  const budget = (r.config && r.config.budget_eur) ? Number(r.config.budget_eur) : null;
+  const overBudget = budget != null && (r.total_cost_eur || 0) > budget;
+
+  const disabled = state._runStripPending.has(key) ? 'disabled' : '';
+  const pauseLabel = status === 'paused' ? '▶ Weiter' : '⏸ Pause';
+  const pauseAction = status === 'paused'
+    ? `runStripResume('${escAttr(r.project_slug)}', ${r.id})`
+    : `runStripPause('${escAttr(r.project_slug)}', ${r.id})`;
+
+  const budgetStr = budget != null
+    ? `${cost} / ${budget.toFixed(2)} €`
+    : `${cost} €`;
+
+  const failedStr = failed > 0 ? `<span class="run-failed">· ${failed} failed</span>` : '';
+
+  return `
+    <div class="run-row status-${escAttr(status)}" data-key="${escAttr(key)}">
+      <span class="run-dot"></span>
+      <span class="run-id" onclick="runStripOpenDetails('${escAttr(r.project_slug)}', ${r.id})"
+            title="Details im Viewer oeffnen">#${r.id}</span>
+      <span class="run-flow" title="${escAttr(r.flow_name)}">${escHtml(r.flow_name)}</span>
+      <span class="run-project" title="Projekt: ${escAttr(r.project_name || r.project_slug)}">${escHtml(r.project_slug)}</span>
+      <span class="run-progress">
+        <span class="run-bar"><span class="run-bar-fill" style="width:${pct}%"></span></span>
+        <span class="run-counts">${done}/${total} (${pct}%)${failedStr}</span>
+      </span>
+      <span class="run-meta">
+        <span title="Laufzeit seit Start">⏱ ${runtime}</span>
+        <span class="run-cost ${overBudget ? 'over-budget' : ''}" title="${budget != null ? 'Budget: ' + budget.toFixed(2) + ' €' : 'Kein Budget gesetzt'}">💶 ${budgetStr}</span>
+      </span>
+      <span class="run-actions">
+        <button class="run-btn" onclick="${pauseAction}" ${disabled}
+                title="${status === 'paused' ? 'Worker fortsetzen' : 'Worker pausieren — aktueller Item laeuft noch zu Ende'}">${pauseLabel}</button>
+        <button class="run-btn run-btn-danger" onclick="runStripCancel('${escAttr(r.project_slug)}', ${r.id})" ${disabled}
+                title="Run abbrechen — Done-Items bleiben">✕ Cancel</button>
+      </span>
+    </div>
+  `;
+}
+
+function _runStripElapsed(startedAtIso) {
+  if (!startedAtIso) return '—';
+  const started = new Date(startedAtIso.replace(' ', 'T') + (startedAtIso.endsWith('Z') ? '' : 'Z'));
+  if (isNaN(started.getTime())) return '—';
+  const diffSec = Math.max(0, (Date.now() - started.getTime()) / 1000);
+  if (diffSec < 60) return `${Math.round(diffSec)}s`;
+  if (diffSec < 3600) return `${Math.round(diffSec / 60)}m`;
+  const h = Math.floor(diffSec / 3600);
+  const m = Math.round((diffSec - h * 3600) / 60);
+  return `${h}h${m}m`;
+}
+
+async function runStripPause(slug, runId) {
+  const key = `${slug}:${runId}`;
+  state._runStripPending.add(key);
+  runStripPoll();  // UI-Update mit disabled Buttons
+  try {
+    await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/pause`, { method: 'POST' });
+  } catch (e) {
+    alert(`Pause fehlgeschlagen: ${e.message}`);
+  }
+  state._runStripPending.delete(key);
+  runStripPoll();
+}
+
+async function runStripResume(slug, runId) {
+  // Ein "paused"-Run hat worker_pid != NULL nur wenn Worker noch laeuft —
+  // bei Pause-Signal laeuft er zu Ende und beendet sich. Resume = neuer Run-Start
+  // mit gleichem Flow, der die noch-pending Items aufgreift (Idempotenz).
+  // Fuer MVP: einfachen Hinweis geben, tatsaechliches Resume macht der User ueber
+  // "Flow erneut starten" im Flow-Panel.
+  alert(
+    'Resume-Button: im MVP muss der Run neu gestartet werden ueber ' +
+    '„Neuen Run starten" im Flow-Panel. Done-Items werden dank Idempotenz uebersprungen.'
+  );
+}
+
+async function runStripCancel(slug, runId) {
+  const ok = confirm(
+    `Run #${runId} wirklich abbrechen?\n\n` +
+    `• Bereits verarbeitete Items bleiben in der DB erhalten.\n` +
+    `• Laufender Item-Call wird sauber zu Ende gefuehrt.\n` +
+    `• Pending-Items werden NICHT mehr verarbeitet.\n\n` +
+    `Ok = abbrechen, Abbrechen = weiterlaufen lassen.`
+  );
+  if (!ok) return;
+  const key = `${slug}:${runId}`;
+  state._runStripPending.add(key);
+  runStripPoll();
+  try {
+    await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: false }),
+    });
+  } catch (e) {
+    alert(`Cancel fehlgeschlagen: ${e.message}`);
+  }
+  state._runStripPending.delete(key);
+  runStripPoll();
+}
+
+async function runStripOpenDetails(slug, runId) {
+  // Wechsel ins Ziel-Projekt (falls noetig), dann Run-Viewer oeffnen.
+  if (state.activeProjectSlug !== slug) {
+    await switchProject(slug);
+  }
+  if (typeof openRunInViewer === 'function') {
+    await openRunInViewer(runId);
+  }
+}
+
+function runStripToast(run) {
+  const container = document.getElementById('run-toast-container');
+  if (!container) return;
+  const status = run.status || 'done';
+  const total = run.total_items || 0;
+  const done = run.done_items || 0;
+  const failed = run.failed_items || 0;
+  const skipped = run.skipped_items || 0;
+  const cost = (run.total_cost_eur || 0).toFixed(2);
+
+  const emoji = status === 'done' ? '✅'
+              : status === 'failed' ? '❌'
+              : status === 'cancelled' ? '⊘'
+              : 'ℹ';
+  const label = status === 'done' ? 'fertig'
+              : status === 'failed' ? 'FEHLGESCHLAGEN'
+              : status === 'cancelled' ? 'abgebrochen'
+              : status;
+
+  const slug = run.project_slug || run.project_name || '';
+  const flow = run.flow_name || '?';
+
+  const toast = document.createElement('div');
+  toast.className = `run-toast status-${status}`;
+  toast.innerHTML = `
+    <button class="run-toast-close" title="Schliessen">✕</button>
+    <div class="run-toast-title">${emoji} Run #${run.id} ${escHtml(label)}</div>
+    <div class="run-toast-body">
+      ${escHtml(flow)} · ${escHtml(slug)}<br>
+      ${done}/${total} done${failed > 0 ? ' · <span style="color:var(--red)">' + failed + ' failed</span>' : ''}${skipped > 0 ? ' · ' + skipped + ' skipped' : ''} · ${cost} €
+      ${slug ? `<br><a href="#" onclick="runStripOpenDetails('${escAttr(slug)}', ${run.id}); return false;" style="color:var(--accent)">Details oeffnen</a>` : ''}
+    </div>
+  `;
+  const close = () => { if (toast.parentNode) toast.parentNode.removeChild(toast); };
+  toast.querySelector('.run-toast-close').addEventListener('click', close);
+  container.appendChild(toast);
+  // Auto-close nach 10s — bei 'failed' laenger (15s)
+  const ttl = status === 'failed' ? 15000 : 10000;
+  setTimeout(close, ttl);
+}
+
+// Start des Run-Streifen-Pollings: sobald der DOM bereit ist.
+// Wir fuegen uns in den bestehenden DOMContentLoaded-Hook ein, indem wir
+// NACH dem vorhandenen addEventListener noch einen zweiten anhaengen.
+// Der zweite feuert ebenfalls nach DOM-Ready.
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', runStripInit);
+} else {
+  runStripInit();
 }
 </script>
 </body>

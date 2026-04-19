@@ -27,6 +27,13 @@ Was der Host **nicht** tut:
     ist der Unterschied zu `run_python`, das Keys bewusst blockiert.)
   - Er erzwingt keinen Timeout auf den Run selbst — ein 10h-Flow ist
     erlaubt. Pro-Item-Timeouts implementiert das SDK (nicht der Host).
+
+Credentials und .env:
+  Der Host ruft beim Start `load_dotenv(REPO_ROOT/.env)` auf, damit
+  Runner-Autoren sowohl `os.getenv('AZURE_DOC_INTEL_ENDPOINT')` als
+  auch `from bew.config import settings` nutzen koennen. Ohne diesen
+  Schritt wuerden die Keys nur in der Pydantic-Settings-Instanz liegen,
+  der Subprocess `os.environ` aber leer bleiben (siehe UAT-Bug #5).
 """
 
 from __future__ import annotations
@@ -40,6 +47,9 @@ import sys
 import traceback
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+from bew.config import REPO_ROOT
 from bew.flows.sdk import (
     ENV_FLOW_DIR,
     ENV_PROJECT_DB,
@@ -51,6 +61,12 @@ from bew.flows.sdk import (
     STATUS_FAILED,
     STATUS_PAUSED,
 )
+
+# .env aus dem Code-Repo in os.environ laden. Subprocess erbt os.environ nicht
+# automatisch mit den Pydantic-Settings — Runner-Autoren sollen aber ohne
+# Gedanken an Framework-Details `os.getenv(...)` oder `settings.*` nutzen
+# koennen.
+load_dotenv(REPO_ROOT / ".env")
 
 
 logger = logging.getLogger(__name__)

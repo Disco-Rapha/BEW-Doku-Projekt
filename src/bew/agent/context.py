@@ -1,8 +1,9 @@
 """Thread-lokaler Projekt-Kontext fuer Disco-Tools.
 
-Wenn ein Chat-Thread an ein Projekt gebunden ist (`chat_threads.project_id`),
-sollen alle Tool-Aufrufe innerhalb dieses Turns auf die Sandbox des Projekts
-zugreifen — und nicht auf den globalen Workspace.
+Seit Migration 006 ist jeder Chat an genau ein Projekt gebunden
+(`project_chat_state.project_slug`). Wenn ein Turn laeuft, wird der Slug
+hier per ContextVar gesetzt — Tools lesen ihn ab und scopen ihren Zugriff
+auf dieses Projekt (Verzeichnis, data.db, .disco/memory/).
 
 Implementierung via `contextvars.ContextVar`, damit parallele AgentService-
 Aufrufe (z.B. zwei Browser-Tabs gleichzeitig) sich gegenseitig nicht stoeren.
@@ -30,10 +31,24 @@ _current_project: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "disco_current_project", default=None
 )
 
+# Wurde der Turn vom System getriggert (flow_notifications) statt vom User?
+# Wird von AgentService.run_system_turn fuer die Dauer des Turns auf True
+# gesetzt. Tools, die irreversible/teure Aktionen ausloesen (flow_run-Start),
+# duerfen bei True ablehnen — siehe CLAUDE.md „Asymmetric Auto-Action":
+# Disco darf autonom cancel/pause, aber NIEMALS neue Runs starten.
+_is_system_triggered: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "disco_is_system_triggered", default=False
+)
+
 
 def get_current_project_slug() -> str | None:
     """Gibt den Slug des aktiven Projekts zurueck, oder None."""
     return _current_project.get()
+
+
+def is_system_triggered() -> bool:
+    """True, wenn der aktive Turn vom System (nicht vom User) gestartet wurde."""
+    return _is_system_triggered.get()
 
 
 def get_project_root() -> Path | None:

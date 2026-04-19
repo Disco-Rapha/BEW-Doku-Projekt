@@ -7,6 +7,7 @@ import json
 import logging
 import tempfile
 import threading
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -21,13 +22,64 @@ from ..config import settings
 from ..db import connect
 from ..projects import list_projects, create_project, archive_project, count_documents as proj_doc_count
 from ..sources import list_sources, create_source, get_source, parse_config, count_documents as src_doc_count
-from .agent import stream_response  # Alt-Agent (Claude) — Fallback fuer Phase-0-Kompatibilitaet
+from ..workspace import bootstrap_all_project_migrations
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="BEW Doku Projekt", docs_url="/api/docs")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/Shutdown-Hook fuer das Backend.
+
+    Beim Start:
+      1. Projekt-DB-Migrationen auf alle bestehenden Projekte anwenden
+         (frisch ausgerollte Migrations greifen ohne manuelles Eingreifen).
+      2. Notification-Watcher-Loop starten (Disco-System-Trigger bei
+         Flow-Ereignissen).
+    """
+    # 1. Migrations-Bootstrap
+    try:
+        applied = bootstrap_all_project_migrations()
+        if applied:
+            for slug, files in applied.items():
+                logger.info("project-migration applied: %s -> %s", slug, files)
+    except Exception:  # noqa: BLE001
+        logger.exception("Bootstrap der Projekt-Migrationen fehlgeschlagen")
+
+    # 2. Notification-Watcher
+    watcher_task = asyncio.create_task(_notification_watcher_loop())
+
+    try:
+        yield
+    finally:
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except asyncio.CancelledError:
+            pass
+
+
+async def _notification_watcher_loop() -> None:
+    """Pollt alle Projekte alle 3s nach offenen Flow-Notifications und
+    triggert pro Notification einen System-Disco-Turn.
+
+    Wird in lifespan() gestartet. Fehler einzelner Iterationen brechen
+    den Loop nicht ab.
+    """
+    from .. import flow_notifications  # lazy import (Modul-zyklus vermeiden)
+
+    while True:
+        try:
+            await flow_notifications.process_pending_notifications()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("Notification-Watcher-Iteration gescheitert")
+        await asyncio.sleep(3.0)
+
+
+app = FastAPI(title="BEW Doku Projekt", docs_url="/api/docs", lifespan=lifespan)
 
 # Statische Dateien
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -370,67 +422,126 @@ async def api_stats():
 
 
 # ---------------------------------------------------------------------------
-# REST-API: Chat-Threads (Phase 2a)
+# REST-API: Projekt-Chat (Migration 006 — 1 persistenter Chat pro Projekt)
 # ---------------------------------------------------------------------------
 
-@app.get("/api/threads")
-async def api_list_threads(
-    include_archived: bool = False,
-    project_id: int | None = None,
-    limit: int = 100,
-):
-    return chat_repo.list_threads(
-        include_archived=include_archived,
-        project_id=project_id,
-        limit=limit,
-    )
+# Token-Kapazitaet pro Chat (fuer 70/90-Prozent-Warnung).
+# GPT-5.1 kann nominell 200k, wir setzen 180k als Sicherheitspuffer fuer
+# System-Prompt, Tool-Definitionen, usw.
+CHAT_TOKEN_BUDGET = 180_000
 
 
-@app.post("/api/threads")
-async def api_create_thread(body: dict):
-    title = (body.get("title") or "Neuer Chat").strip() or "Neuer Chat"
-    project_id = body.get("project_id")
-    return chat_repo.create_thread(title=title, project_id=project_id)
-
-
-@app.get("/api/threads/{thread_id}")
-async def api_get_thread(thread_id: int):
-    try:
-        return chat_repo.get_thread(thread_id)
-    except KeyError:
-        return {"error": f"Thread {thread_id} nicht gefunden."}
-
-
-@app.get("/api/threads/{thread_id}/messages")
-async def api_thread_messages(thread_id: int):
-    try:
-        chat_repo.get_thread(thread_id)
-    except KeyError:
-        return {"error": f"Thread {thread_id} nicht gefunden."}
-    return chat_repo.list_messages(thread_id)
-
-
-@app.patch("/api/threads/{thread_id}")
-async def api_update_thread(thread_id: int, body: dict):
-    title = body.get("title")
-    if title:
-        chat_repo.update_thread_title(thread_id, title.strip() or "Neuer Chat")
-    return chat_repo.get_thread(thread_id)
-
-
-@app.delete("/api/threads/{thread_id}")
-async def api_archive_thread(thread_id: int, hard: bool = False):
-    """Archiviert (soft) oder loescht (hard) einen Thread.
-
-    Foundry-seitig bleibt die Response-History bestehen — nur unser lokaler
-    Mirror wird entfernt. Fuer kompletten Cleanup muesste auch die
-    Foundry-Conversation geloescht werden (aktuell nicht implementiert).
-    """
-    if hard:
-        chat_repo.delete_thread(thread_id)
+def _chat_state_payload(state: dict[str, Any] | None) -> dict[str, Any]:
+    """Packt den State + abgeleitete Felder (Prozent, Warnstufe) fuer die UI."""
+    if state is None:
+        return {
+            "exists": False,
+            "token_estimate": 0,
+            "token_budget": CHAT_TOKEN_BUDGET,
+            "percent": 0.0,
+            "warn_level": "ok",
+        }
+    tok = int(state.get("token_estimate") or 0)
+    pct = (tok / CHAT_TOKEN_BUDGET) if CHAT_TOKEN_BUDGET else 0.0
+    if pct >= 0.90:
+        warn = "critical"  # Auto-Kompressions-Vorschlag
+    elif pct >= 0.70:
+        warn = "warn"      # gelbes Badge
     else:
-        chat_repo.archive_thread(thread_id)
-    return {"ok": True, "mode": "hard" if hard else "archive"}
+        warn = "ok"
+    return {
+        "exists": True,
+        **state,
+        "token_estimate": tok,
+        "token_budget": CHAT_TOKEN_BUDGET,
+        "percent": round(pct, 4),
+        "warn_level": warn,
+    }
+
+
+@app.get("/api/projects/{slug}/chat/state")
+async def api_chat_state(slug: str):
+    """Aktueller Chat-State eines Projekts (Token-Fill, Warn-Level)."""
+    from ..workspace import validate_slug
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    state = chat_repo.get_state(slug)
+    return _chat_state_payload(state)
+
+
+@app.get("/api/projects/{slug}/chat/messages")
+async def api_chat_messages(slug: str, include_compacted: bool = False):
+    """Alle Messages eines Projekt-Chats.
+
+    Per default nur aktive (nicht komprimierte). Mit include_compacted=1
+    fuer die UI-Ansicht mit Kompressions-Divider.
+    """
+    from ..workspace import validate_slug
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if include_compacted:
+        return chat_repo.list_all_messages(slug, include_compacted=True)
+    return chat_repo.list_active_messages(slug)
+
+
+@app.post("/api/projects/{slug}/chat/compact")
+async def api_chat_compact(slug: str, body: dict | None = None):
+    """Markiert alle aktuellen Messages als komprimiert.
+
+    Der Agent MUSS vor dem Aufruf die wichtigen Erkenntnisse per
+    memory_write in die Memory-Bank geschrieben haben — diese REST-
+    Route markiert nur den Cut. Body optional: {cutoff_message_id}.
+    Wenn nicht gesetzt, wird das letzte aktive Message-ID genommen.
+    """
+    from ..workspace import validate_slug
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    body = body or {}
+    cutoff = body.get("cutoff_message_id")
+    if cutoff is None:
+        cutoff = chat_repo.last_active_message_id(slug)
+    if cutoff is None:
+        return {"error": "Keine aktiven Messages zum Komprimieren."}
+
+    marked = chat_repo.mark_compacted(slug, int(cutoff))
+    # foundry_response_id NICHT zuruecksetzen: der Agent laeuft nach
+    # Kompression mit leerem Chat + Memory-Reload weiter. Der Portal-
+    # Response-Chain liegt dann hinter uns, aber Disco soll frisch starten.
+    # -> setResponseId(None) damit der naechste Turn kein previous_response_id
+    # mit veralteten Inhalten mitschickt.
+    chat_repo.set_response_id(slug, None)
+    # Token-Estimate neu berechnen (sollte nahe 0 sein)
+    new_estimate = chat_repo.recompute_token_estimate(slug)
+
+    return {
+        "ok": True,
+        "marked_compacted": marked,
+        "cutoff_message_id": int(cutoff),
+        "new_token_estimate": new_estimate,
+    }
+
+
+@app.delete("/api/projects/{slug}/chat")
+async def api_chat_reset(slug: str):
+    """Loescht kompletten Chat-State + alle Messages eines Projekts.
+
+    Harte Zuruecksetzung — auch Audit-Trail verschwindet. Nur nutzen, wenn
+    der Nutzer es explizit will.
+    """
+    from ..workspace import validate_slug
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    chat_repo.delete_state(slug)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -658,31 +769,308 @@ async def api_workspace_db_rows(
         c.close()
 
 
-@app.get("/api/workspace/projects/{slug}/threads")
-async def api_workspace_threads(slug: str, include_archived: bool = False):
-    """Alle Chat-Threads, die einem Projekt zugeordnet sind."""
+# ---------------------------------------------------------------------------
+# Flows — REST-API fuer das Frontend-Sidebar-Panel
+# ---------------------------------------------------------------------------
+
+
+def _resolve_project_path_or_error(slug: str):
+    """Gibt (project_root_Path, None) oder (None, error_dict) zurueck."""
     from ..workspace import validate_slug
     try:
         slug = validate_slug(slug)
     except ValueError as exc:
+        return None, {"error": str(exc)}
+    project_path = settings.projects_dir / slug
+    if not project_path.is_dir():
+        return None, {"error": f"Projekt '{slug}' nicht gefunden."}
+    if not (project_path / "data.db").exists():
+        return None, {"error": f"Projekt-DB fehlt in '{slug}'."}
+    return project_path, None
+
+
+def _flow_info_to_dict(info, project_root) -> dict:
+    return {
+        "name": info.name,
+        "path": str(info.path.relative_to(project_root)),
+        "has_runner": info.has_runner,
+        "has_readme": info.has_readme,
+        "readme_excerpt": info.readme_excerpt,
+        "last_modified": info.last_modified,
+        "run_count": info.run_count,
+    }
+
+
+def _run_info_to_dict(run) -> dict:
+    return {
+        "id": run.id,
+        "flow_name": run.flow_name,
+        "title": run.title,
+        "status": run.status,
+        "worker_pid": run.worker_pid,
+        "config": run.config,
+        "total_items": run.total_items,
+        "done_items": run.done_items,
+        "failed_items": run.failed_items,
+        "skipped_items": run.skipped_items,
+        "total_cost_eur": run.total_cost_eur,
+        "total_tokens_in": run.total_tokens_in,
+        "total_tokens_out": run.total_tokens_out,
+        "pause_requested": run.pause_requested,
+        "cancel_requested": run.cancel_requested,
+        "error": run.error,
+        "created_at": run.created_at,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }
+
+
+@app.get("/api/workspace/projects/{slug}/flows")
+async def api_flows_list(slug: str):
+    """Alle Flows im Projekt + ob ein Run gerade laeuft."""
+    from ..flows import service as flow_service
+
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+    flows = flow_service.list_flows(project_root)
+    # Pro Flow zusaetzlich: gibt es einen laufenden Run?
+    running_runs = flow_service.list_runs(project_root, status="running", limit=50)
+    running_by_flow = {r.flow_name: r.id for r in running_runs}
+    return {
+        "flows": [
+            {
+                **_flow_info_to_dict(f, project_root),
+                "running_run_id": running_by_flow.get(f.name),
+            }
+            for f in flows
+        ],
+        "total": len(flows),
+    }
+
+
+@app.get("/api/workspace/projects/{slug}/flows/{flow_name}")
+async def api_flow_show(slug: str, flow_name: str):
+    """Details zu einem Flow: README-Text, Runner-Info, letzte Runs."""
+    from ..flows import service as flow_service
+
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+    try:
+        info = flow_service.get_flow(project_root, flow_name)
+    except (KeyError, ValueError) as exc:
         return {"error": str(exc)}
 
-    # slug -> project_id
-    c = connect()
-    try:
-        row = c.execute(
-            "SELECT id FROM projects WHERE slug = ?", (slug,)
-        ).fetchone()
-    finally:
-        c.close()
-    if not row:
-        return {"error": f"Projekt '{slug}' nicht in der system.db"}
+    readme_path = info.path / "README.md"
+    runner_path = info.path / "runner.py"
+    readme_content = ""
+    if readme_path.is_file():
+        try:
+            readme_content = readme_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            readme_content = f"(Lesefehler: {exc})"
 
-    return chat_repo.list_threads(
-        include_archived=include_archived,
-        project_id=row["id"],
-        limit=200,
+    runner_lines = 0
+    if runner_path.is_file():
+        try:
+            runner_lines = sum(1 for _ in runner_path.open("r", encoding="utf-8", errors="replace"))
+        except OSError:
+            pass
+
+    recent = flow_service.list_runs(project_root, flow_name=flow_name, limit=20)
+    return {
+        **_flow_info_to_dict(info, project_root),
+        "readme_content": readme_content,
+        "runner_lines": runner_lines,
+        "recent_runs": [_run_info_to_dict(r) for r in recent],
+    }
+
+
+@app.post("/api/workspace/projects/{slug}/flows/{flow_name}/runs")
+async def api_flow_run_start(slug: str, flow_name: str, payload: dict | None = None):
+    """Startet einen neuen Run eines Flows. Body optional: {title, config}."""
+    from ..flows import service as flow_service
+
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+    body = payload or {}
+    title = body.get("title")
+    config = body.get("config")
+    if config is not None and not isinstance(config, dict):
+        return {"error": "config muss ein JSON-Objekt sein."}
+    try:
+        run = flow_service.create_run(
+            project_root, flow_name, title=title, config=config
+        )
+        run = flow_service.start_run(project_root, run.id)
+    except (KeyError, FileNotFoundError, ValueError, RuntimeError) as exc:
+        return {"error": str(exc)}
+    return _run_info_to_dict(run)
+
+
+@app.get("/api/workspace/projects/{slug}/runs")
+async def api_runs_list(
+    slug: str,
+    flow: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+):
+    """Runs im Projekt (neueste zuerst), optional nach flow/status gefiltert."""
+    from ..flows import service as flow_service
+
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+    effective_limit = max(1, min(int(limit or 50), 500))
+    runs = flow_service.list_runs(
+        project_root,
+        flow_name=flow,
+        status=status,
+        limit=effective_limit,
     )
+    return {
+        "runs": [_run_info_to_dict(r) for r in runs],
+        "total": len(runs),
+    }
+
+
+@app.get("/api/workspace/projects/{slug}/runs/{run_id}")
+async def api_run_status(slug: str, run_id: int):
+    """Status + Stats eines einzelnen Runs."""
+    from ..flows import service as flow_service
+
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+    try:
+        run = flow_service.get_run(project_root, run_id)
+    except KeyError as exc:
+        return {"error": str(exc)}
+    return _run_info_to_dict(run)
+
+
+@app.get("/api/workspace/projects/{slug}/runs/{run_id}/items")
+async def api_run_items(
+    slug: str,
+    run_id: int,
+    status: str | None = None,
+    limit: int = 100,
+):
+    """Items eines Runs (input_ref, status, output, Fehler)."""
+    from ..flows import service as flow_service
+
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+    effective_limit = max(1, min(int(limit or 100), 1000))
+    items = flow_service.list_run_items(
+        project_root, run_id, status=status, limit=effective_limit
+    )
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/workspace/projects/{slug}/runs/{run_id}/logs")
+async def api_run_logs(slug: str, run_id: int, tail: int = 100):
+    """Log-Zeilen eines Runs (log.txt + stderr.log)."""
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+
+    effective_tail = max(1, min(int(tail or 100), 2000))
+    log_dir = project_root / ".disco" / "flows" / "runs" / str(run_id)
+
+    def _read_tail(path):
+        if not path.is_file():
+            return ""
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            return f"(Lesefehler: {exc})"
+        return "\n".join(lines[-effective_tail:])
+
+    return {
+        "run_id": run_id,
+        "log_text": _read_tail(log_dir / "log.txt"),
+        "stderr_text": _read_tail(log_dir / "stderr.log"),
+        "log_dir_exists": log_dir.is_dir(),
+    }
+
+
+@app.post("/api/workspace/projects/{slug}/runs/{run_id}/pause")
+async def api_run_pause(slug: str, run_id: int):
+    """Signalisiert dem Worker: pausiere beim naechsten Item."""
+    from ..flows import service as flow_service
+
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+    try:
+        run = flow_service.request_pause(project_root, run_id)
+    except (KeyError, ValueError) as exc:
+        return {"error": str(exc)}
+    return _run_info_to_dict(run)
+
+
+@app.get("/api/workspace/active-runs")
+async def api_active_runs():
+    """Alle aktiven Runs (running/paused) projekt-uebergreifend.
+
+    Versorgt den Run-Streifen im Chat-Header. 3-Sekunden-Polling-freundlich:
+    pro Projekt-DB eine kurze Query auf `agent_flow_runs WHERE status IN (...)`.
+    Projekte ohne data.db oder unlesbare DBs werden still uebersprungen.
+    """
+    from ..flows import service as flow_service
+    from ..workspace import list_workspace_projects
+
+    runs_out: list[dict] = []
+    try:
+        projects = list_workspace_projects()
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"error": f"Projekt-Liste: {exc}", "runs": [], "total": 0}
+
+    for proj in projects:
+        if not proj.get("has_data_db"):
+            continue
+        project_root = Path(proj["path"])
+        slug = proj["slug"]
+        try:
+            running = flow_service.list_runs(project_root, status="running", limit=50)
+            paused = flow_service.list_runs(project_root, status="paused", limit=50)
+        except Exception:
+            # Projekt-DB nicht lesbar (z.B. Migrationen fehlen) — skip
+            continue
+        for run in [*running, *paused]:
+            runs_out.append({
+                **_run_info_to_dict(run),
+                "project_slug": slug,
+                "project_name": proj.get("name") or slug,
+            })
+
+    # Neueste zuerst (ueber Projekte hinweg)
+    runs_out.sort(key=lambda r: (r.get("started_at") or r.get("created_at") or ""), reverse=True)
+    return {"runs": runs_out, "total": len(runs_out)}
+
+
+@app.post("/api/workspace/projects/{slug}/runs/{run_id}/cancel")
+async def api_run_cancel(slug: str, run_id: int, payload: dict | None = None):
+    """Signalisiert dem Worker: abbrechen. Mit force=true zusaetzlich SIGTERM."""
+    from ..flows import service as flow_service
+
+    project_root, err = _resolve_project_path_or_error(slug)
+    if err:
+        return err
+    force = bool((payload or {}).get("force", False))
+    try:
+        if force:
+            flow_service.kill_run(project_root, run_id)
+        else:
+            flow_service.request_cancel(project_root, run_id)
+        run = flow_service.get_run(project_root, run_id)
+    except (KeyError, ValueError) as exc:
+        return {"error": str(exc)}
+    return _run_info_to_dict(run)
 
 
 # ---------------------------------------------------------------------------
@@ -692,29 +1080,55 @@ async def api_workspace_threads(slug: str, include_archived: bool = False):
 @app.websocket("/ws/chat")
 async def ws_chat(
     websocket: WebSocket,
-    thread_id: int = Query(..., description="BEW-lokale Thread-ID aus /api/threads"),
+    project: str = Query(..., description="Projekt-Slug — der Chat ist an ein Projekt gebunden"),
 ):
-    """Streamt Agent-Events fuer einen Chat-Thread.
+    """Streamt Agent-Events fuer den persistenten Chat eines Projekts.
 
     Protokoll:
       Client -> Server:  {"text": "Nachricht vom Benutzer"}
       Server -> Client:  typisierte JSON-Events aus AgentService.run_turn
                          (text_delta, tool_call_start, tool_result,
                           code_interpreter, file_search, error, done).
+
+    done-Event enthaelt total_token_estimate — die UI nutzt es fuer den
+    Token-Counter + Warn-Badge (70/90 %).
     """
+    from ..workspace import validate_slug
+
     await websocket.accept()
 
-    # Thread muss existieren (sonst sofort 1008 / close)
     try:
-        chat_repo.get_thread(thread_id)
-    except KeyError:
+        project_slug = validate_slug(project)
+    except ValueError as exc:
         await websocket.send_text(
-            json.dumps({"type": "error", "message": f"Thread {thread_id} nicht gefunden."})
+            json.dumps({"type": "error", "message": f"Ungueltiger Slug: {exc}"})
         )
         await websocket.close(code=1008)
         return
 
+    # Projekt-Existenz pruefen (Workspace-Ordner muss da sein)
+    project_path = settings.projects_dir / project_slug
+    if not project_path.is_dir():
+        await websocket.send_text(
+            json.dumps({
+                "type": "error",
+                "message": f"Projekt '{project_slug}' nicht im Workspace.",
+            })
+        )
+        await websocket.close(code=1008)
+        return
+
+    # State sicherstellen (legt bei Bedarf an — kein separater Call noetig)
+    chat_repo.get_or_create_state(project_slug)
+
     svc = get_agent_service()
+
+    # Registry: damit flow_notifications.py System-Events in diesen Tab
+    # pushen kann ("Disco meldet sich wegen Heartbeat"). De-Registrierung
+    # im finally, damit nach WebSocketDisconnect keine Leiche bleibt.
+    from . import ws_registry
+    from ..agent.locks import project_lock
+    await ws_registry.register(project_slug, websocket)
 
     try:
         while True:
@@ -724,32 +1138,39 @@ async def ws_chat(
             if not user_text:
                 continue
 
-            # sync-Generator aus AgentService in Worker-Thread laufen lassen,
-            # Events via asyncio.Queue zurueck in den WebSocket-Loop bringen.
-            loop = asyncio.get_running_loop()
-            queue: asyncio.Queue = asyncio.Queue()
-            SENTINEL = object()
+            # Lock pro Projekt: verhindert, dass ein System-Trigger-Turn
+            # (flow_notifications) parallel zum User-Turn auf denselben
+            # Foundry-Thread schreibt. Der Lock wird vom Event-Loop
+            # gehalten, die Worker-Thread-Phase ist aus Loop-Sicht ein
+            # langes await auf queue.get().
+            lock = await project_lock(project_slug)
+            async with lock:
+                # sync-Generator aus AgentService in Worker-Thread laufen lassen,
+                # Events via asyncio.Queue zurueck in den WebSocket-Loop bringen.
+                loop = asyncio.get_running_loop()
+                queue: asyncio.Queue = asyncio.Queue()
+                SENTINEL = object()
 
-            def _worker() -> None:
-                try:
-                    for event in svc.run_turn(thread_id, user_text):
-                        loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
-                except Exception as exc:
-                    logger.exception("AgentService-Fehler")
-                    loop.call_soon_threadsafe(
-                        queue.put_nowait,
-                        {"type": "error", "message": f"Agent-Fehler: {exc}"},
-                    )
-                finally:
-                    loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
+                def _worker() -> None:
+                    try:
+                        for event in svc.run_turn(project_slug, user_text):
+                            loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
+                    except Exception as exc:
+                        logger.exception("AgentService-Fehler")
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait,
+                            {"type": "error", "message": f"Agent-Fehler: {exc}"},
+                        )
+                    finally:
+                        loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
 
-            threading.Thread(target=_worker, daemon=True).start()
+                threading.Thread(target=_worker, daemon=True).start()
 
-            while True:
-                ev = await queue.get()
-                if ev is SENTINEL:
-                    break
-                await websocket.send_text(json.dumps(ev, ensure_ascii=False))
+                while True:
+                    ev = await queue.get()
+                    if ev is SENTINEL:
+                        break
+                    await websocket.send_text(json.dumps(ev, ensure_ascii=False))
 
     except WebSocketDisconnect:
         pass
@@ -761,3 +1182,5 @@ async def ws_chat(
             )
         except Exception:
             pass
+    finally:
+        await ws_registry.unregister(project_slug, websocket)

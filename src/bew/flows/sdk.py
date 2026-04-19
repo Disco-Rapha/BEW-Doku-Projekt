@@ -85,6 +85,95 @@ ITEM_STATUS_FAILED = "failed"
 ITEM_STATUS_SKIPPED = "skipped"
 
 
+# Notification-Arten (siehe migrations/project/005_flow_notifications.sql).
+# Werden vom Backend-Watcher (`bew.flow_notifications`) abgegriffen, der
+# daraus System-Trigger-Turns fuer Disco baut.
+NOTIFICATION_FIRST_ITEM = "first_item"
+NOTIFICATION_SECOND_ITEM = "second_item"
+NOTIFICATION_HALF = "half"
+NOTIFICATION_HEARTBEAT = "heartbeat"
+NOTIFICATION_STATUS_CHANGE = "status_change"
+NOTIFICATION_DONE = "done"
+NOTIFICATION_FAILED = "failed"
+
+# Heartbeat-Backoff: Start bei 1 min, jedes Mal verdoppeln, Cap bei 4 h.
+# Idee: Anfangs viel Aufmerksamkeit (systematische Fehler fallen sofort
+# auf), spaeter sporadisch (Token-Sparsamkeit). Stimmt mit der Spalte
+# `last_heartbeat_interval_sec DEFAULT 60` aus Migration 005 ueberein.
+HEARTBEAT_INITIAL_SEC = 60
+HEARTBEAT_MAX_SEC = 14400  # 4 h
+
+
+# ---------------------------------------------------------------------------
+# Pricing — Stand 2026-04 fuer GPT-5 in Sweden Central, API-Version 2025-11-01
+# ---------------------------------------------------------------------------
+# Quelle: Azure-Preisliste (USD/1M Tokens). Wird von
+# FlowRun.add_cost_from_azure_response() genutzt, wenn der Runner keinen
+# expliziten EUR-Betrag uebergibt.
+#
+# Wichtig: Das sind Naeherungen. Fuer rechtssichere Abrechnungen bitte
+# weiterhin aus dem Azure-Portal exportieren. Hier geht es um Live-Budget-
+# Anzeige im UI, nicht um die Finanzbuchhaltung.
+# ---------------------------------------------------------------------------
+
+USD_TO_EUR = 1.09  # grober Stand 2026-04
+
+MODEL_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
+    # GPT-5 Familie (default fuer Portal-Agent "bew-doku-agent")
+    "gpt-5": {"input": 5.0, "output": 15.0},
+    "gpt-5-mini": {"input": 0.5, "output": 2.0},
+    "gpt-5-nano": {"input": 0.1, "output": 0.4},
+    # GPT-4.1-Familie (noch in Migration)
+    "gpt-4.1": {"input": 2.5, "output": 10.0},
+    "gpt-4.1-mini": {"input": 0.25, "output": 1.0},
+    # Embeddings (fuer spaetere Hybrid-Search-Flows)
+    "text-embedding-3-large": {"input": 0.13, "output": 0.0},
+    "text-embedding-3-small": {"input": 0.02, "output": 0.0},
+}
+
+
+def compute_cost_eur(model: str, tokens_in: int, tokens_out: int) -> float:
+    """Berechnet EUR-Kosten fuer einen API-Call.
+
+    Nimmt den Modellnamen wie er im Deployment steht (z.B. 'gpt-5',
+    'gpt-5-mini'). Deployment-Aliase mit Suffixen wie 'gpt-5-2025-08-07'
+    werden automatisch auf das Basis-Modell zurueckgefuehrt.
+
+    Unbekannte Modelle → 0.0 EUR + Warnung im Log (spaeter: Exception).
+    """
+    base = _normalize_model_name(model)
+    pricing = MODEL_PRICING_USD_PER_MTOK.get(base)
+    if pricing is None:
+        logger.warning(
+            "Unbekanntes Modell fuer Cost-Berechnung: %r (base=%r) — 0 EUR",
+            model, base,
+        )
+        return 0.0
+    usd = (
+        (tokens_in / 1_000_000.0) * pricing["input"]
+        + (tokens_out / 1_000_000.0) * pricing["output"]
+    )
+    return usd * USD_TO_EUR
+
+
+def _normalize_model_name(model: str) -> str:
+    """Reduziert 'gpt-5-2025-08-07' auf 'gpt-5', 'gpt-4.1-mini-abc' auf 'gpt-4.1-mini'.
+
+    Sucht den laengsten Key in MODEL_PRICING_USD_PER_MTOK, der ein Prefix
+    des gegebenen Modellnamens ist. So gewinnt 'gpt-5-mini' vor 'gpt-5'.
+    """
+    if not model:
+        return ""
+    m = model.lower().strip()
+    # laengster passender Prefix gewinnt (damit 'gpt-5-mini' nicht auf 'gpt-5' fallback)
+    best = ""
+    for key in MODEL_PRICING_USD_PER_MTOK:
+        if m == key or m.startswith(key + "-") or m.startswith(key):
+            if len(key) > len(best):
+                best = key
+    return best or m
+
+
 # ===========================================================================
 # FlowDB — Convenience-Wrapper um sqlite3
 # ===========================================================================
@@ -137,6 +226,106 @@ class FlowDB:
         self._conn.commit()
         return cur
 
+    def insert_row(
+        self,
+        table: str,
+        data: dict[str, Any],
+        *,
+        on_conflict: str | None = None,
+    ) -> int | None:
+        """INSERT ueber dict → automatisch aus Schema generierte Spaltenliste.
+
+        Verhindert die Klasse Bugs wie 'N values for M columns', weil die
+        Tupel-Position nicht mehr mit der DDL uebereinstimmt. Der Autor
+        schreibt::
+
+            run.db.insert_row("agent_dcc_results", {
+                "source_id": 42,
+                "rel_path": "...",
+                "Master DCC": "MAA10",
+                "Conf.score DCC (Master)": 0.92,
+                ...
+            })
+
+        Parameter
+        ---------
+        table : str
+            Name der Ziel-Tabelle. Muss existieren.
+        data : dict
+            Keys = Spaltennamen (genau wie in der DDL, inkl. Umlaute/
+            Sonderzeichen). Keys die nicht zur Tabelle gehoeren → ValueError
+            (schuetzt vor Tippfehlern).
+        on_conflict : str | None
+            - None (Default): plain INSERT. Bei Conflict → Exception.
+            - 'replace'     : `INSERT OR REPLACE`.
+            - 'ignore'      : `INSERT OR IGNORE`.
+            - 'update:col1,col2,...': `ON CONFLICT(col1) DO UPDATE SET ...`
+              fuer alle uebrigen Keys (Upsert-Muster).
+
+        Returns
+        -------
+        int | None
+            Die neue rowid (lastrowid) bei echtem INSERT, None bei IGNORE
+            ohne Wirkung.
+        """
+        if not data:
+            raise ValueError("insert_row: data-dict ist leer.")
+
+        # Schema einlesen (gecached waere schoener, aber PRAGMA ist billig)
+        cols_rows = self.query(f'PRAGMA table_info("{table}")')
+        if not cols_rows:
+            raise ValueError(f"insert_row: Tabelle {table!r} existiert nicht.")
+        schema_cols = {r["name"] for r in cols_rows}
+
+        # Validieren: alle Keys muessen in der Tabelle existieren
+        unknown = [k for k in data.keys() if k not in schema_cols]
+        if unknown:
+            raise ValueError(
+                f"insert_row: Unbekannte Spalten fuer Tabelle {table!r}: {unknown}. "
+                f"Bekannt: {sorted(schema_cols)}"
+            )
+
+        keys = list(data.keys())
+        # Spaltennamen in "..." quoten (erlaubt Sonderzeichen/Leerzeichen)
+        col_list = ", ".join(f'"{k}"' for k in keys)
+        placeholders = ", ".join("?" for _ in keys)
+        values = [data[k] for k in keys]
+
+        if on_conflict is None:
+            sql = f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders})'
+        elif on_conflict == "replace":
+            sql = f'INSERT OR REPLACE INTO "{table}" ({col_list}) VALUES ({placeholders})'
+        elif on_conflict == "ignore":
+            sql = f'INSERT OR IGNORE INTO "{table}" ({col_list}) VALUES ({placeholders})'
+        elif on_conflict.startswith("update:"):
+            conflict_cols = [c.strip() for c in on_conflict[len("update:"):].split(",") if c.strip()]
+            if not conflict_cols:
+                raise ValueError(
+                    "insert_row: on_conflict='update:...' benoetigt mindestens "
+                    "eine Conflict-Spalte, z.B. 'update:source_id'."
+                )
+            update_keys = [k for k in keys if k not in conflict_cols]
+            if not update_keys:
+                raise ValueError(
+                    "insert_row: on_conflict='update:...' sinnvoll nur wenn "
+                    "es neben den Conflict-Spalten weitere Spalten gibt."
+                )
+            set_clause = ", ".join(f'"{k}" = excluded."{k}"' for k in update_keys)
+            conflict_list = ", ".join(f'"{c}"' for c in conflict_cols)
+            sql = (
+                f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders}) '
+                f'ON CONFLICT({conflict_list}) DO UPDATE SET {set_clause}'
+            )
+        else:
+            raise ValueError(
+                f"insert_row: on_conflict={on_conflict!r} ungueltig. "
+                "Erlaubt: None, 'replace', 'ignore', 'update:col1,col2,...'."
+            )
+
+        cur = self._conn.execute(sql, values)
+        self._conn.commit()
+        return cur.lastrowid
+
     def close(self) -> None:
         try:
             self._conn.close()
@@ -154,6 +343,7 @@ class _RunMeta:
     """In-Memory-Kopie der agent_flow_runs-Zeile (wird periodisch refresht)."""
     id: int
     flow_name: str
+    title: str | None
     status: str
     config: dict[str, Any]
     total_items: int
@@ -264,6 +454,15 @@ class FlowRun:
         return self._meta.flow_name
 
     @property
+    def title(self) -> str | None:
+        """Menschenlesbarer Titel des Runs (aus agent_flow_runs.title).
+
+        Wird beim `flow_run`-Start gesetzt (z.B. 'Mini-Run 3 PDFs'). Kann
+        `None` sein, wenn der Starter keinen Titel uebergab.
+        """
+        return self._meta.title
+
+    @property
     def project_root(self) -> Path:
         return self._project_root
 
@@ -293,6 +492,10 @@ class FlowRun:
         """Markiert den Run als `running`. Idempotent."""
         if self._started:
             return
+        old_status = self._meta.status
+        # Heartbeat-Spalten werden defensiv gesetzt — falls die Migration 005
+        # noch nicht angewendet wurde, faellt _set_heartbeat_after_start auf
+        # einen ohne-Heartbeat-Pfad zurueck und der Flow laeuft trotzdem.
         self._db.execute(
             """
             UPDATE agent_flow_runs
@@ -302,9 +505,17 @@ class FlowRun:
             """,
             (STATUS_RUNNING, os.getpid(), self._run_id),
         )
+        self._set_heartbeat_after_start()
         self._started = True
         self._refresh_meta(force=True)
         self.log(f"Run gestartet (pid={os.getpid()}, flow={self.flow_name})")
+        # Notification: Disco soll Bescheid wissen, dass der Run jetzt laeuft.
+        # Wenn die Notifications-Tabelle noch nicht existiert, schluckt
+        # _emit_notification das still — der Flow laeuft trotzdem weiter.
+        self._emit_notification(
+            NOTIFICATION_STATUS_CHANGE,
+            extra_context={"old_status": old_status, "new_status": STATUS_RUNNING},
+        )
 
     def finish(self, status: str = STATUS_DONE) -> None:
         """Schliesst den Run ab.
@@ -314,6 +525,7 @@ class FlowRun:
         """
         if status not in (STATUS_DONE, STATUS_FAILED, STATUS_PAUSED, STATUS_CANCELLED):
             raise ValueError(f"Ungueltiger Finish-Status: {status!r}")
+        old_status = self._meta.status
         self._db.execute(
             """
             UPDATE agent_flow_runs
@@ -322,11 +534,34 @@ class FlowRun:
             """,
             (status, self._run_id),
         )
+        # Heartbeat ausschalten (Run ist beendet — kein Heartbeat noetig).
+        self._clear_heartbeat()
         self.log(f"Run abgeschlossen: status={status}")
+        # Meta noch einmal nachladen, damit die Notification den finalen
+        # Stand der Counter sieht.
+        self._refresh_meta(force=True)
+        # Passende Notification feuern. Watcher entscheidet, was er damit
+        # anfaengt (Disco anpingen, Bubble updaten, etc.).
+        if status == STATUS_DONE:
+            self._emit_notification(
+                NOTIFICATION_DONE,
+                extra_context={"old_status": old_status, "new_status": status},
+            )
+        elif status in (STATUS_FAILED, STATUS_CANCELLED):
+            self._emit_notification(
+                NOTIFICATION_FAILED,
+                extra_context={"old_status": old_status, "new_status": status},
+            )
+        else:  # STATUS_PAUSED
+            self._emit_notification(
+                NOTIFICATION_STATUS_CHANGE,
+                extra_context={"old_status": old_status, "new_status": status},
+            )
         self._db.close()
 
     def fail(self, error_msg: str) -> None:
         """Markiert den Run als gescheitert."""
+        old_status = self._meta.status
         self._db.execute(
             """
             UPDATE agent_flow_runs
@@ -335,7 +570,17 @@ class FlowRun:
             """,
             (STATUS_FAILED, error_msg, self._run_id),
         )
+        self._clear_heartbeat()
         self.log(f"Run FAILED: {error_msg}")
+        self._refresh_meta(force=True)
+        self._emit_notification(
+            NOTIFICATION_FAILED,
+            extra_context={
+                "old_status": old_status,
+                "new_status": STATUS_FAILED,
+                "error": error_msg[:500] if error_msg else None,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Item-Verwaltung
@@ -513,6 +758,12 @@ class FlowRun:
                     "UPDATE agent_flow_runs SET done_items = done_items + 1 WHERE id = ?",
                     (self._run_id,),
                 )
+                # Nach jedem done-Item: pruefen, ob Trigger faellig sind
+                # (first_item/second_item/half/heartbeat). Dies ist die
+                # einzige Stelle, an der die Counter-basierten Trigger
+                # feuern koennen — skip() ruft dieselbe Funktion, damit
+                # auch reine Skip-Runs Heartbeats bekommen.
+                self._check_progress_notifications()
                 return True
             except FlowStopped:
                 # Aufrufer will abbrechen — Item als pending zurueckgeben (nicht done, nicht failed)
@@ -547,6 +798,10 @@ class FlowRun:
             "UPDATE agent_flow_runs SET failed_items = failed_items + 1 WHERE id = ?",
             (self._run_id,),
         )
+        # Fehlgeschlagene Items zaehlen fuer first_item/second_item/half/
+        # heartbeat mit — ein fruehes Failed-Item ist vielleicht sogar der
+        # wichtigste Trigger (systematischer Fehler sichtbar machen).
+        self._check_progress_notifications()
         return False
 
     def skip(self, input_ref: str, reason: str = "") -> None:
@@ -571,6 +826,9 @@ class FlowRun:
             "UPDATE agent_flow_runs SET skipped_items = skipped_items + 1 WHERE id = ?",
             (self._run_id,),
         )
+        # Auch skip() zaehlt als Fortschritt — sonst wuerde ein Run, der
+        # ausschliesslich skipped-Items produziert, nie Heartbeats feuern.
+        self._check_progress_notifications()
 
     # ------------------------------------------------------------------
     # Kosten + Budget
@@ -608,6 +866,46 @@ class FlowRun:
                 (self._run_id,),
             )
             self._meta.pause_requested = True
+
+    def add_cost_from_azure_response(
+        self,
+        response: Any,
+        *,
+        model: str | None = None,
+    ) -> tuple[int, int, float]:
+        """Extrahiert usage aus einer Azure-OpenAI-Antwort und bucht die Kosten.
+
+        Ersetzt das wiederkehrende Muster::
+
+            usage = response.usage
+            tokens_in = getattr(usage, "prompt_tokens", 0) if usage else 0
+            tokens_out = getattr(usage, "completion_tokens", 0) if usage else 0
+            # ... (Kostenberechnung vergessen) ...
+
+        Unterstuetzte Response-Formate:
+          - openai.types.chat.ChatCompletion (response.usage.prompt_tokens, ...)
+          - dict-artige Objekte mit 'usage': {'prompt_tokens': ..., 'completion_tokens': ...}
+          - Responses-API mit 'usage': {'input_tokens': ..., 'output_tokens': ...}
+
+        Parameter
+        ---------
+        response : Any
+            Die Antwort vom Azure-OpenAI-Client.
+        model : str | None
+            Modellname fuer die Preisberechnung. Wenn None, versucht die
+            Funktion `response.model` zu lesen. Fallback: 'gpt-5'.
+
+        Returns
+        -------
+        tuple[int, int, float]
+            (tokens_in, tokens_out, eur) — fuer Per-Item-Logging falls der
+            Runner das in seine Ergebnis-Tabelle schreiben will.
+        """
+        tokens_in, tokens_out = _extract_usage(response)
+        used_model = model or getattr(response, "model", None) or "gpt-5"
+        eur = compute_cost_eur(used_model, tokens_in, tokens_out)
+        self.add_cost(eur=eur, tokens_in=tokens_in, tokens_out=tokens_out)
+        return tokens_in, tokens_out, eur
 
     # ------------------------------------------------------------------
     # Control-Signale
@@ -689,9 +987,9 @@ class FlowRun:
     def _load_meta(self) -> _RunMeta:
         row = self._db.query_one(
             """
-            SELECT id, flow_name, status, config_json, total_items, done_items,
-                   failed_items, skipped_items, total_cost_eur,
-                   total_tokens_in, total_tokens_out,
+            SELECT id, flow_name, title, status, config_json,
+                   total_items, done_items, failed_items, skipped_items,
+                   total_cost_eur, total_tokens_in, total_tokens_out,
                    pause_requested, cancel_requested
               FROM agent_flow_runs
              WHERE id = ?
@@ -709,6 +1007,7 @@ class FlowRun:
         return _RunMeta(
             id=row["id"],
             flow_name=row["flow_name"],
+            title=row["title"],
             status=row["status"],
             config=config,
             total_items=row["total_items"],
@@ -734,6 +1033,255 @@ class FlowRun:
             return
         self._meta = self._load_meta()
         self._last_refresh = now
+
+    # ------------------------------------------------------------------
+    # Notifications (Migration 005)
+    # ------------------------------------------------------------------
+    #
+    # Drei Helfer, die das Worker-SDK kennt, der Runner-Autor aber nicht
+    # direkt aufruft:
+    #
+    #   _emit_notification        — INSERT in agent_flow_notifications
+    #   _check_progress_notifications — Trigger-Logik pro Item (first_item,
+    #                                   second_item, half, heartbeat)
+    #   _set_heartbeat_after_start    — initialen next_heartbeat_at setzen
+    #   _clear_heartbeat              — next_heartbeat_at = NULL beim Finish
+    #
+    # Alle Methoden sind defensive: wenn Migration 005 in der Projekt-DB
+    # noch nicht angewendet wurde (next_heartbeat_at-Spalte fehlt, Tabelle
+    # fehlt), schlucken sie die sqlite3.Error und der Flow laeuft weiter.
+
+    def _emit_notification(
+        self,
+        kind: str,
+        extra_context: dict[str, Any] | None = None,
+    ) -> None:
+        """Legt eine Notification in agent_flow_notifications an.
+
+        context_json enthaelt einen minimalen Snapshot (Counter, Status,
+        Kosten). Der Backend-Watcher reichert beim Trigger-Bau mit
+        Live-Daten an (letzte Items, Logs, Flow-README).
+
+        Niemals crashen — Notifications sind Best-Effort.
+        """
+        try:
+            ctx: dict[str, Any] = {
+                "done": self._meta.done_items,
+                "total": self._meta.total_items,
+                "failed": self._meta.failed_items,
+                "skipped": self._meta.skipped_items,
+                "status": self._meta.status,
+                "cost_eur": round(self._meta.total_cost_eur, 6),
+                "tokens_in": self._meta.total_tokens_in,
+                "tokens_out": self._meta.total_tokens_out,
+            }
+            if extra_context:
+                ctx.update(extra_context)
+            self._db.execute(
+                """
+                INSERT INTO agent_flow_notifications (run_id, kind, context_json)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    self._run_id,
+                    kind,
+                    json.dumps(ctx, ensure_ascii=False, default=str),
+                ),
+            )
+        except sqlite3.Error as exc:
+            # Tabelle fehlt oder andere DB-Stoerung — Flow darf nicht
+            # crashen. Fehler in die Log-Datei, aber stumm.
+            try:
+                self.log(f"Notification '{kind}' konnte nicht gespeichert werden: {exc}")
+            except Exception:
+                pass
+
+    def _check_progress_notifications(self) -> None:
+        """Feuert Trigger nach jedem verarbeiteten Item.
+
+        Vier Trigger-Arten:
+          - first_item  : sobald 1 Item fertig ist (done/failed/skipped)
+          - second_item : sobald 2 Items fertig sind
+          - half        : ab total_items >= 5 und completed >= total/2
+          - heartbeat   : wenn next_heartbeat_at erreicht ist
+
+        Jeder Counter-Trigger feuert genau einmal pro Run — die Methode
+        fragt bestehende Notifications ab, um Dopplung zu vermeiden.
+        Heartbeats sind rekurrent mit exponentiellem Backoff
+        (HEARTBEAT_INITIAL_SEC -> Cap HEARTBEAT_MAX_SEC).
+        """
+        try:
+            self._refresh_meta(force=True)
+            completed = (
+                self._meta.done_items
+                + self._meta.failed_items
+                + self._meta.skipped_items
+            )
+            total = self._meta.total_items
+
+            # Bereits gefeuerte Counter-Trigger fuer diesen Run
+            existing = self._db.query(
+                """
+                SELECT kind FROM agent_flow_notifications
+                 WHERE run_id = ?
+                   AND kind IN ('first_item','second_item','half')
+                """,
+                (self._run_id,),
+            )
+            kinds_seen = {row["kind"] for row in existing}
+
+            if completed >= 1 and NOTIFICATION_FIRST_ITEM not in kinds_seen:
+                self._emit_notification(NOTIFICATION_FIRST_ITEM)
+                kinds_seen.add(NOTIFICATION_FIRST_ITEM)
+
+            if completed >= 2 and NOTIFICATION_SECOND_ITEM not in kinds_seen:
+                self._emit_notification(NOTIFICATION_SECOND_ITEM)
+                kinds_seen.add(NOTIFICATION_SECOND_ITEM)
+
+            # 'half' nur bei ausreichend grossen Runs sinnvoll — sonst
+            # ueberlappt es mit first/second (bei total=2: half = first).
+            if (
+                total >= 5
+                and completed * 2 >= total
+                and NOTIFICATION_HALF not in kinds_seen
+            ):
+                self._emit_notification(NOTIFICATION_HALF)
+
+            # Heartbeat-Faelligkeit pruefen
+            hb_row = self._db.query_one(
+                """
+                SELECT next_heartbeat_at, last_heartbeat_interval_sec
+                  FROM agent_flow_runs
+                 WHERE id = ?
+                """,
+                (self._run_id,),
+            )
+            if not hb_row or not hb_row.get("next_heartbeat_at"):
+                return
+
+            # Vergleich als ISO-String ist lexikografisch korrekt, solange
+            # beide Seiten das Format 'YYYY-MM-DD HH:MM:SS' haben.
+            now_row = self._db.query_one("SELECT datetime('now') AS now")
+            now_iso = now_row["now"] if now_row else None
+            if not now_iso or now_iso < hb_row["next_heartbeat_at"]:
+                return
+
+            # Heartbeat ist faellig: Backoff verdoppeln, next_heartbeat_at
+            # aktualisieren, DANN Notification feuern. Reihenfolge wichtig:
+            # falls wir zwischen UPDATE und INSERT crashen, verpassen wir
+            # einen Heartbeat (besser als doppelt feuern).
+            current_interval = int(
+                hb_row.get("last_heartbeat_interval_sec") or HEARTBEAT_INITIAL_SEC
+            )
+            new_interval = min(current_interval * 2, HEARTBEAT_MAX_SEC)
+            self._db.execute(
+                """
+                UPDATE agent_flow_runs
+                   SET last_heartbeat_interval_sec = ?,
+                       next_heartbeat_at = datetime('now', ?)
+                 WHERE id = ?
+                """,
+                (new_interval, f"+{new_interval} seconds", self._run_id),
+            )
+            self._emit_notification(
+                NOTIFICATION_HEARTBEAT,
+                extra_context={
+                    "interval_sec": current_interval,
+                    "next_interval_sec": new_interval,
+                },
+            )
+        except sqlite3.Error as exc:
+            # Progress-Check ist Best-Effort. Alte Projekt-DB ohne
+            # Migration 005 → still schlucken, Flow laeuft weiter.
+            try:
+                self.log(f"Progress-Notification-Check scheiterte: {exc}")
+            except Exception:
+                pass
+
+    def _set_heartbeat_after_start(self) -> None:
+        """Legt den ersten Heartbeat-Tick fest (now + HEARTBEAT_INITIAL_SEC).
+
+        Defensive Variante: wenn die neue Spalte fehlt (Migration 005
+        nicht angewendet), wird der Fehler stumm geschluckt — der Run
+        laeuft dann ohne Heartbeat, aber ohne Abbruch.
+        """
+        try:
+            self._db.execute(
+                """
+                UPDATE agent_flow_runs
+                   SET next_heartbeat_at = datetime('now', ?),
+                       last_heartbeat_interval_sec = ?
+                 WHERE id = ?
+                """,
+                (
+                    f"+{HEARTBEAT_INITIAL_SEC} seconds",
+                    HEARTBEAT_INITIAL_SEC,
+                    self._run_id,
+                ),
+            )
+        except sqlite3.Error:
+            pass
+
+    def _clear_heartbeat(self) -> None:
+        """Schaltet next_heartbeat_at aus (Run ist beendet/pausiert)."""
+        try:
+            self._db.execute(
+                """
+                UPDATE agent_flow_runs
+                   SET next_heartbeat_at = NULL
+                 WHERE id = ?
+                """,
+                (self._run_id,),
+            )
+        except sqlite3.Error:
+            pass
+
+
+# ===========================================================================
+# Usage-Extraktion — tolerant gegenueber verschiedenen SDK-Versionen
+# ===========================================================================
+
+
+def _extract_usage(response: Any) -> tuple[int, int]:
+    """Holt (prompt_tokens, completion_tokens) aus einer Azure-OpenAI-Antwort.
+
+    Unterstuetzt:
+      - openai-Python-SDK >=1.x: response.usage.prompt_tokens / .completion_tokens
+      - Responses-API (preview): response.usage.input_tokens / .output_tokens
+      - Rohes dict aus REST-Aufrufen: {'usage': {...}}
+
+    Gibt (0, 0) zurueck, wenn kein usage-Feld gefunden wird — dann werden
+    0 EUR gebucht (besser als Abbruch mitten im Flow).
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+    if usage is None:
+        return 0, 0
+
+    # Variante 1: Chat Completions (prompt_tokens / completion_tokens)
+    t_in = _get_attr_or_key(usage, "prompt_tokens")
+    t_out = _get_attr_or_key(usage, "completion_tokens")
+    if t_in is not None or t_out is not None:
+        return int(t_in or 0), int(t_out or 0)
+
+    # Variante 2: Responses API (input_tokens / output_tokens)
+    t_in = _get_attr_or_key(usage, "input_tokens")
+    t_out = _get_attr_or_key(usage, "output_tokens")
+    if t_in is not None or t_out is not None:
+        return int(t_in or 0), int(t_out or 0)
+
+    return 0, 0
+
+
+def _get_attr_or_key(obj: Any, name: str) -> Any:
+    """Liefert obj.name (SDK-Objekt) oder obj[name] (dict) oder None."""
+    val = getattr(obj, name, None)
+    if val is not None:
+        return val
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return None
 
 
 # ===========================================================================

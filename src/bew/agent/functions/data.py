@@ -102,12 +102,14 @@ _WORD_RE = re.compile(r"\b([A-Za-z_]+)\b")
 @register(
     name="sqlite_query",
     description=(
-        "Fuehrt eine READ-ONLY SQL-Abfrage (SELECT/WITH) gegen die Projekt-DB aus "
-        "und gibt das Ergebnis als JSON-Array von Objekten zurueck. "
+        "Fuehrt eine READ-ONLY SQL-Abfrage (SELECT/WITH) gegen die Projekt-DB "
+        "(data.db) aus und gibt das Ergebnis als JSON-Array von Objekten zurueck. "
         "Nutze Parameter-Bindings (?) statt String-Konkatenation. "
-        "Das SQLite-Schema kennt u.a.: projects, sources, source_folders, "
-        "documents, document_sp_fields, processing_events, chat_threads, "
-        "chat_messages. Verwende PRAGMA NICHT — nur reine SELECT-Statements."
+        "Kern-Tabellen im Projekt: agent_sources (Registry), "
+        "agent_source_metadata, agent_source_relations, agent_source_scans, "
+        "agent_script_runs. Freie Namespaces fuer eigene Tabellen: "
+        "work_* (temporaer), agent_* (dauerhaft), context_* (Lookup). "
+        "Verwende PRAGMA NICHT — nur reine SELECT-Statements."
     ),
     parameters={
         "type": "object",

@@ -461,80 +461,66 @@ def agent_setup() -> None:
 
 
 @agent_group.command("chat")
-@click.option("--thread-id", type=int, default=None, help="Bestehenden Thread fortsetzen.")
-@click.option("--title", default=None, help="Titel fuer einen neuen Thread.")
 @click.option(
     "--project",
     "project_slug",
-    default=None,
-    help="Disco im Projekt-Sandbox laufen lassen (Slug aus 'disco project list').",
+    required=True,
+    help="Projekt-Slug — jeder Chat ist an ein Projekt gebunden ('disco project list').",
 )
-def agent_chat(thread_id: int | None, title: str | None, project_slug: str | None) -> None:
-    """Startet einen interaktiven Chat im Terminal gegen Disco.
+def agent_chat(project_slug: str) -> None:
+    """Startet den persistenten Chat eines Projekts im Terminal.
 
-    Mit --project laeuft Disco im Sandbox-Modus dieses Projekts:
-    fs_*-Tools sehen nur das Projekt-Verzeichnis, sqlite_*-Tools die Projekt-DB.
+    Jedes Projekt hat genau einen Chat (Migration 006). Dieser Chat wird
+    ueber alle Sessions fortgesetzt — der letzte Foundry-Response-Handle
+    liegt in `project_chat_state`, die Messages in `chat_messages`.
 
-    Nuetzlich fuer Tests ohne Web-UI. Enter sendet, Ctrl+D oder 'exit' beendet.
+    Disco laeuft im Sandbox-Modus des Projekts:
+    fs_*-Tools sehen nur das Projekt-Verzeichnis, sqlite_*-Tools die
+    Projekt-DB, memory_*-Tools .disco/memory/.
+
+    Enter sendet, Ctrl+D oder 'exit' beendet.
     """
     from .agent.core import get_agent_service
     from .chat import repo as chat_repo
     from .workspace import validate_slug
     from .db import connect
 
-    # Projekt aufloesen (slug -> system.db.id)
-    project_id: int | None = None
-    if project_slug:
-        try:
-            project_slug = validate_slug(project_slug)
-        except ValueError as exc:
-            click.echo(f"FEHLER: {exc}", err=True)
-            raise SystemExit(1)
-        c = connect()
-        try:
-            row = c.execute(
-                "SELECT id, name FROM projects WHERE slug = ?", (project_slug,)
-            ).fetchone()
-            if row is None:
-                click.echo(
-                    f"FEHLER: Projekt '{project_slug}' nicht in der system.db. "
-                    f"Mit 'disco project init {project_slug}' anlegen.",
-                    err=True,
-                )
-                raise SystemExit(1)
-            project_id = row["id"]
-            project_name = row["name"]
-        finally:
-            c.close()
+    try:
+        project_slug = validate_slug(project_slug)
+    except ValueError as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
 
-    if thread_id is None:
-        default_title = title or (
-            f"Chat {project_slug}" if project_slug else "CLI-Chat"
+    # Projekt-Existenz pruefen (system.db — fuer Namen) + Workspace-Ordner
+    c = connect()
+    try:
+        row = c.execute(
+            "SELECT id, name FROM projects WHERE slug = ?", (project_slug,)
+        ).fetchone()
+    finally:
+        c.close()
+
+    if row is None:
+        click.echo(
+            f"FEHLER: Projekt '{project_slug}' nicht in der system.db. "
+            f"Mit 'disco project init {project_slug}' anlegen.",
+            err=True,
         )
-        thread = chat_repo.create_thread(
-            title=default_title, project_id=project_id,
-        )
-        thread_id = thread["id"]
-        if project_id:
-            click.echo(
-                f"Neuer Thread: {thread['id']} (\"{thread['title']}\") "
-                f"-> Projekt-Sandbox: {project_name} ({project_slug})"
-            )
-        else:
-            click.echo(
-                f"Neuer Thread: {thread['id']} (\"{thread['title']}\") "
-                f"-> kein Projekt (global)"
-            )
-    else:
-        try:
-            thread = chat_repo.get_thread(thread_id)
-        except KeyError:
-            click.echo(f"FEHLER: Thread {thread_id} nicht gefunden.", err=True)
-            raise SystemExit(1)
-        click.echo(f"Setze Thread {thread['id']} fort ({thread['title']})")
+        raise SystemExit(1)
+    project_name = row["name"]
+
+    state = chat_repo.get_or_create_state(project_slug)
+    tok = int(state.get("token_estimate") or 0)
+    prev = state.get("foundry_response_id")
+    continued = "fortgesetzt" if prev else "neu (leer)"
+
+    click.echo(
+        f"Disco-Chat: {project_name} ({project_slug}) — {continued}\n"
+        f"Token-Fill (geschaetzt): {tok:,}\n"
+        "Chatte. Ctrl+D oder 'exit' zum Beenden.\n"
+    )
 
     svc = get_agent_service()
-    click.echo("Chatte. Leere Zeile = senden ohne Nachricht ueberspringen. Ctrl+D zum Beenden.\n")
 
     while True:
         try:
@@ -551,7 +537,7 @@ def agent_chat(thread_id: int | None, title: str | None, project_slug: str | Non
         click.echo("\nAgent > ", nl=False)
         any_text = False
         try:
-            for event in svc.run_turn(thread_id, user_text):
+            for event in svc.run_turn(project_slug, user_text):
                 et = event.type
                 if et == "text_delta":
                     click.echo(event.text, nl=False)
@@ -571,10 +557,15 @@ def agent_chat(thread_id: int | None, title: str | None, project_slug: str | Non
                     click.echo(f"\n  FEHLER: {event.message}", err=True, nl=False)
                 elif et == "done":
                     click.echo("")
+                    parts = []
                     if event.tokens_input or event.tokens_output:
-                        click.echo(
-                            f"  (Tokens: in={event.tokens_input} out={event.tokens_output})"
+                        parts.append(
+                            f"Tokens: in={event.tokens_input} out={event.tokens_output}"
                         )
+                    if event.total_token_estimate is not None:
+                        parts.append(f"Chat-Fill: {event.total_token_estimate:,}")
+                    if parts:
+                        click.echo("  (" + " | ".join(parts) + ")")
         except Exception as exc:
             click.echo(f"\nAgent-Fehler: {exc}", err=True)
 
@@ -583,22 +574,41 @@ def agent_chat(thread_id: int | None, title: str | None, project_slug: str | Non
         click.echo()
 
 
-@agent_group.command("threads")
-@click.option("--all", "include_archived", is_flag=True, default=False, help="Auch archivierte Threads.")
-def agent_threads(include_archived: bool) -> None:
-    """Listet alle Chat-Threads auf."""
+@agent_group.command("chat-state")
+@click.option(
+    "--project",
+    "project_slug",
+    required=True,
+    help="Projekt-Slug.",
+)
+def agent_chat_state(project_slug: str) -> None:
+    """Zeigt den State des Projekt-Chats (Token-Fill, letzte Response-ID, Kompression)."""
     from .chat import repo as chat_repo
-    threads = chat_repo.list_threads(include_archived=include_archived)
-    if not threads:
-        click.echo("Keine Threads. Mit 'bew agent chat' einen neuen starten.")
+    from .workspace import validate_slug
+
+    try:
+        project_slug = validate_slug(project_slug)
+    except ValueError as exc:
+        click.echo(f"FEHLER: {exc}", err=True)
+        raise SystemExit(1)
+
+    state = chat_repo.get_state(project_slug)
+    if state is None:
+        click.echo(f"Projekt '{project_slug}' hat noch keinen Chat-State "
+                   f"(noch nie gechattet).")
         return
-    click.echo(f"{'ID':<5} {'Status':<10} {'Titel':<40} Modell")
-    click.echo("-" * 80)
-    for t in threads:
-        click.echo(
-            f"{t['id']:<5} {t['status']:<10} "
-            f"{(t['title'] or '')[:40]:<40} {t['model_used']}"
-        )
+    msgs = chat_repo.list_active_messages(project_slug)
+    all_msgs = chat_repo.list_all_messages(project_slug)
+    click.echo(f"Chat-State: {project_slug}")
+    click.echo(f"  Modell            : {state['model_used']}")
+    click.echo(f"  Token-Fill        : {int(state['token_estimate'] or 0):,}")
+    click.echo(f"  Foundry-Response  : {state.get('foundry_response_id') or '-'}")
+    click.echo(f"  Letzte Kompression: {state.get('last_compaction_at') or '-'}")
+    click.echo(f"  Messages aktiv    : {len(msgs)}")
+    click.echo(f"  Messages total    : {len(all_msgs)} "
+               f"(komprimiert: {len(all_msgs) - len(msgs)})")
+    click.echo(f"  Erstellt          : {state['created_at']}")
+    click.echo(f"  Aktualisiert      : {state['updated_at']}")
 
 
 # ---------------------------------------------------------------------------

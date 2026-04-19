@@ -23,6 +23,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -268,6 +269,21 @@ def create_run(
         )
 
     db_path = project_root / "data.db"
+    # Sicherheitsnetz: Template-Migrationen anwenden, falls neue dazu-
+    # gekommen sind (z.B. 005_flow_notifications). Der Server-Lifespan
+    # macht das beim Start auch — aber CLI-Aufrufe laufen ohne Lifespan,
+    # und wir wollen nicht riskieren, dass ein Runner in eine DB mit
+    # veraltetem Schema schreibt.
+    try:
+        from ..workspace import apply_project_db_migrations
+
+        apply_project_db_migrations(db_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Projekt-Migrationen fuer %s konnten nicht angewendet werden: %s",
+            db_path,
+            exc,
+        )
     conn = _connect(db_path)
     try:
         cfg_json = json.dumps(config, ensure_ascii=False) if config else None
@@ -405,12 +421,24 @@ def list_runs(
     status: str | None = None,
     limit: int = 50,
 ) -> list[RunInfo]:
-    """Listet Runs in einem Projekt (neueste zuerst)."""
+    """Listet Runs in einem Projekt (neueste zuerst).
+
+    Gibt eine leere Liste zurueck, wenn das Projekt keine data.db hat
+    oder die Flow-Migration (004) noch nicht angewendet wurde.
+    """
+    import sqlite3
+
     db_path = project_root / "data.db"
     if not db_path.exists():
         return []
     conn = _connect(db_path)
     try:
+        # Phase-1-Projekte ohne Flow-Migration → leer statt 500
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_flow_runs'"
+        ).fetchone()
+        if not has_table:
+            return []
         sql = """
             SELECT id, flow_name, title, status, worker_pid, config_json,
                    total_items, done_items, failed_items, skipped_items,
@@ -438,14 +466,50 @@ def list_runs(
 
 
 def request_pause(project_root: Path, run_id: int) -> RunInfo:
-    """Signalisiert dem Worker: pausiere beim naechsten Item."""
+    """Signalisiert dem Worker: pausiere beim naechsten Item.
+
+    Falls der Worker bereits tot ist (Zombie-Run mit status='running'/'paused'
+    aber worker_pid nicht mehr im System), wird der Run **nicht** auf
+    'cancelled' oder 'failed' gesetzt — eine Pause-Anfrage ist semantisch
+    defensiv und soll keinen Status-Uebergang erzwingen. Das Cleanup ist
+    Aufgabe von `request_cancel` / `kill_run`.
+    """
     _set_control(project_root, run_id, "pause_requested", 1)
     return get_run(project_root, run_id)
 
 
 def request_cancel(project_root: Path, run_id: int) -> RunInfo:
-    """Signalisiert dem Worker: brich beim naechsten Item ab."""
+    """Signalisiert dem Worker: brich beim naechsten Item ab.
+
+    Wenn der Worker-Prozess nicht mehr laeuft (Zombie-Run), wird der Run
+    **direkt** auf Status 'cancelled' gesetzt — sonst wuerde `cancel_requested=1`
+    auf einer leeren Seite stehen und der Run liefe in der UI ewig weiter.
+    """
+    run = get_run(project_root, run_id)
     _set_control(project_root, run_id, "cancel_requested", 1)
+
+    # Zombie-Erkennung: Status noch aktiv, aber Worker tot
+    active_status = run.status in ("running", "paused", "pending")
+    worker_dead = (not run.worker_pid) or (not _pid_alive(run.worker_pid))
+    if active_status and worker_dead:
+        db_path = project_root / "data.db"
+        conn = _connect(db_path)
+        try:
+            conn.execute(
+                """UPDATE agent_flow_runs
+                      SET status = 'cancelled',
+                          finished_at = COALESCE(finished_at, datetime('now')),
+                          error = COALESCE(error, ?)
+                    WHERE id = ? AND status NOT IN ('done','cancelled','failed')""",
+                (
+                    "Cancel auf bereits beendeten Worker — Status-Cleanup.",
+                    run_id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     return get_run(project_root, run_id)
 
 
@@ -553,11 +617,56 @@ def kill_run(project_root: Path, run_id: int) -> bool:
             conn.close()
         return False
 
+    # Zuerst Cancel-Flag setzen, damit der Worker bei naechster Pruefung
+    # weiss, dass er terminieren soll. Wichtig fuer den Fall, dass der
+    # Worker gerade in einem pausierten Sleep-Loop steckt und der SIGTERM-
+    # Handler die DB nicht mehr aktualisieren kann.
+    _set_control(project_root, run_id, "cancel_requested", 1)
+
     try:
         os.kill(run.worker_pid, signal.SIGTERM)
     except OSError as exc:
         logger.warning("SIGTERM fehlgeschlagen: %s", exc)
 
-    # Kurz warten, dann status nachziehen — runner_host setzt in der
-    # Regel selbst auf cancelled bei SIGTERM (try/except um runpy).
+    # Kurz warten, dass der Worker sauber runterfaehrt (eigener
+    # SIGTERM-Handler setzt dann status='cancelled'). Zusaetzlich per
+    # waitpid reapen, damit ein Zombie-Prozess nicht als "aktiv" zaehlt.
+    terminated = False
+    for _ in range(20):
+        try:
+            reaped_pid, _status = os.waitpid(run.worker_pid, os.WNOHANG)
+            if reaped_pid == run.worker_pid:
+                terminated = True
+                break
+        except ChildProcessError:
+            # Prozess gehoert nicht zu uns (anderer Uvicorn-Worker?)
+            # — per kill(0)-Probe pruefen.
+            if not _pid_alive(run.worker_pid):
+                terminated = True
+                break
+        except OSError:
+            break
+        time.sleep(0.1)
+
+    if not terminated and not _pid_alive(run.worker_pid):
+        terminated = True
+
+    # Zombie-Schutz: Wenn der Prozess weg ist, der DB-Status aber nicht
+    # mehr aktualisiert wurde (z. B. weil der Worker im Sleep stand),
+    # ziehen wir hier auf 'cancelled' nach.
+    if terminated:
+        db_path = project_root / "data.db"
+        conn = _connect(db_path)
+        try:
+            conn.execute(
+                """UPDATE agent_flow_runs
+                      SET status = 'cancelled',
+                          finished_at = COALESCE(finished_at, datetime('now')),
+                          error = COALESCE(error, 'Worker per SIGTERM beendet.')
+                    WHERE id = ? AND status NOT IN ('done','cancelled','failed')""",
+                (run_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
     return True
