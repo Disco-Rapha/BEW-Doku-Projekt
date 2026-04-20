@@ -3,7 +3,7 @@
 Seit Migration 006 ist jeder Chat an genau ein Projekt gebunden
 (`project_chat_state.project_slug`). Wenn ein Turn laeuft, wird der Slug
 hier per ContextVar gesetzt — Tools lesen ihn ab und scopen ihren Zugriff
-auf dieses Projekt (Verzeichnis, data.db, .disco/memory/).
+auf dieses Projekt (Verzeichnis, data.db, Memory-Dateien im Projekt-Root).
 
 Implementierung via `contextvars.ContextVar`, damit parallele AgentService-
 Aufrufe (z.B. zwei Browser-Tabs gleichzeitig) sich gegenseitig nicht stoeren.

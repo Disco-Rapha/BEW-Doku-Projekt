@@ -1,24 +1,35 @@
-"""Memory-Bank-Tools: strukturiertes Projekt-Gedaechtnis.
+"""Memory-Tools: Discos Projekt-Gedaechtnis (README + NOTES + DISCO).
 
-Pro Projekt existiert ein Ordner `<projekt>/.disco/memory/` mit dem
-Cline-inspirierten Memory-Bank-Schema (MEMORY.md als Index, activeContext.md
-und progress.md als Working-Triad, systemPatterns/techContext/glossary
-on-demand, decisions/ADR-NNN-*.md append-only).
+Drei Dateien im Projekt-Root bilden das vollstaendige Langzeit-Gedaechtnis:
 
-Diese Tools sind die **einzige** Schreib-API fuer diese Dateien — fs_write
-darf hier nicht hinein. Damit ist das Memory-Protokoll (Read-before-Write,
-Snapshot vs. Append, ADR-Disziplin) verifizierbar.
+    <projekt>/
+    ├── README.md   ← Der Nutzer pflegt den Projekt-Kontext. Disco darf
+    │                 ergaenzen/korrigieren (mit Ansage), aber die Inhalte
+    │                 "gehoeren" dem Nutzer.
+    ├── NOTES.md    ← Discos chronologisches Logbuch. Append-only mit
+    │                 Timestamp-Headern. Wird NIE ueberschrieben.
+    └── DISCO.md    ← Discos destilliertes Arbeitsgedaechtnis. Konventionen,
+                      Tabellen-Namen, Lookup-Pfade, Entscheidungen, Begriffe.
+                      Darf gezielt gepflegt werden (write oder append).
+
+Warum diese drei und nicht mehr? Der Cline-inspirierte Bank-Ansatz mit
+sechs Dateien plus ADR-Verzeichnis war zu formal — der Nutzer schrieb
+Wissen doppelt (in Notes UND in Memory-Bank) oder es verteilte sich so,
+dass Disco nach einer Kompression nicht mehr wusste wo was steht. Drei
+klare Rollen (User-Briefing / Chronik / Destillat) sind eindeutig und
+folgen dem CLAUDE.md-Muster von Claude Code.
 
 Sandbox:
-  - Alle Operationen arbeiten auf dem aktiven Projekt (context.get_project_root()).
-  - Pfad-Traversal ist ausgeschlossen: relative Pfade mit .. oder absolute
-    Pfade werden abgelehnt.
-  - Nur .md-Dateien und das `decisions/`-Unterverzeichnis sind erlaubt.
+  - Alle Operationen arbeiten auf dem aktiven Projekt-Root
+    (context.get_project_root()).
+  - Whitelist erzwungen: Nur README.md, NOTES.md, DISCO.md sind
+    adressierbar. fs_write auf diese Pfade bleibt technisch moeglich,
+    aber die Memory-Tools sind der dokumentierte Weg mit
+    Atomic-Write-Garantie und Append-Semantik.
 """
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,40 +39,28 @@ from . import register
 
 
 # ---------------------------------------------------------------------------
-# Konstanten
+# Whitelist
 # ---------------------------------------------------------------------------
 
-# Erlaubte Dateien in .disco/memory/ (ausserhalb decisions/)
-MEMORY_FILES: tuple[str, ...] = (
-    "MEMORY.md",
-    "activeContext.md",
-    "progress.md",
-    "systemPatterns.md",
-    "techContext.md",
-    "glossary.md",
-)
+# Alle drei sind lesbar
+READABLE_FILES: tuple[str, ...] = ("README.md", "NOTES.md", "DISCO.md")
 
-# Dateien, die NICHT ueber memory_write ueberschrieben werden duerfen.
-# decisions/ sind append-only (nur memory_append_adr), ADR-001 ist
-# Geschichte und bleibt unveraenderlich.
-WRITE_PROTECTED: tuple[str, ...] = (
-    # nichts global — die decisions/-Policy wird ueber Pfad-Prefix erzwungen
-)
+# README und DISCO duerfen ueberschrieben werden (Snapshot-Charakter).
+# NOTES ist append-only — es ist das chronologische Logbuch.
+WRITABLE_FILES: tuple[str, ...] = ("README.md", "DISCO.md")
 
-MEMORY_SUBDIR = ".disco/memory"
-DECISIONS_SUBDIR = "decisions"
-
-_ADR_FILENAME_RE = re.compile(r"ADR-(\d{3})-[a-z0-9-]+\.md$")
-_SLUG_NONALNUM = re.compile(r"[^a-z0-9]+")
+# NOTES und DISCO koennen angehaengt werden. README wird nicht angehaengt
+# (dort pflegt der Nutzer eine strukturierte Seite, Anhaengen zerstoert die Form).
+APPENDABLE_FILES: tuple[str, ...] = ("NOTES.md", "DISCO.md")
 
 
 # ---------------------------------------------------------------------------
-# Helfer: Pfad-Aufloesung + Sicherheit
+# Helfer
 # ---------------------------------------------------------------------------
 
 
 def _require_project_root() -> Path:
-    """Gibt das aktive Projekt-Root zurueck, wirft sonst RuntimeError."""
+    """Liefert das aktive Projekt-Root, sonst RuntimeError."""
     root = get_project_root()
     if root is None:
         raise RuntimeError(
@@ -72,55 +71,36 @@ def _require_project_root() -> Path:
     return root
 
 
-def _memory_root() -> Path:
-    """Absoluter Pfad zu <projekt>/.disco/memory/."""
-    return _require_project_root() / MEMORY_SUBDIR
+def _resolve(file: str, *, allowed: tuple[str, ...]) -> Path:
+    """Normalisiert einen Dateinamen gegen die Whitelist.
 
-
-def _resolve_memory_path(rel: str) -> Path:
-    """Normalisiert einen relativen Pfad unterhalb .disco/memory/.
-
-    Schutzmassnahmen:
-      - Keine absoluten Pfade
-      - Keine '..'-Komponenten (Traversal)
-      - Muss eine .md-Datei sein
-      - Resolved-Pfad muss unter memory_root bleiben
+    Nur reine Dateinamen (keine Pfade, keine '..'). Die Whitelist bildet
+    die Sandbox — wir muessen also nicht zusaetzlich resolve() gegen das
+    Root pruefen, solange der Name aus der Whitelist stammt.
     """
-    if not rel or not isinstance(rel, str):
+    if not file or not isinstance(file, str):
         raise ValueError("file darf nicht leer sein.")
-
-    # Absolut-Pfade, Windows-Backslashes, parent-Traversal alle raus
-    if rel.startswith("/") or rel.startswith("\\"):
+    name = file.strip()
+    # Keine Pfad-Komponenten erlaubt
+    if "/" in name or "\\" in name or ".." in name or name.startswith("."):
         raise ValueError(
-            f"Absolute Pfade nicht erlaubt: {rel!r}. Gib einen Pfad relativ "
-            "zu .disco/memory/ an (z.B. 'activeContext.md' oder "
-            "'decisions/ADR-007-xyz.md')."
+            f"Nur reine Dateinamen erlaubt, keine Pfade: {file!r}. "
+            f"Erlaubt: {list(allowed)}."
         )
-    rel_norm = rel.replace("\\", "/")
-    parts = [p for p in rel_norm.split("/") if p and p != "."]
-    if any(p == ".." for p in parts):
-        raise ValueError(f"'..' im Pfad nicht erlaubt: {rel!r}.")
-
-    if not rel_norm.endswith(".md"):
-        raise ValueError(f"Nur .md-Dateien erlaubt: {rel!r}.")
-
-    root = _memory_root()
-    full = (root / rel_norm).resolve()
-
-    # Nach resolve() muss full noch unter root bleiben.
-    try:
-        full.relative_to(root.resolve())
-    except ValueError as exc:
+    if name not in allowed:
         raise ValueError(
-            f"Pfad zeigt ausserhalb .disco/memory/: {rel!r}"
-        ) from exc
+            f"Datei nicht in der Whitelist fuer diese Operation: {file!r}. "
+            f"Erlaubt: {list(allowed)}."
+        )
+    return _require_project_root() / name
 
-    return full
 
-
-def _is_decision_path(rel: str) -> bool:
-    rel_norm = rel.replace("\\", "/")
-    return rel_norm.startswith(f"{DECISIONS_SUBDIR}/")
+def _atomic_write(target: Path, content: str) -> None:
+    """Schreibt atomar via tmp+rename — keine halben Dateien bei Crash."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(target)
 
 
 # ---------------------------------------------------------------------------
@@ -131,20 +111,19 @@ def _is_decision_path(rel: str) -> bool:
 @register(
     name="memory_read",
     description=(
-        "Liest eine Memory-Datei aus dem aktiven Projekt (.disco/memory/). "
-        "Erlaubt sind MEMORY.md, activeContext.md, progress.md, "
-        "systemPatterns.md, techContext.md, glossary.md, sowie Dateien unter "
-        "decisions/ADR-NNN-*.md. Wenn die Datei nicht existiert, wird "
-        "exists=false zurueckgegeben."
+        "Liest eine der drei Memory-Dateien des aktiven Projekts: "
+        "README.md (Projekt-Briefing des Nutzers), NOTES.md (chronologisches "
+        "Logbuch) oder DISCO.md (destilliertes Arbeitsgedaechtnis). "
+        "Existiert die Datei nicht, wird exists=false zurueckgegeben."
     ),
     parameters={
         "type": "object",
         "properties": {
             "file": {
                 "type": "string",
+                "enum": list(READABLE_FILES),
                 "description": (
-                    "Relativer Pfad unterhalb .disco/memory/, z.B. "
-                    "'activeContext.md' oder 'decisions/ADR-003-sandbox.md'."
+                    "Dateiname im Projekt-Root. README.md, NOTES.md oder DISCO.md."
                 ),
             },
         },
@@ -153,7 +132,7 @@ def _is_decision_path(rel: str) -> bool:
     returns="{file, exists, content, size_bytes, line_count}",
 )
 def _memory_read(*, file: str) -> dict[str, Any]:
-    path = _resolve_memory_path(file)
+    path = _resolve(file, allowed=READABLE_FILES)
     if not path.exists():
         return {
             "file": file,
@@ -180,22 +159,21 @@ def _memory_read(*, file: str) -> dict[str, Any]:
 @register(
     name="memory_write",
     description=(
-        "Schreibt/ueberschreibt eine Memory-Datei im aktiven Projekt. "
-        "NUR erlaubt fuer MEMORY.md, activeContext.md, progress.md, "
-        "systemPatterns.md, techContext.md, glossary.md. Dateien unter "
-        "decisions/ sind append-only und muessen ueber memory_append_adr "
-        "angelegt werden. "
-        "WICHTIG: Vorher memory_read aufrufen — Blind-Overwrites sind verboten."
+        "Ueberschreibt README.md oder DISCO.md des aktiven Projekts "
+        "vollstaendig (atomar, tmp+rename). NOTES.md kann NICHT "
+        "ueberschrieben werden — es ist das chronologische Logbuch, "
+        "dafuer memory_append nutzen. "
+        "WICHTIG: Vorher memory_read aufrufen — Blind-Overwrites sind "
+        "verboten. Bei README.md: nur nach Ruecksprache mit dem Nutzer "
+        "ueberschreiben, das ist primaer seine Datei."
     ),
     parameters={
         "type": "object",
         "properties": {
             "file": {
                 "type": "string",
-                "description": (
-                    "Relativer Pfad, z.B. 'activeContext.md'. Keine "
-                    "decisions/-Pfade (dafuer memory_append_adr)."
-                ),
+                "enum": list(WRITABLE_FILES),
+                "description": "README.md oder DISCO.md.",
             },
             "content": {
                 "type": "string",
@@ -209,31 +187,9 @@ def _memory_read(*, file: str) -> dict[str, Any]:
 def _memory_write(*, file: str, content: str) -> dict[str, Any]:
     if not isinstance(content, str):
         raise ValueError("content muss ein String sein.")
-
-    if _is_decision_path(file):
-        raise ValueError(
-            "decisions/-Dateien sind append-only. Nutze memory_append_adr "
-            "fuer neue ADRs. Bestehende ADRs bleiben unveraenderlich."
-        )
-
-    # Nur die whitelisted Flat-Dateien erlauben
-    rel_norm = file.replace("\\", "/")
-    if rel_norm not in MEMORY_FILES:
-        raise ValueError(
-            f"memory_write erlaubt nur die Standard-Dateien {list(MEMORY_FILES)}. "
-            f"Fuer ADRs nutze memory_append_adr."
-        )
-
-    path = _resolve_memory_path(file)
+    path = _resolve(file, allowed=WRITABLE_FILES)
     created = not path.exists()
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Atomisch schreiben: erst in tmp, dann rename. Verhindert halbe
-    # Dateien bei Crash mitten im write().
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.replace(path)
-
+    _atomic_write(path, content)
     return {
         "file": file,
         "bytes_written": len(content.encode("utf-8")),
@@ -242,165 +198,103 @@ def _memory_write(*, file: str, content: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# memory_list
+# memory_append
 # ---------------------------------------------------------------------------
 
 
 @register(
-    name="memory_list",
+    name="memory_append",
     description=(
-        "Listet alle Dateien unter .disco/memory/ des aktiven Projekts "
-        "(inkl. decisions/ADR-*.md). Liefert Pfad, Groesse, Zeilenzahl "
-        "und letzte Aenderung — ideal als Uebersicht nach Kompression "
-        "oder beim Session-Start."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {},
-        "required": [],
-    },
-    returns="{files: [{path, size_bytes, line_count, modified_at}], next_adr_number}",
-)
-def _memory_list() -> dict[str, Any]:
-    root = _memory_root()
-    if not root.exists():
-        return {"files": [], "next_adr_number": 1}
-
-    files: list[dict[str, Any]] = []
-    for p in sorted(root.rglob("*.md")):
-        rel = p.relative_to(root).as_posix()
-        st = p.stat()
-        content = p.read_text(encoding="utf-8")
-        files.append({
-            "path": rel,
-            "size_bytes": st.st_size,
-            "line_count": content.count("\n") + (0 if content.endswith("\n") else 1),
-            "modified_at": datetime.fromtimestamp(st.st_mtime).isoformat(
-                timespec="seconds"
-            ),
-        })
-
-    # Naechste ADR-Nummer berechnen (max existierend + 1)
-    max_num = 0
-    decisions_dir = root / DECISIONS_SUBDIR
-    if decisions_dir.exists():
-        for p in decisions_dir.glob("ADR-*.md"):
-            m = _ADR_FILENAME_RE.search(p.name)
-            if m:
-                num = int(m.group(1))
-                if num > max_num:
-                    max_num = num
-
-    return {
-        "files": files,
-        "next_adr_number": max_num + 1,
-    }
-
-
-# ---------------------------------------------------------------------------
-# memory_append_adr
-# ---------------------------------------------------------------------------
-
-
-@register(
-    name="memory_append_adr",
-    description=(
-        "Legt eine neue ADR-Datei in .disco/memory/decisions/ an. "
-        "Append-only: einmal geschrieben, bleibt sie unveraendert. "
-        "Die naechste ADR-Nummer wird automatisch vergeben. "
-        "Nutze das Tool fuer jede wesentliche Architektur-Entscheidung."
+        "Haengt einen Abschnitt an NOTES.md oder DISCO.md an. "
+        "NOTES.md: automatischer '## YYYY-MM-DD HH:MM:SS'-Header wird "
+        "vorangestellt (chronologisches Logbuch). "
+        "DISCO.md: falls heading gesetzt, wird '## <heading>' vorangestellt; "
+        "sonst wird der Text direkt angehaengt. "
+        "Legt Datei an, falls sie noch nicht existiert."
     ),
     parameters={
         "type": "object",
         "properties": {
-            "title": {
+            "file": {
+                "type": "string",
+                "enum": list(APPENDABLE_FILES),
+                "description": "NOTES.md oder DISCO.md.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Markdown-Text, der angehaengt werden soll.",
+            },
+            "heading": {
                 "type": "string",
                 "description": (
-                    "Kurztitel der Entscheidung, 3-10 Worte. Wird zum "
-                    "Datei-Slug (lowercase, dash-separated) umgewandelt."
-                ),
-            },
-            "context": {
-                "type": "string",
-                "description": (
-                    "Kontext: welche Situation, welche Constraints, was "
-                    "war der Ausloeser der Entscheidung?"
-                ),
-            },
-            "decision": {
-                "type": "string",
-                "description": "Was wurde entschieden? Konkrete Formulierung.",
-            },
-            "consequences": {
-                "type": "string",
-                "description": (
-                    "Folgen — positive wie negative. Was wird dadurch moeglich? "
-                    "Welche Trade-offs wurden akzeptiert?"
+                    "Optionale H2-Ueberschrift (ohne '## '). Nur fuer "
+                    "DISCO.md relevant — bei NOTES.md wird immer ein "
+                    "Timestamp-Header gesetzt, heading wird dort "
+                    "zusaetzlich als H3 unter dem Timestamp eingefuegt."
                 ),
             },
         },
-        "required": ["title", "context", "decision", "consequences"],
+        "required": ["file", "content"],
     },
-    returns="{path, number, created_at}",
+    returns="{file, appended_bytes, total_bytes, created}",
 )
-def _memory_append_adr(
+def _memory_append(
     *,
-    title: str,
-    context: str,
-    decision: str,
-    consequences: str,
+    file: str,
+    content: str,
+    heading: str | None = None,
 ) -> dict[str, Any]:
-    title = (title or "").strip()
-    if not title:
-        raise ValueError("title darf nicht leer sein.")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("content darf nicht leer sein.")
 
-    # Slug aus Titel
-    slug = _SLUG_NONALNUM.sub("-", title.lower()).strip("-")
-    slug = re.sub(r"-{2,}", "-", slug)
-    if not slug:
-        slug = "untitled"
+    path = _resolve(file, allowed=APPENDABLE_FILES)
+    created = not path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Naechste Nummer finden
-    decisions_dir = _memory_root() / DECISIONS_SUBDIR
-    decisions_dir.mkdir(parents=True, exist_ok=True)
+    if created:
+        # Leere Template-Zeile, damit die erste Append-Blase sauber sitzt.
+        # Beim NOTES-Fall kuemmert sich der Append-Code um den Header.
+        if file == "NOTES.md":
+            initial = "# Projekt-Notizen\n\n"
+        elif file == "DISCO.md":
+            initial = "# DISCO.md\n\n"
+        else:
+            initial = ""
+        path.write_text(initial, encoding="utf-8")
 
-    max_num = 0
-    for p in decisions_dir.glob("ADR-*.md"):
-        m = _ADR_FILENAME_RE.search(p.name)
-        if m:
-            num = int(m.group(1))
-            if num > max_num:
-                max_num = num
-    next_num = max_num + 1
+    block = _build_append_block(file=file, content=content, heading=heading)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(block)
 
-    filename = f"ADR-{next_num:03d}-{slug}.md"
-    target = decisions_dir / filename
-    if target.exists():
-        # Praktisch unmoeglich durch Nummern-Berechnung, aber defensiv.
-        raise RuntimeError(f"ADR existiert bereits: {filename}")
-
-    body = (
-        f"# ADR-{next_num:03d} — {title}\n"
-        f"\n"
-        f"**Datum:** {datetime.now().strftime('%Y-%m-%d')}\n"
-        f"\n"
-        f"## Context\n"
-        f"\n"
-        f"{context.strip()}\n"
-        f"\n"
-        f"## Decision\n"
-        f"\n"
-        f"{decision.strip()}\n"
-        f"\n"
-        f"## Consequences\n"
-        f"\n"
-        f"{consequences.strip()}\n"
-    )
-    target.write_text(body, encoding="utf-8")
-
-    rel = target.relative_to(_memory_root()).as_posix()
     return {
-        "path": rel,
-        "number": next_num,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "file": file,
+        "appended_bytes": len(block.encode("utf-8")),
+        "total_bytes": path.stat().st_size,
+        "created": created,
     }
+
+
+def _build_append_block(
+    *,
+    file: str,
+    content: str,
+    heading: str | None,
+) -> str:
+    """Erzeugt den anzuhaengenden Textblock.
+
+    NOTES.md: immer Timestamp-H2, heading optional als H3 darunter.
+    DISCO.md: heading optional als H2, Text direkt.
+    """
+    body = content.rstrip() + "\n"
+    if file == "NOTES.md":
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        parts = [f"\n\n---\n\n## {ts}"]
+        if heading and heading.strip():
+            parts.append(f"\n\n### {heading.strip()}")
+        parts.append(f"\n\n{body}")
+        return "".join(parts)
+
+    # DISCO.md (weitere APPENDABLE_FILES koennten hier aehnlich behandelt werden)
+    if heading and heading.strip():
+        return f"\n\n## {heading.strip()}\n\n{body}"
+    return f"\n\n{body}"

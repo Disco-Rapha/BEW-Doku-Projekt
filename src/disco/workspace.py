@@ -4,19 +4,23 @@ Ein Projekt im Disco-Workspace ist ein Verzeichnis unter
 `<workspace>/projects/<slug>/` mit einer festen Struktur:
 
     <slug>/
-    ├── README.md          ← Du editierst: Worum geht's?
-    ├── NOTES.md           ← Disco fuehrt fort: chronologisches Logbuch
+    ├── README.md          ← Der Nutzer pflegt: Projekt-Briefing (Ziel,
+    │                        Auftraggeber, Frist, Ansprechpartner)
+    ├── NOTES.md           ← Disco fuehrt chronologisch fort (append-only)
+    ├── DISCO.md           ← Discos destilliertes Arbeitsgedaechtnis
+    │                        (Konventionen, Tabellen, Lookups, Entscheidungen)
     ├── sources/           ← Arbeitsdokumente (zu bearbeitendes Material)
     ├── context/           ← Arbeitsgrundlagen (Normen, Kataloge, Richtlinien)
     │   └── _manifest.md   ← Agent-gepflegte Uebersicht aller Kontext-Dateien
-    ├── work/              ← Discos Arbeitsraum
+    ├── work/              ← Discos Arbeitsraum (Skripte, Zwischenstaende)
     ├── exports/           ← Endprodukte (nicht ueberschreiben)
     ├── data.db            ← Projekt-DB (work_*/agent_*/context_*-Tabellen)
-    └── .disco/            ← Discos Hirn fuer dieses Projekt
-        ├── memory.md      ← Faustregeln, dauerhafte Erkenntnisse
-        ├── plans/         ← aktive Aufgaben-Plaene
-        ├── sessions/      ← Session-Zusammenfassungen
-        └── local-skills/  ← optional projekt-spezifische Skills
+    └── .disco/            ← Internes (Plaene, Sessions, Extrakte, Summaries)
+        ├── plans/
+        ├── sessions/
+        ├── context-extracts/
+        ├── context-summaries/
+        └── local-skills/
 
 Parallel wird ein Eintrag in der zentralen `projects`-Tabelle der
 system.db angelegt, damit das Projekt im UI/CLI auftaucht.
@@ -85,45 +89,54 @@ PROJECT_SUBDIRS: tuple[str, ...] = (
     ".disco/local-skills",
     ".disco/context-extracts",
     ".disco/context-summaries",
-    ".disco/memory",
-    ".disco/memory/decisions",
 )
 
 
 def _readme_template(name: str, slug: str) -> str:
+    """README.md — primaer vom Nutzer gepflegtes Projekt-Briefing.
+
+    Disco liest es beim Session-Start, darf es bei Rueckfrage auch
+    updaten (memory_write), aber die Inhalte "gehoeren" dem Nutzer.
+    Wenn das Template leer ist, fragt Disco beim Onboarding nach.
+    """
     return f"""# {name}
 
 **Slug:** `{slug}`
 **Angelegt:** {datetime.now().strftime("%Y-%m-%d")}
 
-## Worum geht es?
+## Projektziel
 
-*(Hier traegst Du den Projekt-Kontext ein: Auftrag, Auftraggeber,
-Standard, Frist, Ansprechpartner. Disco liest das beim Session-Start
-mit, damit er den Hintergrund versteht.)*
+*(Was soll am Ende dieses Projekts herauskommen? 1-3 Saetze.
+Beispiel: "Aus drei Datenquellen Dokumente klassifizieren und in
+eine neue Ordnerstruktur nach VGB S 831 ueberfuehren.")*
+
+## Kontext
+
+*(Auftraggeber, Standard, Frist, Ansprechpartner. Was muss Disco
+wissen, damit er den Hintergrund richtig einordnet?)*
 
 ## Quellen
 
-Originaldaten liegen unter `sources/`. Beispiele:
-- *(noch keine — fuelle sources/, sobald Du Quelldaten hast)*
+*(Welche Daten sind zu verarbeiten? Woher kommen sie? Umfang?)*
 
-## Aktueller Stand
+## Erwartete Ergebnisse
 
-*(kurze Standortbestimmung — was wurde zuletzt erreicht?)*
-
-## Konventionen fuer Disco
-
-- Arbeits-Tabellen: `work_*` (temporaer) und `agent_*` (dauerhaft)
-- Endprodukte landen in `exports/` mit Datum und Versions-Suffix
-- Disco fuehrt `NOTES.md` chronologisch fort, ohne nachzufragen
+*(Welche konkreten Artefakte soll Disco liefern? Excel-Reports,
+klassifizierte Ordner, SOLL/IST-Vergleich?)*
 """
 
 
 def _notes_template(name: str) -> str:
+    """NOTES.md — chronologisches Logbuch, append-only.
+
+    Disco pflegt die Datei ueber memory_append; der erste Eintrag
+    setzt den Rahmen.
+    """
     return f"""# Projekt-Notizen: {name}
 
-Chronologisches Logbuch — Disco fuehrt es nach jeder relevanten
-Session fort. Aelteste Eintraege oben.
+Chronologisches Logbuch. Disco fuehrt es per `memory_append(file="NOTES.md")`
+nach jeder wesentlichen Session-Etappe fort. Aelteste Eintraege oben,
+neue am Ende.
 
 ---
 
@@ -131,8 +144,63 @@ Session fort. Aelteste Eintraege oben.
 
 ### Initialisierung
 
-Projekt im Disco-Workspace angelegt. Verzeichnisstruktur erstellt,
-leere Projekt-DB initialisiert.
+Projekt im Disco-Workspace angelegt. Verzeichnisstruktur + leere
+Projekt-DB initialisiert.
+"""
+
+
+def _disco_md_template(name: str) -> str:
+    """DISCO.md — Discos destilliertes Arbeitsgedaechtnis.
+
+    Vorbild: Claude Codes CLAUDE.md. Das ist Discos "zweite Quelle
+    der Wahrheit" pro Projekt — alles was er nach einer Kompression
+    (oder in einer neuen Session) braucht, damit er sofort wieder
+    arbeitsfaehig ist.
+    """
+    return f"""# DISCO.md — {name}
+
+Discos destilliertes Arbeitsgedaechtnis fuer dieses Projekt. Wird von
+Disco selbst gepflegt (memory_write / memory_append). Lies am Session-
+Start immer zuerst README.md, NOTES.md (letzte Eintraege) und dann
+diese Datei.
+
+Kurze, nachschlagbare Notizen — kein Fliesstext. Mehrere H2-Abschnitte
+fuer die Themenbereiche unten. Obsolete Eintraege loeschen, nicht
+durchstreichen (NOTES.md hat die Chronik).
+
+## Aktueller Fokus
+
+*(Was steht gerade an? 1-3 Saetze. Wird bei Fokus-Wechsel ueberschrieben.)*
+
+## Konventionen
+
+*(Dateinamen, Ordnerstrukturen, Namenskonventionen fuer Tabellen,
+Eigenarten des Projekts. Beispiel: "Gewerk-Namen immer klein-
+geschrieben: elektro/mechanik/bauwerk".)*
+
+## Projekt-Tabellen
+
+*(Welche work_*/agent_*/context_*-Tabellen existieren, was steht drin?
+Eine Zeile pro Tabelle reicht. Beispiel:
+`agent_sources` — Registry aller sources/-Dateien, 493 Eintraege.)*
+
+## Lookup-Pfade
+
+*(Wo liegt welches Nachschlagewerk? Beispiel:
+- DCC-Katalog: `.disco/context-extracts/vgb-s-831.md`, Kapitel A.3 ab S. 121
+- Hersteller-Liste: `context_hersteller_aliasse`-Tabelle)*
+
+## Glossar
+
+*(Projekt-/Fachspezifische Abkuerzungen und Begriffe.
+Beispiel: "DCC = Document Class Code nach VGB S 831.")*
+
+## Entscheidungen
+
+*(Groessere Entscheidungen mit Datum und kurzer Begruendung. Neu
+unten anhaengen. Alte Entscheidungen bleiben lesbar, aber wenn
+eine neue eine alte ueberstimmt: kurz dazuschreiben "ersetzt
+Entscheidung vom YYYY-MM-DD".)*
 """
 
 
@@ -163,230 +231,6 @@ Tabellen in die DB zu importieren (`context_*`-Praefix).
 ## Inhalte
 
 *(leer — Disco fuellt beim naechsten "neue Kontextdateien sichten")*
-"""
-
-
-def _memory_index_template(name: str) -> str:
-    """MEMORY.md — Index ueber alle Memory-Dateien, immer auto-geladen."""
-    return f"""# Memory-Index: {name}
-
-**Was ist das?** Inhaltsverzeichnis aller Memory-Dateien dieses Projekts.
-Disco laedt diese Datei IMMER beim Session-Start.
-
-## Immer auto-geladen (Triad)
-
-- **projectBrief** → `../../README.md` — Projektziel, Kontext, Auftrag
-- **activeContext.md** — aktueller Fokus, letzte Aktionen, naechste Schritte
-- **progress.md** — was funktioniert, was laeuft, was blockiert
-
-## On-Demand (ueber memory_read)
-
-- **systemPatterns.md** — Architektur, Design-Entscheidungen, Muster
-- **techContext.md** — Stack, Tools, Versionen, Constraints
-- **glossary.md** — Begriffe (KKS, DCC, VGB S 831, ...)
-- **decisions/ADR-NNN-*.md** — Architektur-Entscheidungen, append-only
-
-## Append-only Log
-
-- **NOTES.md** (`../../NOTES.md`) — Session-Log, chronologisch
-
-## Regeln
-
-- `activeContext.md` und `progress.md` sind SNAPSHOTS, keine Logs.
-  Beim Update werden Sektionen ersetzt, nicht angehaengt.
-- Architektur-Entscheidungen gehen in eine neue ADR-Datei, nicht in
-  andere Memory-Dateien.
-- Vor JEDER Kompression: activeContext + progress aktualisieren,
-  NOTES.md-Eintrag anhaengen, ggf. neue ADR. Erst dann komprimieren.
-"""
-
-
-def _active_context_template(name: str) -> str:
-    """activeContext.md — Snapshot des aktuellen Fokus, ueberschrieben."""
-    return f"""# Active Context — {name}
-
-**Status-Snapshot (kein Log!).** Wird bei jeder Kompression und bei
-bedeutenden Zwischenstaenden ueberschrieben. Halt Dich an die Sektionen.
-
-## Current Focus
-
-*(Worum dreht sich die Arbeit gerade? 1-3 Saetze.)*
-
-## Last Actions
-
-*(Was wurde zuletzt konkret getan? Max. 5 Punkte.)*
-
-## Next 3 Steps
-
-1. *(...)*
-2. *(...)*
-3. *(...)*
-
-## Open Questions
-
-*(Was ist noch offen / entscheidungsbeduerftig?)*
-"""
-
-
-def _progress_template(name: str) -> str:
-    """progress.md — Status-Zusammenfassung, ueberschrieben."""
-    return f"""# Progress — {name}
-
-**Zusammenfassung des Projekt-Status.** Kein Changelog — eine
-aktuelle Uebersicht, die bei wesentlichen Aenderungen ueberschrieben wird.
-
-## Done
-
-- *(Was ist fertig und bestaetigt?)*
-
-## Running
-
-- *(Was laeuft gerade aktiv?)*
-
-## Blocked
-
-- *(Was ist blockiert und warum?)*
-
-## Known Issues
-
-- *(Bekannte Bugs / Einschraenkungen, die das Projekt beeinflussen.)*
-"""
-
-
-def _system_patterns_template(name: str) -> str:
-    """systemPatterns.md — Architektur-Muster, on-demand."""
-    return f"""# System Patterns — {name}
-
-**Architektur, Design-Entscheidungen, wiederkehrende Muster.**
-On-demand geladen (nicht Teil der Triad). Fuer Architektur-Entscheidungen
-nutze append-only Dateien unter `decisions/`.
-
-## Architektur-Uebersicht
-
-*(Komponenten, Datenfluesse, Verantwortlichkeiten.)*
-
-## Wiederkehrende Muster
-
-*(z.B. "Alle Bulk-Verarbeitungen laufen als Flow, nicht run_python".)*
-
-## Verworfene Ansaetze
-
-*(Damit Disco nicht versehentlich darauf zurueckfaellt.)*
-"""
-
-
-def _tech_context_template(name: str) -> str:
-    """techContext.md — Stack, on-demand."""
-    return f"""# Tech Context — {name}
-
-**Stack, Tools, Versionen, Constraints.** On-demand geladen.
-
-## Stack
-
-*(Python-Version, relevante Libs, Frameworks.)*
-
-## Externe Dienste
-
-*(Azure OpenAI, Document Intelligence, SharePoint, ...)*
-
-## Constraints
-
-*(z.B. "Alle Daten muessen in EU/DSGVO bleiben".)*
-
-## Setup
-
-*(Was muss gelaufen sein, bevor dieses Projekt arbeitsfaehig ist?)*
-"""
-
-
-def _glossary_template(name: str) -> str:
-    """glossary.md — Begriffe, on-demand."""
-    return f"""# Glossary — {name}
-
-**Projekt- und domaenenspezifische Begriffe.** On-demand geladen.
-
-## Abkuerzungen
-
-- *(z.B. KKS = Kraftwerks-Kennzeichen-System)*
-
-## Begriffe
-
-- *(z.B. "DCC-Katalog" = ...)*
-
-## Projekt-spezifische Konventionen
-
-- *(z.B. "Gewerk = Elektro/Mechanik/Bauwerk, unsere Einteilung")*
-"""
-
-
-def _decisions_readme_template() -> str:
-    """decisions/README.md — Erklaerung des ADR-Formats."""
-    return """# Decisions / ADRs
-
-**Architektur-Entscheidungen** — jede als separate Datei
-`ADR-NNN-<slug>.md`, append-only (einmal geschrieben, bleibt stehen).
-
-## Format
-
-```
-# ADR-NNN — <Titel>
-
-## Context
-Was war die Situation? Welche Constraints?
-
-## Decision
-Was haben wir entschieden?
-
-## Consequences
-Was folgt daraus — positiv wie negativ?
-```
-
-## Warum append-only?
-
-Entscheidungen entwickeln sich. Eine neue ADR kann eine alte ueberstimmen
-(ADR-017 widerspricht ADR-003). Beide bleiben lesbar, damit die Entwicklung
-nachvollziehbar bleibt.
-"""
-
-
-def _adr_001_template() -> str:
-    """ADR-001 — dokumentiert die 1-Chat-pro-Projekt-Entscheidung selbst."""
-    return f"""# ADR-001 — Ein Chat pro Projekt
-
-**Datum:** {datetime.now().strftime("%Y-%m-%d")}
-
-## Context
-
-Bisher hatte jedes Disco-Projekt beliebig viele Chat-Threads. Jeder Thread
-startete bei Null — Wissen zwischen Threads ging verloren. Der Nutzer
-musste Disco in jedem neuen Thread erneut erklaeren, wo das Projekt steht.
-Flows, die in Thread A entwickelt wurden, waren fuer Disco in Thread B
-unbekannt.
-
-## Decision
-
-Pro Projekt existiert **genau ein persistenter Chat**, der ueber Tage
-und Wochen laeuft. Bei steigendem Context-Fill (70 % Warnbadge, 90 %
-Auto-Vorschlag, manueller Button) wird der Chat komprimiert:
-
-1. Disco schreibt Memory-Files (activeContext, progress, ggf. ADR, NOTES-Eintrag)
-2. Alle bisherigen Messages werden als `is_compacted=1` markiert
-3. Der Foundry-Response-Handle wird verworfen
-4. Naechster Turn startet frisch, laedt Triad (README + activeContext + progress)
-
-## Consequences
-
-**Positiv:**
-- Einheitliches Projekt-Bewusstsein ueber Zeit.
-- Memory-Files sind nachvollziehbare Wahrheit, nicht Chat-History.
-- Datenmodell ist einfacher: kein `chat_threads`-Table, kein Thread-Select im UI.
-
-**Negativ:**
-- Vor jeder Kompression muss Disco diszipliniert Memory schreiben, sonst
-  verliert er Wissen. Durch hart formulierte System-Prompt-Regeln
-  ("MUST", "forbidden", "NON-NEGOTIABLE") abgesichert.
-- Kein Parallelbetrieb "zwei getrennte Gespraeche im selben Projekt" — wenn
-  noetig, loest man das ueber getrennte Projekte.
 """
 
 
@@ -623,7 +467,7 @@ def init_project(
         slug: Slug fuer Verzeichnisname & Identifikation.
         name: Anzeigename. Default: slug, mit erstem Buchstaben gross.
         description: Optionaler Kurztext.
-        overwrite_files: True = README/NOTES/memory.md ueberschreiben.
+        overwrite_files: True = README/NOTES/DISCO.md ueberschreiben.
 
     Returns:
         Dict mit slug, name, path, db_path, project_id (system.db),
@@ -642,19 +486,13 @@ def init_project(
         (project_path / sub).mkdir(parents=True, exist_ok=True)
 
     # 2) Templates (nur wenn fehlt oder overwrite)
+    # 3-Datei-Memory-Modell: README (User), NOTES (Disco-Logbuch),
+    # DISCO (Discos destilliertes Arbeitsgedaechtnis, CLAUDE.md-inspiriert).
     files = {
         "README.md": _readme_template(name, slug),
         "NOTES.md": _notes_template(name),
+        "DISCO.md": _disco_md_template(name),
         "context/_manifest.md": _context_manifest_template(name),
-        # Memory-Bank (Cline-inspiriert, Disco-angepasst)
-        ".disco/memory/MEMORY.md": _memory_index_template(name),
-        ".disco/memory/activeContext.md": _active_context_template(name),
-        ".disco/memory/progress.md": _progress_template(name),
-        ".disco/memory/systemPatterns.md": _system_patterns_template(name),
-        ".disco/memory/techContext.md": _tech_context_template(name),
-        ".disco/memory/glossary.md": _glossary_template(name),
-        ".disco/memory/decisions/README.md": _decisions_readme_template(),
-        ".disco/memory/decisions/ADR-001-chat-pro-projekt.md": _adr_001_template(),
     }
     for rel_path, content in files.items():
         target = project_path / rel_path
