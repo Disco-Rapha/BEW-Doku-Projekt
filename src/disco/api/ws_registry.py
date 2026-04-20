@@ -22,7 +22,7 @@ Anforderungen
 Verwendung
 ----------
 ```
-from bew.api.ws_registry import register, unregister, broadcast
+from disco.api.ws_registry import register, unregister, broadcast
 
 async def ws_chat(...):
     await websocket.accept()

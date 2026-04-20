@@ -40,8 +40,8 @@ API_VERSION = "v1"
 
 
 def main() -> int:
-    from bew.agent import get_tool_schemas
-    from bew.config import settings
+    from disco.agent import get_tool_schemas
+    from disco.config import settings
 
     import httpx
 

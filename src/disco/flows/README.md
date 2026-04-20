@@ -28,7 +28,7 @@ Der **runner.py** ist ein stinknormales Python-Skript mit einer
 ## Das SDK in 30 Sekunden
 
 ```python
-from bew.flows.sdk import FlowRun, run_context
+from disco.flows.sdk import FlowRun, run_context
 
 def process_one(item: dict) -> dict:
     # eigene Logik — gibt JSON-serialisierbares dict zurück

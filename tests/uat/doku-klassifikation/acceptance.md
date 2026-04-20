@@ -72,7 +72,7 @@ vorgesehenen Pruefweg.
   → Check: `SELECT COUNT(*) FROM agent_flow_runs WHERE flow_name LIKE
   '%markdown%'` >= 1; und keine `run_python`-Calls mit DI-Code im Thread.
 - [ ] Keine Halluzinations-Imports im Runner.
-  → Check: Runner enthaelt NIE `from bew.services`, `from bew.utils.di` o.ae.
+  → Check: Runner enthaelt NIE `from disco.services`, `from disco.utils.di` o.ae.
 - [ ] Voll-Run ist erfolgreich abgeschlossen (`status='done'`), keine
   `failed` Items ausser erklaerbaren Ausnahmen.
   → Check: `SELECT status, failed_items FROM agent_flow_runs ORDER BY id

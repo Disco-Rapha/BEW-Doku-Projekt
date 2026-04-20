@@ -619,6 +619,23 @@ a:hover { text-decoration: underline; }
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.5px; line-height: 14px;
 }
+/* ============= Environment Badge (Dev / Prod) ============= */
+.env-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  line-height: 14px;
+  color: #fff;
+  margin-right: 6px;
+  user-select: none;
+}
+.env-badge-prod { background: #15803d; }   /* dunkelgruen — Produktion */
+.env-badge-dev  { background: #ea580c; }   /* orange      — Entwicklung */
+
 .status-pending   { background: rgba(136,136,136,0.25); color: #bbb; }
 .status-running   { background: rgba(37,99,235,0.25);   color: #5b9aff; }
 .status-paused    { background: rgba(250,204,21,0.25);  color: #facc15; }
@@ -739,6 +756,7 @@ a:hover { text-decoration: underline; }
 
     <div id="chat-header">
       <button class="icon-btn" title="Sidebar ein-/ausblenden" onclick="toggleSidebar()">☰</button>
+      <span id="env-badge" class="env-badge" title="Umgebung dieses Disco-Servers"></span>
       <span id="chat-title">Disco</span>
       <span id="chat-project-tag">(kein Projekt)</span>
       <span class="spacer" style="flex:1"></span>
@@ -859,9 +877,27 @@ async function api(path, opts = {}) {
 }
 
 // =========================================================================
+// Environment-Badge (Dev / Prod)
+// =========================================================================
+// Wert kommt aus dem data-env-Attribut des <html>-Tags (server-injiziert).
+// Fallback: /api/env. Default: "prod".
+function initEnvBadge() {
+  const badge = document.getElementById('env-badge');
+  if (!badge) return;
+  let env = (document.documentElement.dataset.env || '').trim().toLowerCase();
+  if (env !== 'prod' && env !== 'dev') env = 'prod';
+  badge.textContent = env.toUpperCase();
+  badge.classList.add('env-badge-' + env);
+  if (env === 'dev') {
+    document.title = '[DEV] ' + document.title;
+  }
+}
+
+// =========================================================================
 // Init
 // =========================================================================
 window.addEventListener('DOMContentLoaded', async () => {
+  initEnvBadge();
   initMarkdown();
   initSplitters();
   initChatInput();

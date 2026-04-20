@@ -5,7 +5,7 @@ Lokale Applikation zur strukturierten Aufbereitung von PDF-Dokumentationen mit A
 ## Stack
 
 - **Python 3.11+**, verwaltet mit [`uv`](https://docs.astral.sh/uv/)
-- **SQLite** als lokale Datenbank (`db/bew.db`)
+- **SQLite** als lokale Datenbank (`db/disco.db`)
 - **Datasette** als Browser-UI (Lesezugriff, Filter, Suche)
 - **Azure Document Intelligence** für PDF → Markdown
 - **Azure OpenAI** für Metadaten und Abgleich gegen VGB-S-831
@@ -17,7 +17,7 @@ Lokale Applikation zur strukturierten Aufbereitung von PDF-Dokumentationen mit A
 data/raw/         Input-PDFs (gitignored)
 data/markdown/    Generiertes Markdown (gitignored)
 data/exports/     Export-Pakete (gitignored)
-db/bew.db         SQLite-Datenbank (gitignored)
+db/disco.db         SQLite-Datenbank (gitignored)
 migrations/       SQL-Schema-Dateien
 src/bew/          Python-Anwendungscode
 scripts/          Hilfsskripte (z.B. Datasette-Start)

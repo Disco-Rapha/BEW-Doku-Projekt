@@ -31,7 +31,7 @@ schnelle Checks — dafür reichen `run_python` oder direkte SQL.
 3. **Keine halluzinierten Imports.** SDK-Calls (Azure DI, Azure OpenAI)
    gehen ueber die offiziellen Pakete — Signaturen stehen im Skill
    `sdk-reference` (lade ihn **vor** dem ersten DI-/LLM-Call).
-4. **Credentials ueber `from bew.config import settings`** oder
+4. **Credentials ueber `from disco.config import settings`** oder
    `os.getenv(...)` — der `runner_host` laedt `.env` beim Start, also
    funktionieren beide. Bevorzugt `settings` (typisiert).
 5. **Nach JEDEM LLM-Call Kosten buchen.** Eine Zeile, ohne Ausnahme:
@@ -169,7 +169,7 @@ fs_write({"path": "flows/<name>/runner.py", "content": "..."})
 **Wichtig — vor dem ersten SDK-Call:** Wenn der Flow Azure DI oder
 Azure OpenAI aufruft, lade **jetzt** den Skill `sdk-reference`. Die
 korrekten Signaturen stehen dort — aus dem Kopf zu tippen fuehrt
-zu Halluzinationen (`bew.services.*`-Imports, falsche Parameter
+zu Halluzinationen (`disco.services.*`-Imports, falsche Parameter
 wie `content=data` statt `body=data`, erfundene Methoden wie
 `begin_analyze_document_from_stream`).
 
@@ -192,7 +192,7 @@ wie `content=data` statt `body=data`, erfundene Methoden wie
 - **DB-Writes ueber `run.db.insert_row(table, dict)`** mit `on_conflict="update:..."`
   fuer Upserts — Details und Parameter-Varianten im Skill `sdk-reference`.
 - Bei Datei-Operationen: `run.read_file(rel_path)` bleibt im Projekt.
-- Credentials: `from bew.config import settings` (bevorzugt) oder
+- Credentials: `from disco.config import settings` (bevorzugt) oder
   `os.getenv(...)` — beides geht, `runner_host` laedt `.env` fuer Dich.
 
 ## Phase 3 — Test-Run

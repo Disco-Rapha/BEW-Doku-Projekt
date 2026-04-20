@@ -1,6 +1,6 @@
 """Flow-Tools fuer Disco — den Bau und die Ueberwachung von Flows vom Chat aus.
 
-Diese Tools binden das `bew.flows`-Framework an den Agent an. Disco kann
+Diese Tools binden das `disco.flows`-Framework an den Agent an. Disco kann
 damit:
 
   - bestehende Flows eines Projekts **auflisten** und **lesen**
@@ -15,7 +15,7 @@ damit:
     (`flow_pause`, `flow_cancel`)
 
 Alle Tools wirken auf das **aktive Projekt** (aus dem
-`bew.agent.context`-Sandbox). Ohne Projekt-Kontext: klare Fehlermeldung.
+`disco.agent.context`-Sandbox). Ohne Projekt-Kontext: klare Fehlermeldung.
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ Siehe README.md.
 
 from __future__ import annotations
 
-from bew.flows.sdk import FlowRun, run_context
+from disco.flows.sdk import FlowRun, run_context
 
 
 def process_item(item: dict) -> dict:

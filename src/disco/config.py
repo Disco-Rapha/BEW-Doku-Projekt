@@ -27,7 +27,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# Repo-Root: zwei Ebenen über dieser Datei (src/bew/config.py -> src/bew -> src -> repo)
+# Repo-Root: zwei Ebenen über dieser Datei (src/disco/config.py -> src/disco -> src -> repo)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     # Aktuelles Projekt (Slug). Wird vom Chat-Thread gesetzt; Tools nutzen ihn
     # spaeter (Phase 2b/c) fuer Sandboxing. Aktuell nur informational.
     disco_current_project: str | None = None
+
+    # Umgebungs-Marker — von der UI als Badge gerendert (gruen/orange).
+    # Werte: "prod" (Default) oder "dev". Beliebige andere Werte werden
+    # wie "dev" behandelt.
+    disco_env: str = "prod"
 
     # ------------------------------------------------------------------
     # Azure / Foundry / OpenAI / MSAL — wie gehabt

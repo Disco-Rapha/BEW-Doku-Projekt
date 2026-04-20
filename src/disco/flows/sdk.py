@@ -3,7 +3,7 @@
 Ein Flow-Autor (meist Disco im Dialog mit dem Nutzer) schreibt eine
 Datei `flows/<name>/runner.py` mit ungefaehr diesem Aufbau:
 
-    from bew.flows.sdk import FlowRun
+    from disco.flows.sdk import FlowRun
 
     def analyze(item: dict) -> dict:
         # eigene Logik pro Item
@@ -86,7 +86,7 @@ ITEM_STATUS_SKIPPED = "skipped"
 
 
 # Notification-Arten (siehe migrations/project/005_flow_notifications.sql).
-# Werden vom Backend-Watcher (`bew.flow_notifications`) abgegriffen, der
+# Werden vom Backend-Watcher (`disco.flow_notifications`) abgegriffen, der
 # daraus System-Trigger-Turns fuer Disco baut.
 NOTIFICATION_FIRST_ITEM = "first_item"
 NOTIFICATION_SECOND_ITEM = "second_item"

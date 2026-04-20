@@ -8,7 +8,7 @@ Dieser Host ist das Bindeglied zwischen:
 
 Aufruf (vom Service via subprocess.Popen, detached):
 
-    python -m bew.flows.runner_host <run_id> --project-root <path>
+    python -m disco.flows.runner_host <run_id> --project-root <path>
 
 Was der Host garantiert:
 
@@ -31,7 +31,7 @@ Was der Host **nicht** tut:
 Credentials und .env:
   Der Host ruft beim Start `load_dotenv(REPO_ROOT/.env)` auf, damit
   Runner-Autoren sowohl `os.getenv('AZURE_DOC_INTEL_ENDPOINT')` als
-  auch `from bew.config import settings` nutzen koennen. Ohne diesen
+  auch `from disco.config import settings` nutzen koennen. Ohne diesen
   Schritt wuerden die Keys nur in der Pydantic-Settings-Instanz liegen,
   der Subprocess `os.environ` aber leer bleiben (siehe UAT-Bug #5).
 """
@@ -49,8 +49,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from bew.config import REPO_ROOT
-from bew.flows.sdk import (
+from disco.config import REPO_ROOT
+from disco.flows.sdk import (
     ENV_FLOW_DIR,
     ENV_PROJECT_DB,
     ENV_PROJECT_ROOT,
@@ -136,7 +136,7 @@ def _set_status(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="bew.flows.runner_host",
+        prog="disco.flows.runner_host",
         description="Fuehrt einen Flow-Run aus, indem das User-runner.py geladen wird.",
     )
     parser.add_argument("run_id", type=int, help="ID aus agent_flow_runs.")

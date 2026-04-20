@@ -283,7 +283,7 @@ disco flow items <run_id> --project <slug>             # Items mit Output
 disco flow logs <run_id> --project <slug> [--tail N]   # Run-Logs
 
 # Server (eigenes Terminal, --reload für Live-Updates):
-uv run uvicorn bew.api.main:app --host 127.0.0.1 --port 8000 --reload
+uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ## Was als Nächstes kommt

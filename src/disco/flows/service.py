@@ -355,7 +355,7 @@ def start_run(project_root: Path, run_id: int) -> RunInfo:
     cmd = [
         sys.executable,
         "-m",
-        "bew.flows.runner_host",
+        "disco.flows.runner_host",
         str(run_id),
         "--project-root",
         str(project_root),

@@ -79,7 +79,7 @@ async def _notification_watcher_loop() -> None:
         await asyncio.sleep(3.0)
 
 
-app = FastAPI(title="BEW Doku Projekt", docs_url="/api/docs", lifespan=lifespan)
+app = FastAPI(title="Disco", docs_url="/api/docs", lifespan=lifespan)
 
 # Statische Dateien
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -91,7 +91,26 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    """Liefert index.html mit Environment-Marker-Injection.
+
+    Der Marker (DISCO_ENV) wird als data-env-Attribut im <html>-Tag
+    eingeblendet, damit die UI einen Dev/Prod-Badge rendern kann.
+    """
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    env = (settings.disco_env or "prod").strip().lower()
+    if env not in {"prod", "dev"}:
+        env = "dev"  # alles abseits "prod" -> dev-Markierung (defensiv)
+    html = html.replace("<html lang=\"de\">", f"<html lang=\"de\" data-env=\"{env}\">", 1)
+    return html
+
+
+@app.get("/api/env")
+async def api_env():
+    """Liefert den aktiven Environment-Marker (dev/prod) fuer die UI."""
+    env = (settings.disco_env or "prod").strip().lower()
+    if env not in {"prod", "dev"}:
+        env = "dev"
+    return {"env": env}
 
 
 # ---------------------------------------------------------------------------

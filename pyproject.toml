@@ -1,5 +1,5 @@
 [project]
-name = "bew"
+name = "disco"
 version = "0.1.0"
 description = "Disco — agentisches Desktop-System fuer technische Dokumentation"
 requires-python = ">=3.11"
@@ -39,12 +39,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/bew"]
+packages = ["src/disco"]
 
 [project.scripts]
-# Hauptmarke: 'disco' — der neue CLI-Einstieg (alle Befehle hier)
-disco = "bew.cli:main"
+disco = "disco.cli:main"
 disco-server = "uvicorn:main"
-# Aliase fuer Uebergangsphase (alte Skripte/Doku brechen sonst)
-bew = "bew.cli:main"
-bew-server = "uvicorn:main"

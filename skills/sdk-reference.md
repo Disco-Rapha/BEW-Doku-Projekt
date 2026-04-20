@@ -13,7 +13,7 @@ schreiben**. Nicht improvisieren.
 
 ## Regel — niemals halluzinieren
 
-1. **Keine `bew.services.*`-Imports erfinden.** So ein Modul gibt es
+1. **Keine `disco.services.*`-Imports erfinden.** So ein Modul gibt es
    nicht. Nimm direkt das offizielle Azure-SDK.
 2. **Keine Parameter raten.** `content=data`, `file_bytes=...`,
    `document=...` — gibt es alles nicht. Die korrekten Parameter
@@ -37,7 +37,7 @@ from azure.core.credentials import AzureKeyCredential
 ### Credentials aus Settings (nicht os.getenv)
 
 ```python
-from bew.config import settings
+from disco.config import settings
 
 endpoint = settings.azure_doc_intel_endpoint
 key = settings.azure_doc_intel_key
@@ -129,7 +129,7 @@ from openai import AzureOpenAI
 ### Client aus Settings
 
 ```python
-from bew.config import settings
+from disco.config import settings
 
 client = AzureOpenAI(
     azure_endpoint=settings.azure_openai_endpoint,   # z.B. https://<res>.openai.azure.com
@@ -251,7 +251,7 @@ Der Helper:
 - liest `response.usage.prompt_tokens` / `.completion_tokens` (Chat Completions) ODER
   `.input_tokens` / `.output_tokens` (Responses-API)
 - berechnet EUR via `compute_cost_eur(model, tokens_in, tokens_out)` aus
-  `MODEL_PRICING_USD_PER_MTOK` in `bew.flows.sdk`
+  `MODEL_PRICING_USD_PER_MTOK` in `disco.flows.sdk`
 - nimmt als Modell `response.model` (oder den `model=`-Parameter, wenn gesetzt)
 - ruft intern `run.add_cost(eur, tokens_in, tokens_out)` → Budget-Pause greift
 
@@ -719,7 +719,7 @@ Verarbeitung, oder auf Standard-Pipeline ausweichen.
 ## Pruef-Checkliste, bevor Du den Flow startest
 
 - [ ] Imports sind aus `azure.ai.documentintelligence` bzw. `openai`,
-      **nicht** aus `bew.services.*`.
+      **nicht** aus `disco.services.*`.
 - [ ] `begin_analyze_document` kriegt `body=<bytes>`, nicht `content=` /
       `document=` / `file=`.
 - [ ] `content_type="application/pdf"` ist gesetzt, wenn `body` bytes ist.
