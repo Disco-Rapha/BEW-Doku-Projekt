@@ -330,25 +330,110 @@ Ursachen (zu prüfen):
   Verlauf destilliert (ähnlich Conversation-Compaction oben, aber
   mit Ziel „persistentes Projekt-Gedächtnis" statt „Kontext kürzen").
 
-Umsetzung (zu entwerfen):
-1. System-Prompt-Regel „Wenn Du eine Entscheidung triffst, eine neue
-   Tabelle baust, einen Hersteller/Typen lernst, eine Konvention
-   festlegst — **schreibe es in `.disco/memory/MEMORY.md`** mit
-   Datum und Kontext."
-2. Am Ende jedes Turns (oder alle N Turns) ein implizites
-   `memory_compact`: Agent fasst zusammen, was gelernt wurde,
-   und hängt einen Eintrag an MEMORY.md an.
-3. NOTES.md wird vom Skill `project-onboarding` automatisch
-   fortgeschrieben (nicht nur gelesen) — mit Session-Header,
-   Datum, Stichwort-Liste der Aktivitäten.
-4. Bei Chat-Reset: User sollte gefragt werden „Soll Disco vorher
-   die aktuelle Session in MEMORY.md destillieren?" (analog zum
-   Compaction-Feature).
+**Ist-Zustand — zu viele Gedächtnis-Orte, zu viele Tools:**
 
-Abgrenzung: Conversation-Compaction (oben) ist für den
-Kontext-Fenster-Druck. Memory (hier) ist für die **Projekt-
-Persistenz** über Sessions hinweg. Technisch ähnlich, Zweck
-unterschiedlich — möglicherweise gemeinsame Pipeline.
+Disco betreibt heute **zwei parallele Memory-Systeme nebeneinander**:
+
+- **System A — Cline-Style Memory Bank** (`.disco/memory/`):
+  `MEMORY.md`, `activeContext.md`, `progress.md`, `systemPatterns.md`,
+  `techContext.md`, `glossary.md`, `decisions/ADR-NNN-*.md`.
+  Tools: `memory_read`, `memory_write`, `memory_list`, `memory_append_adr`.
+- **System B — Project Notes** (`NOTES.md` im Projekt-Root):
+  Tools: `project_notes_read`, `project_notes_append`.
+- Plus **`README.md`** als dritte Quelle (heute User-Eigentum,
+  via `fs_read` gelesen).
+
+→ 9 mögliche Orte, 6 Tools. GPT-5.1 kann nicht zuverlässig
+entscheiden, wann „Tabelle X hat Spalten Y" nach `systemPatterns.md`,
+`techContext.md` oder `glossary.md` gehört — also landet es nirgends.
+Das Cline-Schema ist konzeptionell elegant, in der Praxis aber
+fragmentiert. Claude Code und Cowork kommen mit **einer** Projekt-
+Datei aus (`CLAUDE.md` bzw. Canvas). Unterschied: Claude hat gutes
+Judgement, GPT-5.1 braucht klarere Regeln — aber **bei weniger
+Dateien**, sonst wird die Regel-Liste zu lang.
+
+**Zielarchitektur: 3 Dateien, 3 Zwecke, klare Trigger**
+
+| Datei | Eigentümer | Zweck | Schreib-Pattern |
+|---|---|---|---|
+| `README.md` | **User + Disco gemeinsam** | Projektziel, Leitplanken, Nutzer-Kontext | Disco schlägt Änderungen vor, User bestätigt; Disco darf eigenständig strukturelle Fortschreibungen (z. B. neuer Abschnitt "Datenquellen") machen |
+| `NOTES.md` | **Disco** | Chronologisches Logbuch | Append pro Arbeitspaket (Datum + Titel + 3–6 Zeilen) |
+| `MEMORY.md` | **Disco** | Destilliertes Wissen (nicht chronologisch) | Snapshot, kuratiert; Kapitel §Tabellen / §Konventionen / §Entscheidungen / §Lookup |
+
+**Weg kommen:**
+- `activeContext.md`, `progress.md`, `systemPatterns.md`,
+  `techContext.md`, `glossary.md` → konsolidiert als Abschnitte in
+  `MEMORY.md` (Überschriften-Struktur statt eigene Dateien).
+- `decisions/ADR-*.md` → ein Abschnitt „§Entscheidungen" in `MEMORY.md`.
+  Wenn das später wirklich wächst, kann man ADRs nachrüsten — heute
+  Disziplin-Overhead ohne Nutzen.
+- `project_notes_*`-Tools → ersetzt durch `memory_*` auf `NOTES.md`.
+- `memory_list`, `memory_append_adr` → weg.
+
+**Neue Tool-Oberfläche (4 Tools):**
+- `memory_read(file)` — `README.md`, `NOTES.md`, `MEMORY.md`
+  (andere Dateien: Fehler; `fs_read` für Memory-Dateien gesperrt).
+- `memory_write(file, content)` — nur `MEMORY.md` und `README.md`
+  (Snapshot). `README.md` nur mit expliziter User-Freigabe in der
+  Session oder nach „Schreib das bitte in die README"-Signal.
+- `memory_append(file, heading, content)` — `NOTES.md` (neuer
+  Abschnitt mit Datum) oder `MEMORY.md` (neues Kapitel).
+- Read-API für README bleibt auch via `fs_read` möglich, zentrale
+  Schreibdisziplin läuft aber über `memory_*`.
+
+**System-Prompt-Regeln (als SOP für GPT-5.1):**
+
+```
+SESSION-START (Skill project-onboarding):
+1. memory_read("README.md")  -> Projektziel erfassen
+2. memory_read("MEMORY.md")  -> destilliertes Wissen laden
+3. memory_read("NOTES.md")   -> letzten Abschnitt (Tail)
+   Wenn README fehlt ODER Projektziel unklar:
+     -> Disco fragt den User explizit: "Was ist das Ziel dieses
+        Projekts? Welche Daten, welcher Output?"
+     -> Antwort wird destilliert, als Vorschlag zur README
+        zurueckgegeben; bei User-OK via memory_write in README.md
+        geschrieben.
+
+WAEHREND DER ARBEIT — wenn Du Folgendes lernst, schreib es SOFORT:
+- Tabellen-Zweck                      -> MEMORY.md §Tabellen
+- User-Praeferenz oder Konvention     -> MEMORY.md §Konventionen
+- Entscheidung (Engine, Ordner-Layout)-> MEMORY.md §Entscheidungen
+- Hersteller-/Typen-Zuordnung         -> MEMORY.md §Lookup
+
+TURN-ENDE (sichtbares Arbeitspaket fertig):
+  memory_append("NOTES.md",
+                heading="2026-04-20 12:15 — <titel>",
+                content=<3-6 Zeilen>)
+
+VOR CHAT-RESET / COMPACTION:
+  Destilliere die Session -> memory_write("MEMORY.md", ...)
+```
+
+**Projektziel-Abfrage am Session-Start (neuer Mechanismus):**
+Wenn `README.md` fehlt, leer ist oder kein klar erkennbares
+Projektziel enthält (erster Absatz nicht aussagekräftig), muss
+Disco den User proaktiv fragen — bevor er mit fachlicher Arbeit
+anfängt. Antwort wird als Zusammenfassung zurückgespielt, der
+User sagt „ja so" oder „ergänze X", dann schreibt Disco das
+als strukturierten README-Abschnitt ins Projekt. Analog für
+Daten-Quellen-Abschnitt, wenn `sources/` befüllt ist aber die
+README sie nicht nennt.
+
+**Migration der Bestands-Projekte:**
+Für bestehende Projekte mit `.disco/memory/`-Dateien:
+- Einmal-Skript konsolidiert `activeContext/progress/systemPatterns/
+  techContext/glossary/decisions/*` in `MEMORY.md` (mit Kapitel-
+  Überschriften, Datum-gestempelt).
+- Alte Dateien bleiben als Backup unter `.disco/memory/.legacy/`
+  liegen, bis User bestätigt dass nichts fehlt.
+
+**Abgrenzung zu Conversation-Compaction (oben):**
+Conversation-Compaction kürzt das Kontextfenster innerhalb einer
+Session. Memory persistiert Wissen **über Sessions hinweg**.
+Technisch ähnlich (Destillation via LLM), Zweck unterschiedlich.
+Die Session-Ende-Destillation (→ MEMORY.md) kann den
+Compaction-Mechanismus mitbenutzen.
 
 ### Iterativer, gesprächiger Tool-Loop wie Claude Code (Priorität: hoch)
 
