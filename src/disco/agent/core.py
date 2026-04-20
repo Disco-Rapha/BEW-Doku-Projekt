@@ -436,7 +436,16 @@ class AgentService:
             )
 
         if _p_info is not None:
+            # Env-Label fuer die Disco-Instanz (prod|dev). Wird vom
+            # DISCO_ENV-Flag in der .env gesetzt — so weiss Disco ob er
+            # in der Produktiv-Umgebung oder der Dev-Sandbox laeuft.
+            _env_label = (settings.disco_env or "prod").strip().lower()
+            _env_display = "PROD" if _env_label == "prod" else "DEV"
+            _agent_display = settings.foundry_agent_id or "—"
             _ctx_text = (
+                f"[DISCO-UMGEBUNG: {_env_display}]\n"
+                f"agent_id: {_agent_display}\n"
+                f"env: {_env_label}\n\n"
                 "[AKTIVES PROJEKT — aus Sandbox-Kontext]\n"
                 f"slug: {_p_info.get('slug')}\n"
                 f"id: {_p_info['id']}\n"
@@ -444,8 +453,9 @@ class AgentService:
                 f"description: {_p_info.get('description') or '—'}\n\n"
                 "Du arbeitest bereits IN diesem Projekt. fs_*- und "
                 "sqlite_*-Tools sind auf dessen Verzeichnis bzw. "
-                "data.db gescoped. memory_*-Tools schreiben in "
-                ".disco/memory/ dieses Projekts. "
+                "data.db gescoped. memory_*-Tools schreiben auf die "
+                "drei Memory-Dateien im Projekt-Root (README.md, "
+                "NOTES.md, DISCO.md). "
                 "Frage den Nutzer NICHT 'in welchem Projekt arbeiten wir' "
                 "— das ist oben bereits gesetzt. Rufe list_projects "
                 "NICHT als Start-Check auf (es liefert in der Sandbox "
