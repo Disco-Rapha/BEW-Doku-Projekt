@@ -647,6 +647,51 @@ per Umweg auf Fremd-Projekte zu joinen.
 **Eröffnung eines Nachbar-Projekts:** nur mit expliziter User-
 Bestätigung in der UI — nie vom Agenten aus.
 
+### Projekt-Lifecycle gehört dem Nutzer, nicht dem Agenten (Priorität: hoch — aus UAT 2026-04-20)
+
+Disco lebt **innerhalb** eines Projekts und darf Projekte weder anlegen
+noch löschen. Das ist eine bewusste Rollen-Trennung, nicht ein
+Implementierungs-Detail:
+
+- **Mensch:** entscheidet welche Projekte es gibt, wie sie heißen, wann
+  sie weg dürfen. Mandantengrenze.
+- **Disco:** arbeitet innerhalb der Sandbox des aktiven Projekts. Keine
+  Projekt-übergreifende Manipulation.
+
+Aktueller Zustand:
+- Projekt-Anlage geht nur per CLI (`disco project init <slug>`). Im FE
+  gibt es keinen Button dafür.
+- Projekt-Löschung geht gar nicht — man muss den Ordner unter
+  `~/Disco/projects/` manuell wegräumen, die DB-Zeile in `projects`
+  bleibt liegen.
+- Der Agent hat theoretisch Tools (`list_projects`), die ihm die
+  Projekt-Existenz zeigen — er kann sie aber (zu Recht) nicht anlegen
+  oder löschen. Diese Lücke darf er auch nie bekommen.
+
+Umsetzung:
+
+1. **FE:** Sidebar oben rechts neben dem Projekt-Dropdown zwei Buttons:
+   - „+" → Modal „Neues Projekt anlegen" (slug, name, description,
+     Checkbox „Sample-Dateien anlegen"). Ruft `POST /api/workspace/projects`.
+   - „🗑" → bei ausgewähltem Projekt → Bestätigungsdialog mit Slug
+     zum Abtippen (destructive confirm), dann `DELETE /api/workspace/projects/<slug>`.
+     Löscht DB-Zeile + Verzeichnisbaum (vorher Backup in
+     `~/Disco/.trash/<slug>-<timestamp>/`).
+
+2. **Backend:**
+   - `POST /api/workspace/projects` (neu) — ruft dieselbe
+     `init_project()`-Routine wie die CLI.
+   - `DELETE /api/workspace/projects/<slug>` (neu) — mit
+     `move-to-trash`-Semantik, nicht sofort `rm -rf`.
+
+3. **Agent-Tools bleiben so wie sie sind:**
+   - `list_projects` darf nur lesen (und nach „Nicht ausgewählte
+     Projekte dürfen unsichtbar sein" ggf. auch nicht mehr alle sehen).
+   - Es wird KEIN `create_project`- oder `delete_project`-Tool geben.
+     Wenn Disco im Chat fragt „soll ich ein neues Projekt anlegen?",
+     ist die richtige Antwort: „Bitte leg es selbst über die Sidebar an,
+     ich darf das nicht."
+
 ### `run_python` härten gegen Prompt-Injection (Priorität: mittel)
 
 Heute ist `run_python` die einzige Tool-Klasse, bei der Disco den
