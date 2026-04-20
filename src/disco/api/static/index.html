@@ -893,11 +893,27 @@ function initEnvBadge() {
   }
 }
 
+// Footer-Felder (Workspace/Model) aus /api/env befuellen, damit wir
+// nicht auf hardcodete Werte zurueckfallen, wenn sich die Umgebung
+// aendert (Dev-Workspace ~/Disco-dev, andere Deployments, ...).
+async function initEnvFooter() {
+  const wsEl = document.getElementById('settings-workspace');
+  const modelEl = document.getElementById('settings-model');
+  try {
+    const info = await api('/api/env');
+    if (wsEl && info.workspace) wsEl.textContent = info.workspace;
+    if (modelEl && info.model) modelEl.textContent = info.model;
+  } catch (e) {
+    // /api/env nicht erreichbar -> Platzhalter bleiben stehen
+  }
+}
+
 // =========================================================================
 // Init
 // =========================================================================
 window.addEventListener('DOMContentLoaded', async () => {
   initEnvBadge();
+  initEnvFooter();
   initMarkdown();
   initSplitters();
   initChatInput();

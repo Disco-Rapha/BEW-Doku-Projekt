@@ -106,11 +106,30 @@ async def root():
 
 @app.get("/api/env")
 async def api_env():
-    """Liefert den aktiven Environment-Marker (dev/prod) fuer die UI."""
+    """Liefert Environment-Marker + Workspace + Modell fuer die UI-Footer-Anzeige.
+
+    Wird vom Frontend beim Start aufgerufen; ersetzt die frueheren
+    hardcodeten Werte (~/Disco, gpt-5) durch die tatsaechlichen Runtime-
+    Werte.
+    """
     env = (settings.disco_env or "prod").strip().lower()
     if env not in {"prod", "dev"}:
         env = "dev"
-    return {"env": env}
+
+    # Workspace als ~-Pfad anzeigen, falls er unter $HOME liegt.
+    try:
+        ws = settings.workspace_root
+        home = Path.home()
+        ws_display = "~/" + str(ws.relative_to(home)) if ws.is_relative_to(home) else str(ws)
+    except Exception:
+        ws_display = settings.disco_workspace or "~/Disco"
+
+    return {
+        "env": env,
+        "workspace": ws_display,
+        "model": settings.foundry_model_deployment or "",
+        "agent_id": settings.foundry_agent_id or "",
+    }
 
 
 # ---------------------------------------------------------------------------
