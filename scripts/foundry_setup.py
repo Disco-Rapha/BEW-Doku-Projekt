@@ -11,10 +11,15 @@ Voraussetzungen:
 
 Was das Script tut:
     1. Baut die Tool-Liste aus der Custom-Function-Registry + Code Interpreter.
-    2. Liest den System-Prompt aus src/bew/agent/system_prompt.md.
+    2. Liest den System-Prompt aus src/disco/agent/system_prompt.md.
     3. Schickt einen POST an /agents/<agent_name>/versions — legt den Agent
        an (neue Version, wenn er bereits existiert).
     4. Patch der .env: FOUNDRY_AGENT_ID = <agent_name>:<version>.
+
+Agent-Name wird aus FOUNDRY_AGENT_ID in der .env gelesen (der Teil vor
+":<version>"). Fallback: "disco-agent". So kann Dev z. B. mit
+FOUNDRY_AGENT_ID=disco-dev-agent einen eigenen Agent im Dev-Projekt
+registrieren, ohne das Script zu editieren.
 
 Der Agent erscheint danach im Foundry-Portal unter "Agents" und kann dort
 getestet, versioniert und per Playground bedient werden. Unser Runtime
@@ -35,13 +40,26 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 
-AGENT_NAME = "bew-doku-agent"
+AGENT_NAME_DEFAULT = "disco-agent"
 API_VERSION = "v1"
 
 
+def _resolve_agent_name(agent_id_raw: str | None) -> str:
+    """Liefert den Agent-Namen ohne ':<version>'-Suffix.
+
+    FOUNDRY_AGENT_ID kann ein reiner Name (`disco-dev-agent`) oder ein
+    gepinnter Verweis (`disco-dev-agent:29`) sein. Fuer den Setup-POST
+    brauchen wir nur den Namen.
+    """
+    raw = (agent_id_raw or "").strip()
+    if not raw:
+        return AGENT_NAME_DEFAULT
+    return raw.split(":", 1)[0]
+
+
 def main() -> int:
-    from bew.agent import get_tool_schemas
-    from bew.config import settings
+    from disco.agent import get_tool_schemas
+    from disco.config import settings
 
     import httpx
 
@@ -60,11 +78,14 @@ def main() -> int:
         )
         return 1
 
+    agent_name = _resolve_agent_name(settings.foundry_agent_id)
+
     print(f"Foundry-Endpoint: {settings.foundry_endpoint}")
     print(f"Modell-Deployment: {settings.foundry_model_deployment}")
+    print(f"Agent-Name: {agent_name}")
 
     # --- System-Prompt laden ---
-    system_prompt_path = REPO_ROOT / "src" / "bew" / "agent" / "system_prompt.md"
+    system_prompt_path = REPO_ROOT / "src" / "disco" / "agent" / "system_prompt.md"
     instructions = system_prompt_path.read_text(encoding="utf-8")
     print(f"System-Prompt: {len(instructions)} Zeichen aus {system_prompt_path.name}")
 
@@ -74,12 +95,18 @@ def main() -> int:
     print(f"Tools: {len(tools)} ({len(tools) - 1} Custom Functions + Code Interpreter)")
 
     # --- Request-Body ---
+    # reasoning + text setzen wir direkt in der Agent-Definition, nicht per
+    # Request. Foundry blockt "reasoning"/"text" bei Portal-Agent-Calls mit
+    # HTTP 400 "Not allowed when agent is specified" — die Werte muessen
+    # beim Agent selbst liegen. Siehe GPT-5.1 Prompting Guide + config.py.
     body = {
         "definition": {
             "kind": "prompt",
             "model": settings.foundry_model_deployment,
             "instructions": instructions,
             "tools": tools,
+            "reasoning": {"effort": settings.foundry_reasoning_effort},
+            "text": {"verbosity": settings.foundry_verbosity},
         },
         "description": (
             "Disco — Haupt-Agent fuer technische Dokumentation, "
@@ -88,8 +115,13 @@ def main() -> int:
         "metadata": {"project": "disco", "phase": "2a"},
     }
 
+    print(
+        f"Reasoning-Effort: {settings.foundry_reasoning_effort}  "
+        f"Verbosity: {settings.foundry_verbosity}"
+    )
+
     base = settings.foundry_endpoint.rstrip("/")
-    url = f"{base}/agents/{AGENT_NAME}/versions"
+    url = f"{base}/agents/{agent_name}/versions"
 
     print(f"\nPOST {url}?api-version={API_VERSION}")
     try:
@@ -115,7 +147,7 @@ def main() -> int:
 
     resp = r.json()
     version = resp.get("version", "?")
-    agent_id = resp.get("id") or f"{AGENT_NAME}:{version}"
+    agent_id = resp.get("id") or f"{agent_name}:{version}"
     created_at = resp.get("created_at")
     print(f"\nOK Agent registriert:")
     print(f"  id           : {agent_id}")
@@ -126,10 +158,10 @@ def main() -> int:
     env_path = REPO_ROOT / ".env"
     if env_path.exists():
         existing = _read_env_value(env_path, "FOUNDRY_AGENT_ID")
-        if existing == AGENT_NAME:
+        if existing == agent_name:
             # User nutzt "latest"-Modus bewusst — nicht ueberschreiben
             print(
-                f"Hinweis: FOUNDRY_AGENT_ID={AGENT_NAME} steht bereits "
+                f"Hinweis: FOUNDRY_AGENT_ID={agent_name} steht bereits "
                 f"auf 'latest' — .env nicht geaendert."
             )
             print(
@@ -140,19 +172,19 @@ def main() -> int:
             print(f"OK .env aktualisiert: FOUNDRY_AGENT_ID={agent_id}")
             print(
                 f"   Tipp: Fuer 'immer neueste Version' manuell auf "
-                f"'{AGENT_NAME}' setzen (ohne :Version)."
+                f"'{agent_name}' setzen (ohne :Version)."
             )
     else:
         print(
             f"WARNUNG: .env nicht gefunden ({env_path}).\n"
-            f"   Manuell eintragen: FOUNDRY_AGENT_ID={AGENT_NAME} (latest)\n"
+            f"   Manuell eintragen: FOUNDRY_AGENT_ID={agent_name} (latest)\n"
             f"   oder:             FOUNDRY_AGENT_ID={agent_id} (pin)",
             file=sys.stderr,
         )
 
     print(
         f"\nFertig. Der Agent ist jetzt im Foundry-Portal sichtbar:\n"
-        f"  https://ai.azure.com -> Dein Projekt -> Agents -> {AGENT_NAME}\n"
+        f"  https://ai.azure.com -> Dein Projekt -> Agents -> {agent_name}\n"
         f"Dort kannst Du ihn im Playground testen und bei Bedarf "
         f"System-Prompt / Tools editieren."
     )

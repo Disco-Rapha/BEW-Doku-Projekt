@@ -2,24 +2,78 @@
 
 ## Was ist Disco?
 
-**Disco** ist ein agentisches Desktop-System für die Verarbeitung
-technischer Dokumentation in Großprojekten. Es läuft lokal auf dem
-Rechner des Nutzers, mit Anbindung an Sprachmodelle und AI-Services
-aus Microsoft Azure (Sweden Central, DSGVO/EU).
+**Disco** ist ein agentischer **Reasoning-Assistent** für Projekt-
+mitarbeiter in **technischen Großprojekten** (Kraftwerke, Industrie-
+anlagen, Infrastruktur). Er läuft lokal auf dem Rechner des Nutzers,
+Rechenleistung aus Microsoft Azure (Sweden Central, DSGVO/EU).
 
-**Zweck:** Projektmitarbeiter in Großprojekten (Kraftwerke, Industrie-
-anlagen, Infrastruktur) bei der Bewältigung großer Dokumentenmengen
-unterstützen — Zehntausende PDFs, Excels, Zeichnungen aus verschiedenen
-Quellen, die gesichtet, klassifiziert, abgeglichen und in strukturierte
-Ergebnisse überführt werden müssen.
+### Mission
 
-**Vorbild:** Claude Cowork (Anthropic), aber gezielt auf den Zweck
-"große Dokumentenmengen aus verschiedenen Quellen managen" zugeschnitten.
+Aus **großen Mengen technischer Information** Erkenntnisse gewinnen —
+durch Lesen, Extrahieren, Verknüpfen und systematisches Durcharbeiten
+von Dokumenten *und* Datenbanken. Dokumentenmanagement ist *ein*
+Anwendungsfall, nicht der Zweck.
 
-**Nutzer:** Kein Programmierer, aber technisch versiert. Entscheidet
-Architekturfragen aktiv mit, will aber nicht tief in den Code einsteigen.
-**Antworten auf Deutsch.** Vor größeren Änderungen am Schema oder an der
-Modulstruktur: **fragen**, nicht annehmen.
+**Skala:** hundert bis einige zehntausend Dateien pro Projekt.
+Typisch: Generalunternehmer liefert über Monate Paket für Paket
+Dokumente (PDFs, Excels, Zeichnungen, Messwerte, Protokolle) —
+Duplikate, Revisionen, Format-Konversionen (DWG→PDF) inklusive.
+Disco hält Ordnung und ermöglicht Auswertung.
+
+### Kern-Fähigkeit: Cross-Source-Reasoning
+
+Disco verwaltet Dokumente nicht nur — er **versteht sie und zieht
+Schlüsse**. Der eigentliche Wert liegt darin, Excel-Metadaten,
+PDF-Content, SQL-Auswertungen und Normen zu **einer** Sicht zu
+verknüpfen. Das ist der Unterschied zu jedem Standard-DMS.
+
+### Rolle: Assistent, nicht Werkzeug
+
+Disco ist ein **Kollege, kein Hammer**. Er:
+- pflegt ein **persistentes Projekt-Gedächtnis** zwischen Sessions,
+- schlägt proaktiv vor, kündigt Aktionen an, berichtet transparent zurück,
+- arbeitet **lokal** (Kundendaten verlassen den Rechner nicht),
+  EU-Cloud für LLM-Calls (Sweden Central),
+- lässt den Nutzer Entscheider sein.
+
+Vorbild: Claude Cowork (Anthropic), gezielt auf "große Mengen
+technischer Information managen und auswerten" zugeschnitten.
+
+### Drei Instrumente
+
+| Instrument | Wann | Typisches Beispiel |
+|---|---|---|
+| **Dateiexplorer** | Einzel-Ops, kleine Paketgrößen | Dokumente sichten, neu sortieren, Ordner anlegen |
+| **SQL-Datenbank** | strukturierte Auswertung | Verteilung über 1.800 Dokumente, Top-N, Joins Excel × DB |
+| **Flow-Engine** | Massenverarbeitung (>10 Items / >2 Min) | 10.000 PDFs klassifizieren, PDF→Markdown-Bulk, SOLL/IST-Lauf |
+
+Explorer + SQL arbeiten synchron im Chat-Turn. Flows laufen als
+eigener Subprocess — resumable, pausierbar, mit Budget-Limit. Disco
+kann damit seinen eigenen Agent-Loop aus dem Chat-Turn in die
+Massenverarbeitung verlagern.
+
+### Drei Paradebeispiele
+
+1. **Dokumenten-Klassifikation über 1.800 PDFs** — Disco liest pro
+   Dokument den Inhalt, klassifiziert nach Gewerk + Dokumenttyp,
+   schreibt das Ergebnis strukturiert in Tabelle und Excel-Report.
+2. **Versions-Chaos auflösen** — In einem Pool mit Duplikaten,
+   Revisionen und Format-Konversionen findet Disco die aktuellste
+   Version jedes Dokuments (Hash + Inhalt + Namens-Konvention).
+3. **SOLL/IST-Abgleich gegen VGB S 831** — Disco gleicht die
+   tatsächlich gelieferte Dokumentation gegen die Norm-Vorgabe ab
+   und meldet Lücken inkl. Excel-Report mit Hyperlinks und
+   Farb-Codierung.
+
+### Nutzer
+
+Projektingenieure, Doku-Verantwortliche, Projektleiter.
+**Technisch versiert, aber keine Programmierer.** Wollen Ergebnisse
+in Excel oder strukturiert abgelegt, nicht SQL-Queries selbst
+schreiben. Entscheiden Architekturfragen aktiv mit, wollen aber
+nicht tief in den Code einsteigen. **Antworten auf Deutsch.** Vor
+größeren Änderungen am Schema oder an der Modulstruktur: **fragen**,
+nicht annehmen.
 
 ---
 
@@ -90,8 +144,9 @@ werden:
 
 ### 5. Disco arbeitet
 
-Der Agent (Foundry-Portal-Agent "bew-doku-agent", Modell GPT-5 in
-Sweden Central) hat **echten Schreibzugriff** auf das Projekt:
+Der Agent (Foundry-Portal-Agent — `disco-prod-agent` in Prod,
+`disco-dev-agent` in Dev, Modell GPT-5.1 in Sweden Central) hat
+**echten Schreibzugriff** auf das Projekt:
 - Dateien lesen, schreiben, verschieben
 - DB-Tabellen anlegen, auswerten, joinen
 - **Python-Skripte schreiben und lokal ausführen** (für große Dateien
@@ -128,8 +183,9 @@ Siehe `src/bew/flows/README.md` für das Entwickler-Howto.
 
 ### Infrastruktur
 - [x] **Workspace-Trennung**: Code-Repo (GitHub) ↔ Daten-Workspace (`~/Disco/`)
-- [x] **Foundry-Agent**: Portal-Agent "bew-doku-agent" mit agent_reference,
-      tunebarer System-Prompt, versioniert (aktuell v16)
+- [x] **Foundry-Agent**: Portal-Agent mit agent_reference
+      (Prod: `disco-prod-agent`, Dev: `disco-dev-agent`), tunebarer
+      System-Prompt, versioniert, Rollback möglich
 - [x] **Projekt-Sandbox**: fs_*/sqlite_*-Tools arbeiten nur innerhalb des
       aktiven Projekts (contextvars-basiert, echte Mandantentrennung)
 - [x] **Projekt-DB pro Projekt**: `data.db` mit Template-Migrationen
@@ -232,15 +288,15 @@ Siehe `src/bew/flows/README.md` für das Entwickler-Howto.
 ## Workspace-Trennung
 
 ```
-~/Claude/BEW Doku Projekt/    ← Code-Repo (GitHub-synced)
+<repo-root>/                   ← Code-Repo (GitHub-synced)
 ├── src/, skills/, migrations/, scripts/
 
 ~/Disco/                       ← Daten-Workspace (NIEMALS in Git)
 ├── system.db                  ← zentrale DB (Threads, Projekte)
 ├── logs/
 └── projects/
-    ├── ibl-lagerhalle/        ← ein Projekt (1764 Dateien)
-    ├── vattenfall-reuter/
+    ├── anlage-musterstadt/    ← ein Projekt (z. B. 1764 Dateien)
+    ├── kraftwerk-nord/
     └── ...
 ```
 
@@ -262,6 +318,7 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
 
 ```bash
 uv sync                                        # Dependencies
+uv run python scripts/download_models.py       # Docling-MLX-Modelle (einmalig, ~1.1 GB, idempotent)
 disco project list                             # Alle Projekte
 disco project init <slug> --name "..." [--sample]  # Neues Projekt
 disco project show <slug>                      # Details
@@ -282,7 +339,7 @@ disco flow items <run_id> --project <slug>             # Items mit Output
 disco flow logs <run_id> --project <slug> [--tail N]   # Run-Logs
 
 # Server (eigenes Terminal, --reload für Live-Updates):
-uv run uvicorn bew.api.main:app --host 127.0.0.1 --port 8000 --reload
+uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ## Was als Nächstes kommt
@@ -316,7 +373,7 @@ uv run uvicorn bew.api.main:app --host 127.0.0.1 --port 8000 --reload
 ### Weitere Skills
 - `dokument-klassifikator` — DCC-/Gewerks-Klassifikation
 - `sql-analyst` — Ad-hoc-SQL-Analysen mit Visualisierung
-- `soll-ist-abgleich` — SOLL/IST-Vergleich gegen IBL
+- `soll-ist-abgleich` — SOLL/IST-Vergleich gegen Informationsbedarfsliste
 
 ## Was NICHT tun
 

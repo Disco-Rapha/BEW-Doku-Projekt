@@ -35,8 +35,8 @@ Sharepoint Download/
 .idea/
 .DS_Store
 
-# Claude Code — nur lokale Settings ignorieren, shared stuff bleibt im Repo
-.claude/settings.local.json
+# Claude Code — alles lokale, nicht im Repo
+.claude/
 
 # Logs
 *.log

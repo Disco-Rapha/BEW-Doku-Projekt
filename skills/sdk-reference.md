@@ -1,7 +1,7 @@
 ---
 name: sdk-reference
-description: Verlaessliche SDK-Signaturen fuer Azure Document Intelligence und Azure OpenAI (Structured Output). Nachschlagewerk, wenn Du einen DI-/LLM-Call schreibst — bevor Du irgendetwas "aus dem Kopf" tippst.
-when_to_use: "Azure Document Intelligence", "DI", "prebuilt-layout", "OCR", "Azure OpenAI", "GPT-5 API", "Structured Output", "response_format", "json_schema", "AzureKeyCredential", IMMER wenn Du einen Flow mit externem Azure-Call baust.
+description: Verlaessliche SDK-Signaturen fuer Azure Document Intelligence, Azure OpenAI (Structured Output) und die LOKALE Docling-VLM-Pipeline (Granite-Docling-MLX, SmolDocling-MLX, Standard). Nachschlagewerk, wenn Du einen DI-/LLM-/Docling-Call schreibst — bevor Du irgendetwas "aus dem Kopf" tippst.
+when_to_use: "Azure Document Intelligence", "DI", "prebuilt-layout", "OCR", "Azure OpenAI", "GPT-5 API", "Structured Output", "response_format", "json_schema", "AzureKeyCredential", "Docling", "Granite-Docling", "SmolDocling", "MLX", "VlmPipeline", "VlmPipelineOptions", "DocumentConverter", "PdfPipelineOptions", "TableFormerMode", "lokale Markdown-Konvertierung", IMMER wenn Du einen Flow mit externem Azure-Call ODER lokaler Docling-Pipeline baust.
 ---
 
 # Skill: sdk-reference
@@ -13,7 +13,7 @@ schreiben**. Nicht improvisieren.
 
 ## Regel — niemals halluzinieren
 
-1. **Keine `bew.services.*`-Imports erfinden.** So ein Modul gibt es
+1. **Keine `disco.services.*`-Imports erfinden.** So ein Modul gibt es
    nicht. Nimm direkt das offizielle Azure-SDK.
 2. **Keine Parameter raten.** `content=data`, `file_bytes=...`,
    `document=...` — gibt es alles nicht. Die korrekten Parameter
@@ -37,7 +37,7 @@ from azure.core.credentials import AzureKeyCredential
 ### Credentials aus Settings (nicht os.getenv)
 
 ```python
-from bew.config import settings
+from disco.config import settings
 
 endpoint = settings.azure_doc_intel_endpoint
 key = settings.azure_doc_intel_key
@@ -129,7 +129,7 @@ from openai import AzureOpenAI
 ### Client aus Settings
 
 ```python
-from bew.config import settings
+from disco.config import settings
 
 client = AzureOpenAI(
     azure_endpoint=settings.azure_openai_endpoint,   # z.B. https://<res>.openai.azure.com
@@ -160,8 +160,8 @@ SDK man nutzt:
 
 | SDK | Hostname | Beispiel |
 |---|---|---|
-| `openai.AzureOpenAI` (Chat Completions) | `<name>.openai.azure.com` | `https://bew-foundry.openai.azure.com` |
-| `azure-ai-projects` / Foundry Portal-Agent | `<name>.services.ai.azure.com/api/projects/<proj>` | `https://bew-foundry.services.ai.azure.com/api/projects/BEW-Project` |
+| `openai.AzureOpenAI` (Chat Completions) | `<name>.openai.azure.com` | `https://myorg-foundry.openai.azure.com` |
+| `azure-ai-projects` / Foundry Portal-Agent | `<name>.services.ai.azure.com/api/projects/<proj>` | `https://myorg-foundry.services.ai.azure.com/api/projects/MyOrg-Project` |
 
 Fuer Flow-Worker mit `openai.AzureOpenAI` **immer** die `.openai.azure.com`-Variante
 nehmen (`settings.azure_openai_endpoint` in `.env`). Mit der `services.ai.azure.com/api/projects/...`-URL
@@ -251,7 +251,7 @@ Der Helper:
 - liest `response.usage.prompt_tokens` / `.completion_tokens` (Chat Completions) ODER
   `.input_tokens` / `.output_tokens` (Responses-API)
 - berechnet EUR via `compute_cost_eur(model, tokens_in, tokens_out)` aus
-  `MODEL_PRICING_USD_PER_MTOK` in `bew.flows.sdk`
+  `MODEL_PRICING_USD_PER_MTOK` in `disco.flows.sdk`
 - nimmt als Modell `response.model` (oder den `model=`-Parameter, wenn gesetzt)
 - ruft intern `run.add_cost(eur, tokens_in, tokens_out)` → Budget-Pause greift
 
@@ -346,10 +346,380 @@ und will es in eine Tabelle schreiben"*.
 
 ---
 
+## Docling — Lokale PDF-Konvertierung (Granite-MLX / SmolDocling-MLX / Standard)
+
+**Wann lokal statt DI?** Wenn Budget knapp ist oder Compliance keine
+Cloud erlaubt. Auf M1/M2/M3 Macs kommt Granite-Docling-MLX in der
+Markdown-Qualitaet erstaunlich nah an DI heran — kostenlos, dafuer
+langsamer (~10-30s/Seite vs. 1-3s bei DI Cloud).
+
+Du hast in Disco das Tool `markdown_extract` (siehe Skill
+`markdown-extractor` fuer Engine-Wahl). Wenn Du in einem **Flow**
+direkt gegen Docling gehst, brauchst Du die Imports + Signaturen
+unten — sie sind hier abgedruckt, weil Disco kein Internet hat und
+auf die Doku auf docling.io nicht zugreifen kann.
+
+### Paket + Voraussetzungen
+
+```python
+# pyproject.toml hat bereits:
+#   docling[vlm]>=2.90.0
+#
+# Das [vlm]-Extra zieht auf macOS-arm64 automatisch:
+#   - mlx>=0.21.0
+#   - mlx-vlm>=0.4.3
+#   - peft, qwen-vl-utils, sentencepiece
+#
+# Auf anderen Plattformen kommt 'transformers' statt mlx-vlm —
+# Granite-Docling-Transformers hat aber KEIN MPS-Support, also
+# fuer M1 IMMER die _MLX-Variante nehmen.
+```
+
+### Offline-Modus — WICHTIG vor dem ersten Aufruf
+
+Disco laeuft per Default **vollstaendig offline** fuer ML-Modelle.
+`src/bew/config.py::_apply_offline_env` setzt beim Start:
+
+```
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+HF_DATASETS_OFFLINE=1
+```
+
+Diese Flags werden an Subprozesse (Flow-Runner, `run_python`) vererbt.
+Docling/transformers/HF-Hub machen dann **keinen Online-Check**, sondern
+laden ausschliesslich aus `~/.cache/huggingface/hub/`.
+
+**Was das fuer Dich als Flow-Autor heisst:**
+
+1. **Niemals im Runner HF-Flags umbiegen.** Kein
+   `os.environ["HF_HUB_OFFLINE"] = "0"` in runner.py, kein
+   `huggingface_hub.login()`, kein `snapshot_download(...)`.
+   Der Runner verlaesst sich darauf, dass das Modell im Cache liegt.
+
+2. **Vor dem Run einmalig:** Nutzer fuehrt
+   `uv run python scripts/download_models.py` aus — das ist die
+   einzige legitime Stelle, an der Disco online geht. Das Skript
+   deaktiviert die Flags lokal fuer den einen Prozess.
+
+3. **Symptom „Runner haengt minutenlang ohne GPU-Last"**: Modell nicht
+   im Cache, `HF_HUB_OFFLINE=1` fehlt → Docling macht Online-HEAD-Check
+   gegen `huggingface.co` und wartet auf Socket-Timeout.
+   Fix: `uv run python scripts/download_models.py` und Run neu starten.
+
+4. **Defence-in-Depth:** `src/bew/flows/service.py` setzt die Flags
+   nochmal explizit auf dem Subprocess-Env, falls das Parent-`os.environ`
+   sie nicht mehr hat. Du musst im Runner NICHTS zusaetzlich tun.
+
+### Engine 1: Granite-Docling-MLX (DEFAULT auf M1)
+
+Beste Markdown-Qualitaet auf Apple Silicon, speziell fuer Docling-
+Konvertierung trainiert (IBM 2025).
+
+```python
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import VlmPipelineOptions
+from docling.datamodel.vlm_model_specs import GRANITEDOCLING_MLX
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.pipeline.vlm_pipeline import VlmPipeline
+
+pipeline_options = VlmPipelineOptions(vlm_options=GRANITEDOCLING_MLX)
+
+converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: PdfFormatOption(
+            pipeline_cls=VlmPipeline,             # Pflicht — VLM braucht eigene Pipeline-Klasse!
+            pipeline_options=pipeline_options,
+        )
+    }
+)
+
+result = converter.convert(str(pdf_path))         # akzeptiert str, nicht Path
+markdown_text: str = result.document.export_to_markdown()
+n_pages: int = len(result.pages) if result.pages else 0
+```
+
+**`GRANITEDOCLING_MLX`-Spec (zum Nachschlagen, NICHT zum Aendern):**
+
+```python
+GRANITEDOCLING_MLX = InlineVlmOptions(
+    repo_id="ibm-granite/granite-docling-258M-mlx",
+    prompt="Convert this page to docling.",
+    response_format=ResponseFormat.DOCTAGS,
+    inference_framework=InferenceFramework.MLX,
+    supported_devices=[AcceleratorDevice.MPS],   # NUR Apple Silicon!
+    scale=2.0,
+    temperature=0.0,
+    max_new_tokens=8192,
+    stop_strings=["</doctag>", "<|end_of_text|>"],
+)
+```
+
+**Was passiert beim ersten Aufruf:**
+- HuggingFace-Download von `ibm-granite/granite-docling-258M-mlx`
+  (~500MB), gecached unter `~/.cache/huggingface/hub/models--ibm-granite--granite-docling-258M-mlx/`
+- Folgeruns nutzen den Cache — kein Internet noetig
+
+### Engine 2: SmolDocling-MLX (Schneller, kleiner)
+
+Der kleinere Bruder — gut fuer simple Layouts, ~2x schneller als Granite.
+
+```python
+from docling.datamodel.vlm_model_specs import SMOLDOCLING_MLX
+
+pipeline_options = VlmPipelineOptions(vlm_options=SMOLDOCLING_MLX)
+# Rest wie bei Granite — gleiche VlmPipeline + DocumentConverter
+```
+
+`SMOLDOCLING_MLX` Spec:
+```python
+SMOLDOCLING_MLX = InlineVlmOptions(
+    repo_id="docling-project/SmolDocling-256M-preview-mlx-bf16",
+    prompt="Convert this page to docling.",
+    response_format=ResponseFormat.DOCTAGS,
+    inference_framework=InferenceFramework.MLX,
+    supported_devices=[AcceleratorDevice.MPS],
+    scale=2.0,
+    temperature=0.0,
+    stop_strings=["</doctag>", "<end_of_utterance>"],
+)
+```
+
+### Engine 3: Standard-Pipeline (DocLayNet + TableFormer + EasyOCR)
+
+Klassische Docling-Pipeline, schnellste lokale Variante. Funktioniert
+auch auf Nicht-Apple-Hardware.
+
+```python
+from docling.datamodel.accelerator_options import (
+    AcceleratorDevice,
+    AcceleratorOptions,
+)
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    TableFormerMode,
+)
+from docling.document_converter import DocumentConverter, PdfFormatOption
+
+opts = PdfPipelineOptions()
+opts.do_ocr = True                                # OCR fuer Scan-PDFs
+opts.do_table_structure = True                    # Tabellen-Erkennung
+opts.table_structure_options.mode = TableFormerMode.ACCURATE   # statt FAST
+opts.table_structure_options.do_cell_matching = True
+opts.images_scale = 2.0                           # 2x DPI -> bessere OCR
+opts.accelerator_options = AcceleratorOptions(
+    num_threads=4,
+    device=AcceleratorDevice.MPS,                 # auf M1 die Apple-GPU nutzen
+)
+
+converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: PdfFormatOption(pipeline_options=opts)
+        # KEIN pipeline_cls hier — Default ist Standard-PdfPipeline
+    }
+)
+
+result = converter.convert(str(pdf_path))
+markdown_text = result.document.export_to_markdown()
+```
+
+**`TableFormerMode` Werte:**
+
+| Wert | Verhalten |
+|---|---|
+| `TableFormerMode.FAST` | ~3x schneller, schlechter bei verschachtelten Tabellen |
+| `TableFormerMode.ACCURATE` | Default fuer ernsthafte Markdown-Pipelines |
+
+**`AcceleratorDevice` Werte:**
+
+| Wert | Plattform |
+|---|---|
+| `AcceleratorDevice.MPS` | Apple Silicon (M1/M2/M3) |
+| `AcceleratorDevice.CUDA` | NVIDIA-GPU |
+| `AcceleratorDevice.CPU` | Fallback, sehr langsam |
+| `AcceleratorDevice.AUTO` | Docling waehlt selbst — meist MPS auf Mac |
+
+### Page-Range fuer Mini-Tests
+
+```python
+# Statt durchgaengig — nur Seiten 1-3 (1-indexiert, inklusive Grenzen)
+result = converter.convert(str(pdf_path), page_range=(1, 3))
+```
+
+Funktioniert sowohl bei VlmPipeline als auch bei der Standard-
+Pipeline. Fuer Engine-Vergleich mit grossen Plaenen unverzichtbar
+(sonst dauert es bei einem 80-Seiten-Plan + Granite-MLX 30 Minuten).
+
+### Was Du aus `result` lesen kannst
+
+```python
+result = converter.convert(str(pdf_path))
+
+# Markdown-String (das wirst Du fast immer wollen):
+md = result.document.export_to_markdown()
+
+# Anderer Export-Format:
+text = result.document.export_to_text()           # nur Text, kein Markdown
+html = result.document.export_to_html()           # vollstaendiges HTML
+docling_dict = result.document.export_to_dict()   # interne DocTags-Repraesentation
+
+# Seitenzahl (zwei Wege, je nach Engine):
+n_pages = len(result.pages) if result.pages else 0
+# Fallback bei VLM-Pipelines:
+if not n_pages and hasattr(result.document, 'pages'):
+    n_pages = len(result.document.pages)
+
+# Pro-Seite-Iteration (selten gebraucht):
+for page in result.document.pages:
+    # page hat layout, tables, text-Blocks etc.
+    ...
+
+# Tabellen separat (wenn Du sie ausserhalb des Markdowns brauchst):
+for table in result.document.tables or []:
+    ...
+```
+
+### Disco-Convention: Header voranstellen
+
+Wenn Du in einem Flow Markdown schreibst, halte Dich an dieselbe Header-
+Konvention wie Disco's `markdown_extract` und `extract_pdf_to_markdown`:
+
+```python
+from datetime import datetime, timezone
+
+header = (
+    f"<!-- Extrahiert aus: {rel_path} -->\n"
+    f"<!-- Engine: granite-mlx (Granite-Docling-258M (MLX, Apple Silicon)) -->\n"
+    f"<!-- Modell: ibm-granite/granite-docling-258M-mlx | "
+    f"Device: MPS (MLX) | Seiten: {n_pages} | "
+    f"{len(md)} Zeichen | Dauer: {duration:.1f}s -->\n"
+    f"<!-- Extrahiert am: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} -->\n\n"
+)
+target.write_text(header + md, encoding="utf-8")
+```
+
+### Time-Logging im Flow (PFLICHT bei lokalen Engines)
+
+Lokale VLM-Pipelines koennen Cold-Start (erstes Modell-Laden) ~30-60s
+brauchen, dann pro Seite ~10-30s. Loggen, sonst weisst Du beim
+Debug nicht ob die Engine haengt oder normal arbeitet.
+
+```python
+import time
+
+t_start = time.monotonic()
+result = converter.convert(str(pdf_path))
+duration = time.monotonic() - t_start
+
+run.log(f"granite-mlx: {pdf_path.name} ({n_pages}p) -> "
+        f"{duration:.1f}s ({duration / max(n_pages, 1):.1f}s/page)")
+```
+
+### Throughput-Schaetzung (M1 32GB, gemessen 2026-04)
+
+| Engine | s/Seite | Seiten/h | 1k Docs (a 4 S.) in |
+|---|---|---|---|
+| `GRANITEDOCLING_MLX` | 15-25 | ~150-240 | ~17-27h |
+| `SMOLDOCLING_MLX` | 7-12 | ~300-510 | ~8-13h |
+| Standard (TableFormer ACCURATE, MPS) | 4-8 | ~450-900 | ~4-9h |
+| Standard (TableFormer FAST, MPS) | 2-5 | ~720-1800 | ~2-6h |
+
+Fuer eigene Vermessung: Benchmark-Flow `markdown-engine-benchmark`
+(siehe Skill `markdown-extractor`).
+
+### Caches + Disk-Footprint
+
+| Cache | Pfad | Groesse |
+|---|---|---|
+| HuggingFace-Modelle (VLM) | `~/.cache/huggingface/hub/` | ~500MB pro VLM-Modell |
+| Docling-Standard-Modelle | `~/.cache/docling/` | ~200MB (DocLayNet + TableFormer) |
+| EasyOCR-Modelle | `~/.cache/EasyOCR/` | ~70MB pro Sprache |
+
+Disco laeuft per Default **vollstaendig offline** (siehe Offline-Modus
+weiter oben). Die Modelle liegen im Cache, Docling zieht sie sofort
+lokal. Ein neuer Mac braucht genau einmal
+`uv run python scripts/download_models.py` — das ist die einzige
+Stelle, an der Disco online geht. Im normalen Betrieb wird NICHTS
+„beim ersten Aufruf" geladen; wenn ein Modell fehlt, knallt der
+Run mit `OfflineModeIsEnabled` statt heimlich zu downloaden.
+
+### Fallstricke + Anti-Patterns
+
+**1. `pipeline_cls=VlmPipeline` VERGESSEN bei VLM-Engines**
+
+```python
+# FALSCH — laeuft die Standard-Pipeline und ignoriert die VlmPipelineOptions:
+PdfFormatOption(pipeline_options=VlmPipelineOptions(vlm_options=GRANITEDOCLING_MLX))
+
+# RICHTIG:
+PdfFormatOption(
+    pipeline_cls=VlmPipeline,                     # <- DAS ist der Schluessel
+    pipeline_options=VlmPipelineOptions(vlm_options=GRANITEDOCLING_MLX),
+)
+```
+
+**2. `GRANITEDOCLING_TRANSFORMERS` auf M1 erwischt**
+
+Es gibt zwei Granite-Specs:
+- `GRANITEDOCLING_MLX` → MLX, **MPS supported**, M1-fertig.
+- `GRANITEDOCLING_TRANSFORMERS` → transformers, **KEIN MPS** (nur CPU/CUDA/XPU)!
+  Das laeuft auf M1 nur ueber CPU und ist ~10x langsamer als die MLX-Variante.
+
+Auf Apple Silicon **immer** die `_MLX`-Variante.
+
+**3. `Path` statt `str` an `converter.convert(...)`**
+
+```python
+# FALSCH — wirft TypeError bei aelteren docling-Versionen:
+result = converter.convert(pdf_path)              # pdf_path ist Path
+
+# RICHTIG:
+result = converter.convert(str(pdf_path))
+```
+
+**4. EasyOCR-Sprache nicht gesetzt**
+
+```python
+# Default = englisch. Fuer deutsche Dokumente:
+opts.ocr_options = EasyOcrOptions(lang=["de", "en"])
+```
+
+Importiert von `docling.datamodel.pipeline_options.EasyOcrOptions`.
+Bei rein deutschen technischen Dokumenten reduziert das die OCR-
+Halluzinationen merklich.
+
+**5. `do_ocr=True` bei reinen Text-PDFs (Verschwendung)**
+
+OCR braucht Zeit. Wenn die PDF rein textbasiert ist, lieber
+`pdf_extract_text` (pypdf) — Faktor 100 schneller.
+
+**6. Memory-OOM bei sehr grossen PDFs (Granite-MLX)**
+
+Granite-Docling-MLX laedt Seiten als Bilder (Scale 2.0). Bei einem
+80-Seiten-Plan mit hochaufgeloesten Plantitelblocks geht 32GB RAM
+moeglicherweise schwimmen. Workaround: `page_range` fuer Tranche-
+Verarbeitung, oder auf Standard-Pipeline ausweichen.
+
+### Pruef-Checkliste fuer einen Docling-Flow
+
+- [ ] `docling[vlm]` ist in `pyproject.toml` (nicht nur `docling`).
+- [ ] Bei VLM-Engine: `pipeline_cls=VlmPipeline` ist gesetzt.
+- [ ] Auf Mac: `GRANITEDOCLING_MLX` (nicht `_TRANSFORMERS`).
+- [ ] `converter.convert(str(pdf_path))` — String, nicht Path.
+- [ ] Time-Logging vorhanden (`time.monotonic()` vor + nach `convert`).
+- [ ] Mini-Test mit `page_range=(1, 3)` vor dem Bulk-Lauf.
+- [ ] `result.document.export_to_markdown()` — nicht `.export_to_text()`.
+- [ ] Header mit Quelle + Engine + Dauer voranstellen (Disco-Konvention).
+- [ ] Fuer Bulk: kein direkter `markdown_extract`-Tool-Aufruf, sondern
+      Flow (siehe Skill `flow-builder`).
+
+---
+
 ## Pruef-Checkliste, bevor Du den Flow startest
 
 - [ ] Imports sind aus `azure.ai.documentintelligence` bzw. `openai`,
-      **nicht** aus `bew.services.*`.
+      **nicht** aus `disco.services.*`.
 - [ ] `begin_analyze_document` kriegt `body=<bytes>`, nicht `content=` /
       `document=` / `file=`.
 - [ ] `content_type="application/pdf"` ist gesetzt, wenn `body` bytes ist.

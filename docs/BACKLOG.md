@@ -308,6 +308,133 @@ existiert im SDK).
 → Umsetzung: SDK-Feature prüfen, sonst selbst bauen (Zusammenfassungs-
   Prompt → neuer Response-Anker → alte Chain verwerfen).
 
+### Memory-Funktion härten — Disco verliert alles bei Chat-Reset (Priorität: hoch — aus UAT 2026-04-20)
+
+Beobachtung beim Chat-Reset in Prod (nach Modellwechsel gpt-5 →
+gpt-5.1_prod): sobald die Conversation-History leer ist, weiß Disco
+praktisch nichts mehr über das Projekt. Disco-alt (Agent-Version:29)
+hat über Monate Gespräche nichts in `.disco/memory/` hinterlassen —
+die einzigen dauerhaften Fakten sind in `README.md` / `NOTES.md`,
+und das auch nur wenn der User sie dort abgelegt hat.
+
+Folge: Chat-Reset = Amnesie. Das widerspricht der CLAUDE.md-Zusage,
+dass `.disco/` das „Hirn" des Projekts ist.
+
+Ursachen (zu prüfen):
+- Skill `project-onboarding` ruft `memory_read` nur passiv ab, schreibt
+  aber nichts zurück, wenn Disco etwas Wichtiges dazulernt.
+- Es gibt kein implizites „merk Dir das" — Disco muss explizit
+  `memory_write`/`memory_append` aufrufen, und der System-Prompt
+  fordert das nicht genug ein.
+- Kein automatischer Snapshot am Session-Ende, der den Gesprächs-
+  Verlauf destilliert (ähnlich Conversation-Compaction oben, aber
+  mit Ziel „persistentes Projekt-Gedächtnis" statt „Kontext kürzen").
+
+**Ist-Zustand — zu viele Gedächtnis-Orte, zu viele Tools:**
+
+Disco betreibt heute **zwei parallele Memory-Systeme nebeneinander**:
+
+- **System A — Cline-Style Memory Bank** (`.disco/memory/`):
+  `MEMORY.md`, `activeContext.md`, `progress.md`, `systemPatterns.md`,
+  `techContext.md`, `glossary.md`, `decisions/ADR-NNN-*.md`.
+  Tools: `memory_read`, `memory_write`, `memory_list`, `memory_append_adr`.
+- **System B — Project Notes** (`NOTES.md` im Projekt-Root):
+  Tools: `project_notes_read`, `project_notes_append`.
+- Plus **`README.md`** als dritte Quelle (heute User-Eigentum,
+  via `fs_read` gelesen).
+
+→ 9 mögliche Orte, 6 Tools. GPT-5.1 kann nicht zuverlässig
+entscheiden, wann „Tabelle X hat Spalten Y" nach `systemPatterns.md`,
+`techContext.md` oder `glossary.md` gehört — also landet es nirgends.
+Das Cline-Schema ist konzeptionell elegant, in der Praxis aber
+fragmentiert. Claude Code und Cowork kommen mit **einer** Projekt-
+Datei aus (`CLAUDE.md` bzw. Canvas). Unterschied: Claude hat gutes
+Judgement, GPT-5.1 braucht klarere Regeln — aber **bei weniger
+Dateien**, sonst wird die Regel-Liste zu lang.
+
+**Zielarchitektur: 3 Dateien, 3 Zwecke, klare Trigger**
+
+| Datei | Eigentümer | Zweck | Schreib-Pattern |
+|---|---|---|---|
+| `README.md` | **User + Disco gemeinsam** | Projektziel, Leitplanken, Nutzer-Kontext | Disco schlägt Änderungen vor, User bestätigt; Disco darf eigenständig strukturelle Fortschreibungen (z. B. neuer Abschnitt "Datenquellen") machen |
+| `NOTES.md` | **Disco** | Chronologisches Logbuch | Append pro Arbeitspaket (Datum + Titel + 3–6 Zeilen) |
+| `MEMORY.md` | **Disco** | Destilliertes Wissen (nicht chronologisch) | Snapshot, kuratiert; Kapitel §Tabellen / §Konventionen / §Entscheidungen / §Lookup |
+
+**Weg kommen:**
+- `activeContext.md`, `progress.md`, `systemPatterns.md`,
+  `techContext.md`, `glossary.md` → konsolidiert als Abschnitte in
+  `MEMORY.md` (Überschriften-Struktur statt eigene Dateien).
+- `decisions/ADR-*.md` → ein Abschnitt „§Entscheidungen" in `MEMORY.md`.
+  Wenn das später wirklich wächst, kann man ADRs nachrüsten — heute
+  Disziplin-Overhead ohne Nutzen.
+- `project_notes_*`-Tools → ersetzt durch `memory_*` auf `NOTES.md`.
+- `memory_list`, `memory_append_adr` → weg.
+
+**Neue Tool-Oberfläche (4 Tools):**
+- `memory_read(file)` — `README.md`, `NOTES.md`, `MEMORY.md`
+  (andere Dateien: Fehler; `fs_read` für Memory-Dateien gesperrt).
+- `memory_write(file, content)` — nur `MEMORY.md` und `README.md`
+  (Snapshot). `README.md` nur mit expliziter User-Freigabe in der
+  Session oder nach „Schreib das bitte in die README"-Signal.
+- `memory_append(file, heading, content)` — `NOTES.md` (neuer
+  Abschnitt mit Datum) oder `MEMORY.md` (neues Kapitel).
+- Read-API für README bleibt auch via `fs_read` möglich, zentrale
+  Schreibdisziplin läuft aber über `memory_*`.
+
+**System-Prompt-Regeln (als SOP für GPT-5.1):**
+
+```
+SESSION-START (Skill project-onboarding):
+1. memory_read("README.md")  -> Projektziel erfassen
+2. memory_read("MEMORY.md")  -> destilliertes Wissen laden
+3. memory_read("NOTES.md")   -> letzten Abschnitt (Tail)
+   Wenn README fehlt ODER Projektziel unklar:
+     -> Disco fragt den User explizit: "Was ist das Ziel dieses
+        Projekts? Welche Daten, welcher Output?"
+     -> Antwort wird destilliert, als Vorschlag zur README
+        zurueckgegeben; bei User-OK via memory_write in README.md
+        geschrieben.
+
+WAEHREND DER ARBEIT — wenn Du Folgendes lernst, schreib es SOFORT:
+- Tabellen-Zweck                      -> MEMORY.md §Tabellen
+- User-Praeferenz oder Konvention     -> MEMORY.md §Konventionen
+- Entscheidung (Engine, Ordner-Layout)-> MEMORY.md §Entscheidungen
+- Hersteller-/Typen-Zuordnung         -> MEMORY.md §Lookup
+
+TURN-ENDE (sichtbares Arbeitspaket fertig):
+  memory_append("NOTES.md",
+                heading="2026-04-20 12:15 — <titel>",
+                content=<3-6 Zeilen>)
+
+VOR CHAT-RESET / COMPACTION:
+  Destilliere die Session -> memory_write("MEMORY.md", ...)
+```
+
+**Projektziel-Abfrage am Session-Start (neuer Mechanismus):**
+Wenn `README.md` fehlt, leer ist oder kein klar erkennbares
+Projektziel enthält (erster Absatz nicht aussagekräftig), muss
+Disco den User proaktiv fragen — bevor er mit fachlicher Arbeit
+anfängt. Antwort wird als Zusammenfassung zurückgespielt, der
+User sagt „ja so" oder „ergänze X", dann schreibt Disco das
+als strukturierten README-Abschnitt ins Projekt. Analog für
+Daten-Quellen-Abschnitt, wenn `sources/` befüllt ist aber die
+README sie nicht nennt.
+
+**Migration der Bestands-Projekte:**
+Für bestehende Projekte mit `.disco/memory/`-Dateien:
+- Einmal-Skript konsolidiert `activeContext/progress/systemPatterns/
+  techContext/glossary/decisions/*` in `MEMORY.md` (mit Kapitel-
+  Überschriften, Datum-gestempelt).
+- Alte Dateien bleiben als Backup unter `.disco/memory/.legacy/`
+  liegen, bis User bestätigt dass nichts fehlt.
+
+**Abgrenzung zu Conversation-Compaction (oben):**
+Conversation-Compaction kürzt das Kontextfenster innerhalb einer
+Session. Memory persistiert Wissen **über Sessions hinweg**.
+Technisch ähnlich (Destillation via LLM), Zweck unterschiedlich.
+Die Session-Ende-Destillation (→ MEMORY.md) kann den
+Compaction-Mechanismus mitbenutzen.
+
 ### Iterativer, gesprächiger Tool-Loop wie Claude Code (Priorität: hoch)
 
 **Beobachtung des Nutzers:** Disco macht viele Tool-Calls hintereinander
@@ -480,6 +607,67 @@ Kosten verursachen.
 - Budget-Limits in der Projekt-Config (README oder .disco/config.json)
 - Alert wenn ein einzelner Turn > 1 € kostet
 
+### Kostenlimit verifizieren — ziehen die existierenden Schutzmechanismen wirklich? (Priorität: hoch — aus UAT 2026-04-20)
+
+Status: Kurz-Notiz aus Live-Test. Wir haben an mehreren Stellen Deckel
+eingebaut (MAX_TOOL_ROUNDS, DI-Page-Check im Skill, Flow-Budget), aber
+**noch nie überprüft, ob die auch wirklich greifen**, wenn Disco in
+einen Kostenfresser hineinrennt.
+
+**Test-Szenarien, die durchlaufen werden sollten:**
+
+1. **Agent-Loop-Deckel:** Disco in eine Schleife schicken
+   (z.B. "rufe list_skills 40× hintereinander auf") — bricht er bei
+   Round 24 ab? Was sieht der Nutzer?
+2. **DI-Page-Limit:** PDF mit > 200 Seiten durch `extract_pdf_to_markdown`
+   jagen — kommt die Warnung? Wird der Call trotzdem ausgeführt oder
+   blockiert (aktuell: nur Warnung, keine Blockade).
+3. **Flow-Budget:** Flow-SDK hat `budget_eur`-Feld (siehe flows/sdk.py).
+   Mini-Flow schreiben, der bewusst das Budget überschreiten würde —
+   stoppt der Worker wirklich, oder läuft er einfach weiter?
+4. **Context-Onboarding > 5 PDFs:** Context-Ordner mit 10 kleinen PDFs
+   füllen — fragt Disco wirklich nach, oder schickt er alle auf
+   einmal los?
+
+**Ergebnis der Tests in Backlog nachtragen** und offene Lücken
+(z.B. Flow-Budget zieht nicht) als separate Bug-Einträge aufmachen.
+
+### DI-Kosten im Chat sichtbar machen (Priorität: hoch — aus UAT 2026-04-20)
+
+Status: Nutzer-Beobachtung — "Bei DI sind keine Kosten sichtbar.
+Müssen vielleicht vorher für bestimmte Parameter gesetzt werden."
+
+**Was der Code aktuell tut** (`functions/docint.py`):
+
+- `extract_pdf_to_markdown` liefert `estimated_cost_eur` im Tool-Result
+  zurück (0.01 €/Seite für `prebuilt-layout`, 0.005 €/Seite sonst — hardcoded).
+- Berechnung: `n_pages * cost_per_page`.
+
+**Mögliche Gründe, warum der Nutzer nichts sieht:**
+
+1. **UI rendert das Feld nicht prominent.** Tool-Result-Block zeigt JSON,
+   aber `estimated_cost_eur` geht in der Masse unter. → im Tool-Call-Block
+   (index.html) eigene Cost-Zeile / Badge, z.B. "≈ 0,12 € (12 Seiten)".
+2. **Disco erwähnt Kosten nicht aktiv im Live-Kommentar.** System-Prompt
+   hat keine Regel dazu. → Ergänzung: "Nach jedem DI-Call eine Zeile
+   `≈ 0,XX € für N Seiten` in die Assistant-Message."
+3. **Andere DI-Nutzungsstellen haben keine Kostenrückgabe.**
+   z.B. Context-Onboarding, Flow-Worker, wenn sie DI direkt aufrufen
+   statt über das Tool. → Einheitlicher Helper (`_di_cost(pages, model)`)
+   und konsequente Propagation.
+4. **Modell liefert `n_pages=0`.** Manche PDF-Varianten (gerenderte
+   Bilder ohne Page-Metadaten) — dann ist Cost=0. → Fallback auf
+   tatsächliche Seitenanzahl des Input-PDFs (pypdf).
+
+**Test + Fix in einem Rutsch:**
+
+1. Bekanntes PDF (z.B. 20 Seiten) durch `extract_pdf_to_markdown` jagen
+2. Tool-Result prüfen — kommt `estimated_cost_eur` sauber an?
+3. Assistant-Message prüfen — erwähnt Disco die Kosten?
+4. UI-Block prüfen — steht die Zahl irgendwo sichtbar?
+
+Danach die Lücken gezielt schließen.
+
 ### Batch-Aufgaben GRUNDSÄTZLICH über Pipeline (Priorität: kritisch)
 
 Aktuell läuft die DI-Extraktion von Context-PDFs als Tool-Call
@@ -569,7 +757,7 @@ können welche Engine pro Datei oder global genutzt wird.
 **ToDo — Docling produktiv verfuegbar machen** (aus UAT-Session 2026-04-19):
 - Dependency ist bereits in `pyproject.toml` (`docling>=2.90.0`), aber
   **kein Produkt-Pfad nutzt sie aktuell** — nur ad-hoc Benchmark-Skripte
-  im `ibl-lagerhalle`-Projekt.
+  in einem Testprojekt.
 - **Option A (Tool):** neue Custom Function
   `markdown_extract_docling(pdf_path, engine_options)` in
   `src/bew/agent/functions/` — nutzt lokales docling, schreibt Markdown
@@ -646,6 +834,51 @@ per Umweg auf Fremd-Projekte zu joinen.
 
 **Eröffnung eines Nachbar-Projekts:** nur mit expliziter User-
 Bestätigung in der UI — nie vom Agenten aus.
+
+### Projekt-Lifecycle gehört dem Nutzer, nicht dem Agenten (Priorität: hoch — aus UAT 2026-04-20)
+
+Disco lebt **innerhalb** eines Projekts und darf Projekte weder anlegen
+noch löschen. Das ist eine bewusste Rollen-Trennung, nicht ein
+Implementierungs-Detail:
+
+- **Mensch:** entscheidet welche Projekte es gibt, wie sie heißen, wann
+  sie weg dürfen. Mandantengrenze.
+- **Disco:** arbeitet innerhalb der Sandbox des aktiven Projekts. Keine
+  Projekt-übergreifende Manipulation.
+
+Aktueller Zustand:
+- Projekt-Anlage geht nur per CLI (`disco project init <slug>`). Im FE
+  gibt es keinen Button dafür.
+- Projekt-Löschung geht gar nicht — man muss den Ordner unter
+  `~/Disco/projects/` manuell wegräumen, die DB-Zeile in `projects`
+  bleibt liegen.
+- Der Agent hat theoretisch Tools (`list_projects`), die ihm die
+  Projekt-Existenz zeigen — er kann sie aber (zu Recht) nicht anlegen
+  oder löschen. Diese Lücke darf er auch nie bekommen.
+
+Umsetzung:
+
+1. **FE:** Sidebar oben rechts neben dem Projekt-Dropdown zwei Buttons:
+   - „+" → Modal „Neues Projekt anlegen" (slug, name, description,
+     Checkbox „Sample-Dateien anlegen"). Ruft `POST /api/workspace/projects`.
+   - „🗑" → bei ausgewähltem Projekt → Bestätigungsdialog mit Slug
+     zum Abtippen (destructive confirm), dann `DELETE /api/workspace/projects/<slug>`.
+     Löscht DB-Zeile + Verzeichnisbaum (vorher Backup in
+     `~/Disco/.trash/<slug>-<timestamp>/`).
+
+2. **Backend:**
+   - `POST /api/workspace/projects` (neu) — ruft dieselbe
+     `init_project()`-Routine wie die CLI.
+   - `DELETE /api/workspace/projects/<slug>` (neu) — mit
+     `move-to-trash`-Semantik, nicht sofort `rm -rf`.
+
+3. **Agent-Tools bleiben so wie sie sind:**
+   - `list_projects` darf nur lesen (und nach „Nicht ausgewählte
+     Projekte dürfen unsichtbar sein" ggf. auch nicht mehr alle sehen).
+   - Es wird KEIN `create_project`- oder `delete_project`-Tool geben.
+     Wenn Disco im Chat fragt „soll ich ein neues Projekt anlegen?",
+     ist die richtige Antwort: „Bitte leg es selbst über die Sidebar an,
+     ich darf das nicht."
 
 ### `run_python` härten gegen Prompt-Injection (Priorität: mittel)
 
@@ -734,6 +967,304 @@ Test-Szenario: in `uat-2026-04-19` DCC-Klassifikation und Metadaten-
 Extraktion gleichzeitig anwerfen — beide lesen aus `agent_md_extracts`,
 schreiben in unterschiedliche Tabellen, keine Kollision.
 
+### Standard-Flows fuer jedes Projekt (Priorität: mittel — aus UAT 2026-04-20)
+
+Es sollte eine Menge von Standard-Flows geben, die in **jedem neu angelegten
+Projekt automatisch vorhanden** sind (via Projekt-Template analog zu den
+Template-Migrationen). Damit startet kein Projekt auf der gruenen Wiese —
+die Basics liegen bereit, der Nutzer triggert sie nur.
+
+Muss vor Umsetzung einmal gemeinsam diskutiert werden:
+
+- **Welche Flows sind „Standard"?** Kandidaten:
+  - `sources_scan_and_register` — Sources scannen, hashen, in `agent_sources`
+    registrieren (heute Tool, koennte aber als Flow laufen fuer Audit-Trail)
+  - `md_extract_granite` / `md_extract_smol` / `md_extract_di` — die drei
+    Engines als fertige Flows
+  - `dcc_classify_gpt5` — DCC-Klassifikation ueber Markdown-Extrakte
+  - `duplicate_detect` — Duplikat-Analyse per Hash + Name + Inhalt
+  - `context_manifest_refresh` — Kontext-Ordner neu indizieren
+- **Template vs. generiertes Code-Skelett?** Tradeoff:
+  - *Template-Kopie:* Runner + README als Datei-Template, wird beim
+    `disco project init` ins Projekt kopiert. Flexibler bei Anpassung,
+    aber Drift zwischen Projekten moeglich.
+  - *Shared Runner:* ein globaler Runner in `src/bew/flows/standard/`,
+    Projekt hat nur die README als Referenz. Weniger Drift, aber weniger
+    anpassbar pro Projekt.
+- **Aktualisierung:** wie bekommen bestehende Projekte einen neuen
+  Standard-Flow (oder ein Update)? `disco flow sync` als neues Kommando?
+- **Konfiguration pro Projekt:** Standard-Flows haben typische
+  Default-Configs (Budget, Engine-Wahl), die pro Projekt ueberschreibbar
+  sein muessen.
+- **Discoverability:** neues UI-Element „Standard-Flows" im Flow-Panel,
+  getrennt von projekt-spezifischen Flows.
+
+Ziel: ein neues Projekt ist nach `disco project init` direkt
+„produktionsbereit" — Sources registrieren, Markdown extrahieren,
+DCC klassifizieren geht One-Click, ohne dass Disco fuer jedes neue
+Projekt denselben Flow nochmal baut.
+
+Ursprung: UAT-Session 2026-04-20, waehrend Run #15 (md_extract_granite
+auf uat-2026-04-19) lief und Disco parallel einen zweiten Flow
+`md_extract_smol` gebaut hat — wurde deutlich, dass solche Arbeit
+fuer jedes Projekt wiederholt wird, obwohl die Flows strukturell
+identisch sind.
+
+### Overnight-Betrieb + Resume nach Sleep/Restart (Priorität: hoch — aus UAT 2026-04-20)
+
+Bulk-Flows (md_extract_granite, DCC-Klassifikation, etc.) laufen
+teils stundenlang. Der Nutzer moechte sie **ueber Nacht** laufen
+lassen, auch wenn der Rechner gesperrt ist — und einen laufenden
+Flow **nach Neustart** (Disco-Restart, Mac-Restart, Aufwachen aus
+dem Sleep) wieder aufnehmen koennen, statt ihn komplett neu anzustossen.
+
+Zwei Teilprobleme:
+
+**1. Overnight (Rechner an, gesperrt, aber nicht im Sleep):**
+- Mac-Default: Displayschlaf nach ~10 min, Systemschlaf je nach
+  Energieprofil. Bei Netzteil typisch „Nie", bei Batterie schnell.
+- Bei Mac im Systemschlaf stoppt der Worker-Subprozess — scheduler
+  wird suspendiert, keine Azure-Calls, keine Fortschritte.
+- Loesung: **`caffeinate -i` automatisch starten**, solange ein
+  Flow `running` ist. Disco spawnt `caffeinate` als Child, killt
+  ihn bei Flow-Ende. Damit bleibt der Mac wach, auch wenn der
+  User das Display zumacht.
+- Alternative: User muss manuell `caffeinate` oder „Ruhezustand
+  verhindern" in den Energie-Einstellungen aktivieren. Unschoen.
+
+**2. Resume nach Restart / Aufwachen:**
+- Wenn der Worker-Subprozess weg ist (Mac neu gestartet, Disco
+  gekillt), zeigt `agent_flow_runs.status` weiterhin `running`,
+  obwohl nichts laeuft → „stale run".
+- Nach Disco-Start muessten solche Runs:
+  a) erkannt werden (`status=running` aber `worker_pid` existiert
+     nicht mehr als Prozess)
+  b) auf `paused` / `interrupted` gesetzt werden
+  c) dem User im Run-Streifen mit Option „Resume" angezeigt werden
+- Resume muss **idempotent** sein: Items mit `status=done` werden
+  nicht neu verarbeitet, `status=pending` oder `status=failed` (je
+  nach Policy) werden weiter gemacht. Das ist die Kern-Idempotenz-
+  Zusage der SDK, muss aber pro Flow geprueft werden.
+- Implementierung: neuer CLI-Befehl `disco flow resume <run_id>`
+  oder Button im UI, der einen neuen Worker-Prozess auf bestehende
+  `run_id` aufsetzt.
+
+**Offene Designpunkte:**
+- Soll Disco nach Start automatisch alle stale runs als „resumed"
+  wieder aufnehmen? Oder dem User nur anbieten?
+- Was passiert mit `next_heartbeat_at`, wenn ein Run 10h „gestanden"
+  hat? Der Watcher wuerde sofort triggern — evtl. Flood. Bei Resume
+  zuruecksetzen auf +1 min.
+- Wie gehen wir mit Items um, die beim Crash mitten in `processing`
+  waren? Status auf `pending` zuruecksetzen, neu einplanen.
+- `caffeinate` klappt unter macOS — unter Linux (falls mal relevant)
+  andere Mechanismen.
+
+Ursprung: UAT-Session 2026-04-20, Nutzer-Frage nach Run #15:
+> "Ich würde gerne klären ob die flows bereit sind über nacht
+> weiter zu laufen, auch wenn der computer gesperrt ist. Dann
+> wäre es super, wenn ein flow seine arbeit wieder aufnehmen kann
+> nachdem disco neu gestartet wird bzw während des flows der
+> computer ausgeschaltet (oder sleep) wurde"
+
 ---
 
-*Letzte Aktualisierung: 2026-04-19*
+## Docling / MLX
+
+### SmolDocling-MLX HuggingFace-Cache-Erkennung (Priorität: mittel)
+
+`markdown_extract(engine="smol-mlx")` schlägt fehl, weil das HF-Hub-SDK
+den **manuell** aufgebauten Cache-Ordner nicht erkennt:
+
+```
+LocalEntryNotFoundError: Cannot find an appropriate cached snapshot folder
+for the specified revision on the local disk and outgoing traffic has
+been disabled.
+```
+
+Hintergrund: Die Modelle (Granite-MLX + Smol-MLX) wurden manuell per
+`curl --continue-at -` aus dem HF-Hub geladen, weil `huggingface_hub`
+und `hf_transfer` aus Python heraus auf diesem Mac TCP-Hänger zur HF-CDN
+haben (`curl` selbst funktioniert dort einwandfrei). Granite hat
+funktioniert, weil `huggingface_hub` initial den Cache schon halb
+angelegt hatte (refs/main + Symlinks), bevor es dann hängenblieb. Smol
+ist dagegen komplett von Hand aufgebaut — und dabei fehlt offenbar ein
+Marker, den HF-Hub für die Cache-Validierung erwartet.
+
+**Workaround heute:** Granite ist Default-Engine und läuft. Smol nicht
+verfügbar.
+
+**Saubere Lösung (TODO):** `_convert_vlm_mlx` in
+`src/bew/agent/functions/markdown.py` umbauen, sodass es:
+1. Erst prüft, ob unter `~/.cache/huggingface/hub/models--<repo>/snapshots/<sha>/`
+   die `model.safetensors` als gültiger Symlink liegt (Größe > 100 MB).
+2. Falls ja → `mlx_vlm.utils.load(snapshot_path)` direkt mit lokalem
+   Pfad aufrufen und HF-Hub komplett umgehen.
+3. Falls nein → wie bisher den `repo_id`-Pfad gehen
+   (mit der Wahrscheinlichkeit, dass der Download wieder hängt).
+
+Alternative: vor dem Granite-/Smol-Default-Cache-Aufruf einmalig
+`HF_HUB_DOWNLOAD_TIMEOUT=10` setzen + `try/except`, sodass HF-Hub
+nicht ewig hängt, sondern schnell auf den lokalen Cache zurückfällt.
+
+Ursprung: UAT-Session 2026-04-19, Docling-Integration. Granite-Smoke-Test
+hat funktioniert (16s/Seite), Smol-Test scheiterte am HF-Cache-Lookup.
+
+### Hybride Markdown-Pipeline — DI ↔ VLM ↔ Standard (Priorität: hoch)
+
+**Problem:** Granite-Docling-MLX läuft auf M1 zu langsam für produktive
+Bulk-Extraktion (Run #15: 20 Dokumente in ~55 min, grosse PDFs zogen
+einzeln 10-14 min). Selbst mit SmolDocling-MLX (schneller, weniger
+Parameter) ist das kein Ersatz fuer 1000+-Dokument-Läufe.
+
+Gleichzeitig sind die drei Engines **nicht austauschbar**:
+
+| Engine | Kosten | Qualitaet | Durchlaufzeit | Ideal fuer |
+|---|---|---|---|---|
+| `standard` (DocLayNet + TableFormer) | 0 EUR | gut bei Text-PDFs, schwach bei Scans/Layout | schnell (CPU) | einfache Text-PDFs |
+| `granite-mlx` / `smol-mlx` (VLM) | 0 EUR (lokal) | sehr gut bei komplexem Layout, Tabellen, schlechten Scans | sehr langsam (M1) | Einzelstuecke, wo Qualitaet zaehlt |
+| Azure Document Intelligence | ~0.015 EUR/Seite | Profi-Qualitaet, Spaltenerkennung, Formeln, OCR | schnell (Cloud, parallel) | grosse Scan-Volumen, mehrspaltige Plaene |
+
+**Idee: Hybrid-Router, der pro Dokument die passende Engine waehlt.**
+Entscheidungskriterien (erste Skizze, noch nicht final):
+
+- Seitenzahl < 3 + textbasiert (kein Scan) → `standard`
+- Seitenzahl 3-20 + Layout komplex (Tabellen, Plaene) → `granite-mlx`
+  oder DI je nach Zeitbudget
+- Seitenzahl > 20 oder Scan-PDF → **Azure DI** (lokal zu langsam,
+  Qualitaet bei Scans entscheidend)
+- Handzeichnungen / stark gescannte Plaene → DI + custom prompt
+
+Dafuer muss Disco pro Dokument erst **eine schnelle Inspektion**
+machen (Seitenzahl, Text-vs-Scan-Heuristik, Dateigroesse, ggf. Thumbnail
+der ersten Seite ueber VLM-Klassifikator) und dann die Engine routen.
+Das ist selbst ein kleiner Flow.
+
+**Offene Fragen:**
+- Wer entscheidet? Fester Router (Regeln) vs LLM-Router (GPT-5 guckt
+  1. Seite an und waehlt) — LLM-Router kostet Token, Regel-Router ist
+  schneller und billiger, aber brittle.
+- Kosten-Budget pro Run? z.B. „max 5 EUR DI-Kosten fuer den ganzen
+  Projekt-Sync", und Router faellt dann auf Standard/VLM zurueck
+- Qualitaets-Check nach der Extraktion — wenn das Markdown zu duenn
+  ist (z.B. < 200 Zeichen fuer ein 10-Seiten-PDF), automatisch Engine
+  hochstufen und neu versuchen (Retry-Ladder: standard → granite → DI)
+
+**Wann angehen:** erst nach Auswertung Granite-Run #15 + Smol-Run.
+Sobald wir belastbare Zahlen zu Qualitaet + Zeit pro Engine haben
+(am gleichen Dokument-Set), kann man den Router sinnvoll designen.
+
+Ursprung: UAT-Session 2026-04-20, nach Run #15 (Granite too slow).
+
+---
+
+## Architektur
+
+### Architecture Review mit Claude (Priorität: mittel)
+
+Sobald der MVP-Scope steht (Flows produktiv, 2+ reale Pipelines gelaufen),
+ein gemeinsames Architecture-Review mit Claude durchfuehren. Mögliche
+Themen:
+
+- Workspace-Trennung (Code vs. Daten) — hält das auch bei Multi-User?
+- Foundry-Portal-Agent vs. eigene Orchestrierung — Lock-in-Risiko?
+- Projekt-DB (SQLite) vs. System-DB — skaliert das bei 20+ Projekten
+  à 100k Dokumenten?
+- Flow-SDK vs. Worker-Pool vs. Cloud-Scheduling — wann was?
+- Skills-Katalog — wird er übersichtlich bleiben oder irgendwann
+  unhaltbar gross?
+- Offline-Policy — ist die Defence-in-Depth (Settings + Subprocess-Env)
+  ausreichend, oder braucht es Egress-Firewall?
+- Hybrid-Search (Phase 2c) — Embeddings wo? Index wo? Rebuild-Strategie?
+
+Output: schriftliche Bilanz mit Ampelbewertung pro Bereich + konkreten
+Nachbesserungs-Tickets im Backlog.
+
+Ursprung: UAT-Session 2026-04-20, Wunsch des Nutzers.
+
+---
+
+## Release / DevOps
+
+### Dev- und Prod-Umgebung parallel betreiben (Priorität: hoch — aus UAT 2026-04-20)
+
+Aktueller Zustand: Raphael und Claude arbeiten **direkt gegen `main`**.
+Jede Aenderung (Code, Skills, System-Prompt, Migrationen) wirkt sofort
+auf genau die Disco-Instanz, mit der Raphael produktiv arbeiten will.
+Das bremst sowohl das Entwickeln (nichts traut sich, kaputt zu gehen)
+als auch das echte Nutzen (bei Dev-Aktivitaet ist die Instanz instabil).
+
+**Ziel:** Parallel-Betrieb einer stabilen Prod- und einer volatilen
+Dev-Umgebung auf demselben Rechner — Raphael kann produktiv arbeiten,
+waehrend Claude am Code schraubt.
+
+Muss vor Umsetzung gemeinsam diskutiert werden. Baustellen:
+
+- **Git-Flow:**
+  - `main` = Prod, `dev` = laufende Entwicklung
+  - PR von `dev` nach `main` nach Verifikation (manueller Release-Cut)
+  - Keine direkten Pushes auf `main` mehr (Branch Protection Rule?)
+- **Zwei Installations-Pfade:**
+  - Dev-Checkout (wo wir jetzt arbeiten)
+  - Prod-Checkout (neuer Checkout auf `main`)
+  - Jeweils eigenes `.venv/`, eigene `.env`
+- **Zwei Workspaces:**
+  - `~/Disco-dev/` (bestehender `~/Disco/` wird umbenannt)
+  - `~/Disco/` (Prod — neue Daten, die Raphael ernsthaft pflegt)
+  - `.env`-Variable `DISCO_WORKSPACE` pro Installation anders gesetzt
+- **Zwei Ports:**
+  - Dev: `127.0.0.1:8765` (wie heute, Claude Preview)
+  - Prod: `127.0.0.1:8000` (Standard-Port aus CLAUDE.md)
+  - Beide gleichzeitig an, Raphael arbeitet in Prod, schaut bei Bedarf
+    in Dev
+- **Foundry-Agent:**
+  - Option A: eine Agent-Version fuer beides (Prod faehrt die
+    gleiche Version, Dev-Pushes ueberschreiben sie = nicht gut)
+  - Option B: zwei Agent-Deployments (`disco-prod-agent` = Prod,
+    `disco-dev-agent` = Dev) mit eigenem `FOUNDRY_AGENT_ID`
+  - Option C: `disco agent setup` pusht nur in Dev; Release-Cut auf
+    Prod braucht `disco agent release` (Agent neu erstellen / Version
+    bumpen)
+  - **Vermutlich B** — klare Trennung, keine Ueberraschungen in Prod
+- **Migrationen:**
+  - Dev wendet neue Migrationen sofort an — Prod-DB bekommt sie erst
+    beim Release-Cut. Schema-Drift-Risiko.
+  - Pruefschritt beim Release: „gibt es Migrationen in dev, die in
+    prod noch nicht angewandt sind? Dann erst migrate, dann switch."
+- **Logs / Observability:**
+  - Getrennte Log-Verzeichnisse pro Workspace (DISCO_LOGS_DIR)
+  - UAT-Watcher heute zeigt nur eine Workspace-DB — muss entweder
+    parametrisierbar werden oder es braucht zwei parallele Watcher
+- **Model-Cache:**
+  - `~/.cache/huggingface/` ist systemweit geteilt, unkritisch
+  - `~/.cache/docling/`, `~/.cache/EasyOCR/` dito
+  - Keine Parallelisierung noetig, beide Instanzen lesen denselben Cache
+- **Daten-Migration Prod ← Dev:**
+  - Wenn ein Projekt in Dev „gereift" ist (z. B. UAT-Tests bestanden),
+    sollte es nach Prod wanderbar sein. Manuell per `rsync` oder
+    Disco-Kommando?
+
+**Minimal Viable Split:**
+1. `git checkout -b dev` und ab jetzt nur noch dort pushen
+2. Zweiter Clone auf `main` unter neuem Pfad
+3. Zweiter Workspace `~/Disco-prod/` oder analog
+4. `.env` pro Installation, `DISCO_WORKSPACE` trennen
+5. Zwei Uvicorn-Instanzen gleichzeitig auf unterschiedlichen Ports
+6. Foundry-Agent zunaechst geteilt, spaeter Split
+
+**Offene Fragen:**
+- Single-Machine-Setup reicht, oder braucht es eine zweite Hardware
+  fuer „echte" Prod-Trennung (DSGVO, Datenabschottung)?
+- Sind Skills und system_prompt.md Teil von „Code" (also per Git
+  versioniert) oder sollen sie zwischen dev und prod kopierbar sein
+  ohne Branch-Merge?
+- Ab wann lohnt CI/CD (Tests auf dev-PR, deploy auf Merge nach main)?
+
+Ursprung: UAT-Session 2026-04-20, direkter Wunsch des Nutzers — heute
+ist der Schmerz das erste Mal konkret geworden, weil waehrend eines
+laufenden 20-Dokument-Flows parallel ein zweiter Flow gebaut wurde
+und der System-Prompt zweimal geaendert wurde.
+
+---
+
+*Letzte Aktualisierung: 2026-04-20*

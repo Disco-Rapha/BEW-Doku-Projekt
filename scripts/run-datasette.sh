@@ -6,12 +6,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [ ! -f db/bew.db ]; then
-    echo "Datenbank db/bew.db fehlt. Bitte zuerst:"
+if [ ! -f db/disco.db ]; then
+    echo "Datenbank db/disco.db fehlt. Bitte zuerst:"
     echo "  uv run bew db init"
     exit 1
 fi
 
-exec uv run datasette serve db/bew.db \
+exec uv run datasette serve db/disco.db \
     --port 8001 \
     --open

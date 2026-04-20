@@ -1,0 +1,2666 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Disco</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<!-- Markdown + Code-Highlight + XSS-Sanitizer (CDN, kein Build) -->
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/sql.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/markdown.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"></script>
+
+<!-- Viewer-Bibliotheken -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.js';
+  }
+</script>
+
+<style>
+:root {
+  --bg:        #1a1a1a;
+  --panel:    #232323;
+  --panel2:   #2c2c2c;
+  --border:   #3a3a3a;
+  --text:     #e0e0e0;
+  --text-dim: #888;
+  --text-bright: #ffffff;
+  --accent:   #5b9aff;
+  --accent2:  #2563eb;
+  --green:    #4ade80;
+  --yellow:   #facc15;
+  --red:      #ef4444;
+  --mono:     ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --sidebar-w: 260px;
+  --viewer-w:  360px;
+  --splitter-w: 4px;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100vh; overflow: hidden;
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+button, input, select, textarea {
+  font: inherit; color: inherit;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+button { cursor: pointer; }
+button:hover { background: var(--panel); }
+.btn-primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+.btn-primary:hover { background: var(--accent); }
+.btn-stop { background: var(--red); border-color: var(--red); color: #fff; font-size: 12px; padding: 4px 12px; }
+.btn-stop:hover { background: #dc2626; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ============= Layout: 3-Spalten Grid mit Splittern ============= */
+#app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) var(--splitter-w) 1fr var(--splitter-w) var(--viewer-w);
+  height: 100vh;
+}
+#app.sidebar-collapsed { --sidebar-w: 0px; }
+#app.viewer-collapsed { --viewer-w: 0px; }
+
+#sidebar, #chat-pane, #viewer-pane { overflow: hidden; }
+.splitter {
+  background: var(--border);
+  cursor: col-resize;
+  user-select: none;
+}
+.splitter:hover { background: var(--accent); }
+
+/* ============= Sidebar (links) ============= */
+#sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+.sb-section {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  flex-shrink: 0;
+}
+.sb-section.scrollable { overflow-y: auto; flex: 1 1 auto; min-height: 80px; }
+.sb-title {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.7px; color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.sb-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 3px; cursor: pointer; }
+.sb-row:hover { background: var(--panel2); }
+.sb-row.active { background: var(--accent2); color: #fff; }
+.sb-row .icon { width: 14px; text-align: center; opacity: 0.7; }
+.sb-row .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-row .meta { color: var(--text-dim); font-size: 11px; }
+
+#project-select {
+  width: 100%;
+  background: var(--panel2);
+  font-weight: 600;
+}
+
+/* Tree */
+.tree { font-family: var(--mono); font-size: 12px; }
+.tree-node { padding-left: 0; }
+.tree-node-children { margin-left: 12px; }
+.tree-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px 4px; border-radius: 3px; cursor: default;
+}
+.tree-row:hover { background: var(--panel2); }
+.tree-row.file { cursor: pointer; }
+.tree-toggle { width: 12px; color: var(--text-dim); cursor: pointer; }
+.tree-icon { width: 14px; text-align: center; opacity: 0.7; }
+.tree-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-size { color: var(--text-dim); font-size: 11px; }
+
+/* Toggle-Buttons in Header */
+.sb-toolbar { display: flex; gap: 4px; align-items: center; justify-content: space-between; }
+.icon-btn {
+  background: transparent; border: none; padding: 2px 6px;
+  color: var(--text-dim); cursor: pointer; font-size: 14px;
+}
+.icon-btn:hover { color: var(--text-bright); background: var(--panel2); }
+
+/* ============= Chat (Mitte) ============= */
+#chat-pane {
+  display: flex; flex-direction: column;
+  background: var(--bg);
+}
+#chat-header {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+}
+#chat-title {
+  flex: 1; font-weight: 600; color: var(--text-bright);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#chat-project-tag {
+  font-size: 11px; color: var(--text-dim);
+  padding: 2px 6px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 3px;
+}
+#chat-token-counter {
+  font-family: var(--mono); font-size: 11px;
+  padding: 2px 8px; border-radius: 3px;
+  background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: help;
+}
+#chat-token-counter.warn {
+  background: rgba(250,204,21,0.15);
+  border-color: rgba(250,204,21,0.5);
+  color: var(--yellow);
+}
+#chat-token-counter.critical {
+  background: rgba(239,68,68,0.15);
+  border-color: rgba(239,68,68,0.5);
+  color: var(--red);
+  font-weight: 600;
+  animation: pulse-critical 2s infinite;
+}
+@keyframes pulse-critical {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.0); }
+  50%      { box-shadow: 0 0 0 4px rgba(239,68,68,0.25); }
+}
+#btn-compact {
+  font-size: 11px; padding: 3px 10px;
+  background: var(--panel2); border: 1px solid var(--border);
+}
+#btn-compact:hover {
+  background: var(--accent2); border-color: var(--accent2); color: #fff;
+}
+#btn-compact.urgent {
+  background: var(--yellow); border-color: var(--yellow); color: #000;
+}
+#btn-compact.urgent:hover { background: #eab308; border-color: #eab308; }
+
+/* ============= Run-Streifen (aktive Flow-Runs) ============= */
+#run-strip {
+  display: none;   /* JS blendet ein, sobald ein Run aktiv ist */
+  flex-direction: column;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#run-strip.has-runs { display: flex; }
+.run-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 14px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.run-row:last-child { border-bottom: none; }
+.run-row.status-running { background: rgba(74,222,128,0.06); }
+.run-row.status-paused  { background: rgba(250,204,21,0.08); }
+.run-row.status-failed  { background: rgba(239,68,68,0.10); }
+.run-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  flex-shrink: 0;
+}
+.run-row.status-running .run-dot {
+  background: var(--green);
+  animation: run-pulse 2s ease-in-out infinite;
+}
+.run-row.status-paused  .run-dot { background: var(--yellow); }
+.run-row.status-failed  .run-dot { background: var(--red); }
+@keyframes run-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0.0); }
+  50%      { box-shadow: 0 0 0 5px rgba(74,222,128,0.25); }
+}
+.run-id {
+  font-family: var(--mono); color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.run-id:hover { color: var(--accent); text-decoration: underline; }
+.run-flow {
+  color: var(--text-bright); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 220px;
+}
+.run-project {
+  color: var(--text-dim); font-size: 11px;
+  padding: 1px 6px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 3px;
+  white-space: nowrap;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+}
+.run-progress {
+  flex: 1; min-width: 120px;
+  display: flex; align-items: center; gap: 8px;
+}
+.run-bar {
+  flex: 1; height: 4px; border-radius: 2px;
+  background: var(--panel2); overflow: hidden; min-width: 60px;
+}
+.run-bar-fill {
+  height: 100%; background: var(--green);
+  transition: width 0.3s ease;
+}
+.run-row.status-paused .run-bar-fill { background: var(--yellow); }
+.run-row.status-failed .run-bar-fill { background: var(--red); }
+.run-counts {
+  font-family: var(--mono); color: var(--text-dim);
+  white-space: nowrap;
+}
+.run-counts .run-failed { color: var(--red); margin-left: 4px; }
+.run-meta {
+  display: flex; gap: 10px; color: var(--text-dim);
+  white-space: nowrap;
+}
+.run-cost {
+  font-family: var(--mono);
+  color: var(--text);
+}
+.run-cost.over-budget { color: var(--red); font-weight: 600; }
+.run-actions {
+  display: flex; gap: 4px;
+  flex-shrink: 0;
+}
+.run-btn {
+  font-size: 11px; padding: 3px 8px;
+  background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 3px; cursor: pointer;
+  white-space: nowrap;
+}
+.run-btn:hover { background: var(--border); color: var(--text-bright); }
+.run-btn.run-btn-danger:hover {
+  background: var(--red); border-color: var(--red); color: #fff;
+}
+.run-btn:disabled {
+  opacity: 0.4; cursor: not-allowed;
+}
+
+/* ============= Run-Toast ============= */
+#run-toast-container {
+  position: fixed;
+  bottom: 20px; right: 20px;
+  z-index: 9999;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.run-toast {
+  pointer-events: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  border-radius: 4px;
+  padding: 10px 14px;
+  min-width: 280px; max-width: 420px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  animation: toast-in 0.2s ease-out;
+}
+.run-toast.status-failed { border-left-color: var(--red); }
+.run-toast.status-cancelled { border-left-color: var(--text-dim); }
+.run-toast-title {
+  font-weight: 600; color: var(--text-bright);
+  margin-bottom: 3px;
+}
+.run-toast-body { color: var(--text-dim); }
+.run-toast-close {
+  float: right; cursor: pointer; color: var(--text-dim);
+  background: none; border: none; font-size: 14px;
+  padding: 0 0 0 10px;
+}
+.run-toast-close:hover { color: var(--text-bright); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Kompressions-Divider in der Message-Liste */
+.compact-divider {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0; margin: 6px 0;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  color: var(--text-dim); font-size: 11px; font-style: italic;
+  justify-content: center;
+}
+
+/* Modal (Kompression) */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px; padding: 18px 22px;
+  max-width: 520px; width: 90%;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  color: var(--text);
+}
+.modal h3 { margin: 0 0 10px 0; color: var(--text-bright); font-size: 16px; }
+.modal p { margin: 8px 0; line-height: 1.5; }
+.modal .muted { font-size: 11px; }
+.modal-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 14px;
+}
+.modal-actions button { padding: 6px 14px; }
+#chat-messages {
+  flex: 1; overflow-y: auto;
+  padding: 14px 20px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.msg { max-width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.msg .sender {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+.msg.user .sender { color: var(--accent); }
+.msg.agent .sender { color: var(--green); }
+.msg.system .sender { color: var(--text-dim); }
+/* Mehrteilige Disco-Antworten: "DISCO"-Label nur beim ersten Element zeigen.
+   Live-Kommentar-Bubbles zwischen Tool-Blocks bekommen kein redundantes Label. */
+.msg.agent + .msg.agent > .sender,
+.tool-call + .msg.agent > .sender { display: none; }
+.msg .bubble {
+  background: var(--panel2);
+  border-radius: 6px;
+  padding: 10px 14px;
+  line-height: 1.55;
+  word-wrap: break-word;
+}
+.msg.user .bubble { background: var(--accent2); color: #fff; }
+.msg.system .bubble {
+  background: transparent; color: var(--text-dim);
+  font-size: 11px; font-style: italic; padding: 4px 0;
+}
+
+/* Markdown-Rendering im Chat */
+.bubble p { margin: 0 0 8px 0; }
+.bubble p:last-child { margin-bottom: 0; }
+.bubble h1, .bubble h2, .bubble h3, .bubble h4 {
+  margin: 12px 0 6px 0;
+  color: var(--text-bright);
+  font-weight: 600;
+}
+.bubble h1 { font-size: 18px; }
+.bubble h2 { font-size: 16px; }
+.bubble h3 { font-size: 14px; }
+.bubble h4 { font-size: 13px; }
+.bubble ul, .bubble ol { margin: 6px 0 8px 0; padding-left: 22px; }
+.bubble li { margin-bottom: 3px; }
+.bubble code {
+  font-family: var(--mono); font-size: 12px;
+  background: rgba(255,255,255,0.08);
+  padding: 1px 5px; border-radius: 3px;
+}
+.bubble pre {
+  background: #0a0a0a;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.bubble pre code {
+  background: transparent; padding: 0;
+  font-size: 12px; line-height: 1.5;
+}
+.bubble table {
+  border-collapse: collapse; margin: 8px 0;
+  font-size: 12px;
+  width: auto; max-width: 100%;
+}
+.bubble th, .bubble td {
+  border: 1px solid var(--border);
+  padding: 4px 8px; text-align: left;
+}
+.bubble th { background: var(--panel); font-weight: 600; }
+.bubble tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.bubble blockquote {
+  border-left: 3px solid var(--border);
+  margin: 8px 0; padding: 4px 12px;
+  color: var(--text-dim);
+}
+.bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.bubble a { color: var(--accent); }
+.user .bubble code,
+.user .bubble pre { background: rgba(255,255,255,0.15); }
+
+/* Tool-Call-Block — kompakt + aufklappbar */
+.tool-call {
+  font-family: var(--mono); font-size: 11px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow);
+  border-radius: 4px;
+  margin: 4px 0;
+}
+.tool-call summary {
+  cursor: pointer; padding: 5px 10px;
+  color: var(--text-dim); list-style: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.tool-call summary::-webkit-details-marker { display: none; }
+.tool-call summary::before {
+  content: '▶'; font-size: 8px; color: var(--text-dim);
+  transition: transform 0.15s;
+}
+.tool-call[open] summary::before { transform: rotate(90deg); }
+.tool-call .tool-name { color: var(--yellow); font-weight: 600; }
+.tool-call .tool-status { color: var(--green); font-size: 10px; margin-left: auto; }
+.tool-call .tool-status.pending { color: var(--yellow); }
+.tool-call .tool-body { padding: 0 10px 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.tool-call .tool-args, .tool-call .tool-result {
+  font-size: 11px; background: #0a0a0a;
+  border: 1px solid var(--border); border-radius: 3px;
+  padding: 5px 8px; white-space: pre-wrap; word-break: break-all;
+  max-height: 180px; overflow-y: auto;
+}
+.tool-call .tool-label {
+  color: var(--text-dim); font-size: 9px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.tool-call.code-interpreter { border-left-color: var(--accent); }
+.tool-call.file-search { border-left-color: var(--green); }
+
+/* Typing indicator */
+.typing { display: flex; gap: 4px; padding: 6px 10px; }
+.typing-dot {
+  width: 6px; height: 6px; background: var(--text-dim);
+  border-radius: 50%; animation: bounce 1.2s infinite ease-in-out;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes bounce { 0%, 80%, 100% { transform: scale(0.6); } 40% { transform: scale(1); } }
+
+/* Chat-Input */
+#chat-input-area {
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+#chat-input {
+  width: 100%; min-height: 40px; max-height: 200px;
+  resize: vertical;
+  background: var(--panel2);
+  font-family: inherit; font-size: 13px;
+  padding: 8px 10px;
+}
+#chat-input:focus { outline: 1px solid var(--accent); }
+.chat-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: var(--text-dim);
+}
+
+/* ============= Viewer (rechts) ============= */
+#viewer-pane {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+#viewer-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+#viewer-title { flex: 1; font-weight: 600; }
+#viewer-content {
+  flex: 1; overflow: auto;
+  padding: 14px;
+  color: var(--text-dim);
+}
+#viewer-empty { text-align: center; padding: 40px 20px; color: var(--text-dim); font-size: 12px; }
+
+/* Allgemein */
+.muted { color: var(--text-dim); }
+.warn  { color: var(--yellow); }
+.err   { color: var(--red); }
+.hidden { display: none !important; }
+
+/* ============= Viewer-Renderings ============= */
+#viewer-content { padding: 0; }
+.viewer-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px; background: var(--panel2);
+  position: sticky; top: 0; z-index: 5;
+}
+.viewer-toolbar .spacer { flex: 1; }
+.viewer-toolbar select { font-size: 11px; padding: 2px 6px; }
+.viewer-toolbar button { font-size: 11px; padding: 2px 8px; }
+
+.viewer-body { padding: 14px; }
+.viewer-md { line-height: 1.6; max-width: 100%; }
+.viewer-md h1, .viewer-md h2, .viewer-md h3 { color: var(--text-bright); margin-top: 1em; }
+.viewer-md table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.viewer-md th, .viewer-md td { border: 1px solid var(--border); padding: 4px 8px; }
+.viewer-md th { background: var(--panel); }
+.viewer-md pre { background: #0a0a0a; padding: 10px; border-radius: 4px; overflow-x: auto; }
+.viewer-md code { background: rgba(255,255,255,0.08); padding: 1px 4px; border-radius: 3px; }
+
+.viewer-table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--mono); font-size: 11px;
+}
+.viewer-table th, .viewer-table td {
+  border: 1px solid var(--border);
+  padding: 3px 6px; text-align: left;
+  white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; max-width: 280px;
+}
+.viewer-table th {
+  background: var(--panel2); position: sticky; top: 0;
+  font-weight: 600; color: var(--text-bright);
+  cursor: pointer; user-select: none;
+}
+.viewer-table th:hover { background: var(--panel); }
+.viewer-table tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.viewer-table td:hover { background: var(--panel2); }
+
+.viewer-pre {
+  font-family: var(--mono); font-size: 12px;
+  white-space: pre-wrap; word-break: break-word;
+  background: #0a0a0a; padding: 12px; border-radius: 4px;
+  margin: 0; line-height: 1.4;
+}
+
+#pdf-canvas-container {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; padding: 8px;
+}
+#pdf-canvas-container canvas {
+  background: #fff; box-shadow: 0 0 8px rgba(0,0,0,.4);
+  max-width: 100%;
+}
+
+.viewer-pagination {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-top: 1px solid var(--border);
+  font-size: 11px; background: var(--panel2);
+  position: sticky; bottom: 0;
+}
+.viewer-pagination button[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+/* ============= Flows ============= */
+.flow-row .meta {
+  min-width: 14px; text-align: center;
+  font-family: var(--mono); font-size: 10px;
+}
+.flow-row.has-running .icon { color: var(--green); }
+.flow-row.has-running .label::after {
+  content: ' ●'; color: var(--green); font-size: 8px; vertical-align: middle;
+}
+.status-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; line-height: 14px;
+}
+/* ============= Environment Badge (Dev / Prod) ============= */
+.env-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  line-height: 14px;
+  color: #fff;
+  margin-right: 6px;
+  user-select: none;
+}
+.env-badge-prod { background: #15803d; }   /* dunkelgruen — Produktion */
+.env-badge-dev  { background: #ea580c; }   /* orange      — Entwicklung */
+
+.status-pending   { background: rgba(136,136,136,0.25); color: #bbb; }
+.status-running   { background: rgba(37,99,235,0.25);   color: #5b9aff; }
+.status-paused    { background: rgba(250,204,21,0.25);  color: #facc15; }
+.status-done      { background: rgba(74,222,128,0.25);  color: #4ade80; }
+.status-cancelled { background: rgba(136,136,136,0.25); color: #bbb; }
+.status-failed    { background: rgba(239,68,68,0.25);   color: #ef4444; }
+.status-skipped   { background: rgba(250,204,21,0.18);  color: #ca8a04; }
+
+.flow-progress {
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 3px; height: 10px; position: relative; overflow: hidden;
+}
+.flow-progress-bar {
+  height: 100%; background: var(--accent); transition: width 0.3s ease;
+}
+.flow-progress.paused .flow-progress-bar  { background: var(--yellow); }
+.flow-progress.done   .flow-progress-bar  { background: var(--green); }
+.flow-progress.failed .flow-progress-bar  { background: var(--red); }
+
+.flow-stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px; margin: 10px 0;
+}
+.flow-stat {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 4px; padding: 8px 10px;
+}
+.flow-stat .lbl { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
+.flow-stat .val { font-size: 16px; color: var(--text-bright); font-family: var(--mono); }
+
+.flow-section { padding: 0 14px 14px; }
+.flow-section h3 {
+  margin: 14px 0 6px; color: var(--text-bright);
+  font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border); padding-bottom: 4px;
+}
+
+.flow-runs-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.flow-runs-table th, .flow-runs-table td {
+  border-bottom: 1px solid var(--border); padding: 4px 6px;
+  text-align: left; white-space: nowrap;
+}
+.flow-runs-table th { color: var(--text-dim); font-weight: 600; font-size: 10px; text-transform: uppercase; }
+.flow-runs-table tr.clickable { cursor: pointer; }
+.flow-runs-table tr.clickable:hover td { background: var(--panel2); }
+
+.flow-controls {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  margin: 10px 0;
+}
+.flow-logs {
+  background: #0a0a0a; border: 1px solid var(--border); border-radius: 3px;
+  padding: 10px; font-family: var(--mono); font-size: 11px;
+  max-height: 260px; overflow-y: auto; white-space: pre-wrap;
+  color: #ddd;
+}
+
+.flow-items-list {
+  font-family: var(--mono); font-size: 11px; line-height: 1.7;
+}
+.flow-items-list .row {
+  display: grid; grid-template-columns: 40px 80px 1fr auto;
+  gap: 8px; padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.flow-items-list .row:hover { background: var(--panel2); }
+.flow-items-list .row .ref { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-items-list .row .err { color: var(--red); font-size: 10px; }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ============ Sidebar (links) ============ -->
+  <aside id="sidebar">
+
+    <div class="sb-section">
+      <div class="sb-toolbar">
+        <select id="project-select" onchange="onProjectChange()"></select>
+        <button class="icon-btn" title="Neues Projekt anlegen" onclick="createProject()">+</button>
+        <button class="icon-btn" title="Aktuelles Projekt archivieren" onclick="archiveCurrentProject()">🗄</button>
+        <button class="icon-btn" title="Sidebar einklappen" onclick="toggleSidebar()">«</button>
+      </div>
+    </div>
+
+    <div class="sb-section scrollable" id="explorer-section">
+      <div class="sb-title">Explorer</div>
+      <div id="explorer-tree" class="tree"></div>
+    </div>
+
+    <div class="sb-section scrollable" id="db-tables-section">
+      <div class="sb-title">Datenbank-Tabellen</div>
+      <div id="db-tables-list" class="tree"></div>
+    </div>
+
+    <div class="sb-section scrollable" id="flows-section">
+      <div class="sb-title sb-toolbar">
+        <span>Flows</span>
+        <button class="icon-btn" title="Liste aktualisieren" onclick="loadFlows(state.activeProjectSlug)">↻</button>
+      </div>
+      <div id="flows-list"></div>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-title">Einstellungen</div>
+      <div class="muted" style="font-size:11px">
+        Workspace: <code id="settings-workspace">~/Disco</code><br>
+        Model: <code id="settings-model">gpt-5</code>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- Splitter Sidebar/Chat -->
+  <div class="splitter" id="splitter-left" data-target="sidebar"></div>
+
+  <!-- ============ Chat (Mitte) ============ -->
+  <main id="chat-pane">
+
+    <div id="chat-header">
+      <button class="icon-btn" title="Sidebar ein-/ausblenden" onclick="toggleSidebar()">☰</button>
+      <span id="env-badge" class="env-badge" title="Umgebung dieses Disco-Servers"></span>
+      <span id="chat-title">Disco</span>
+      <span id="chat-project-tag">(kein Projekt)</span>
+      <span class="spacer" style="flex:1"></span>
+      <span id="chat-token-counter" title="Aktueller Chat-Fuellstand. Warnung bei 70 %, kritisch bei 90 %.">0 / 180k · 0 %</span>
+      <button id="btn-compact" title="Chat komprimieren — wichtige Erkenntnisse in Memory-Bank schreiben, dann Verlauf einklappen" onclick="openCompactModal()">🗜 Komprimieren</button>
+      <button class="icon-btn" title="Viewer ein-/ausblenden" onclick="toggleViewer()">▭</button>
+    </div>
+
+    <!-- Run-Streifen: zeigt aktive Flow-Runs projekt-uebergreifend. JS fuellt dynamisch. -->
+    <div id="run-strip"></div>
+
+    <div id="chat-messages">
+      <div class="msg system"><div class="bubble">Verbindung wird hergestellt …</div></div>
+    </div>
+
+    <div id="chat-input-area">
+      <textarea id="chat-input" placeholder="Nachricht an Disco …  (Enter senden, Shift+Enter Zeilenumbruch)"></textarea>
+      <div class="chat-actions">
+        <span id="chat-status" class="muted">Bereit</span>
+        <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
+        <button id="btn-send" class="btn-primary" onclick="sendMessage()">Senden ▶</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Splitter Chat/Viewer -->
+  <div class="splitter" id="splitter-right" data-target="viewer"></div>
+
+  <!-- ============ Viewer (rechts) ============ -->
+  <aside id="viewer-pane">
+    <div id="viewer-header">
+      <span id="viewer-title">Viewer</span>
+      <button class="icon-btn" title="Schliessen" onclick="closeViewer()">✕</button>
+    </div>
+    <div id="viewer-content">
+      <div id="viewer-empty">
+        Keine Datei geöffnet.<br>
+        Klick im Explorer auf eine Datei zum Anzeigen.<br><br>
+        <small>(Viewer-Funktionalität: Iteration 2 — kommt nach diesem Skelett)</small>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+
+<!-- Toast-Container fuer Run-Benachrichtigungen -->
+<div id="run-toast-container"></div>
+
+<!-- ====================== Skripte ====================== -->
+<script>
+'use strict';
+
+// =========================================================================
+// State
+// =========================================================================
+const state = {
+  projects: [],
+  activeProjectSlug: null,
+  // Chat-State: 1 persistenter Chat pro Projekt (Migration 006)
+  chatState: null,        // {token_estimate, token_budget, percent, warn_level, foundry_response_id, ...}
+  ws: null,
+  wsProjectSlug: null,    // Slug, fuer den der aktuelle WS offen ist
+  wsReady: false,
+  md: null,               // markdown-it Renderer
+  _criticalWarningShown: false,  // damit das Auto-Modal nicht spammt
+};
+
+const _activeToolCalls = {};   // call_id -> {name, el, statusEl, argsEl, resultEl}
+const LS_KEY_SIDEBAR_W = 'disco.sidebar.w';
+const LS_KEY_VIEWER_W  = 'disco.viewer.w';
+const LS_KEY_PROJECT   = 'disco.active.project';
+
+// =========================================================================
+// Markdown-Setup
+// =========================================================================
+function initMarkdown() {
+  state.md = window.markdownit({
+    html: false,
+    linkify: true,
+    typographer: false,
+    breaks: true,
+    highlight: function (str, lang) {
+      try {
+        if (lang && hljs.getLanguage(lang)) {
+          return '<pre><code class="hljs language-' + lang + '">' +
+                 hljs.highlight(str, {language: lang, ignoreIllegals: true}).value +
+                 '</code></pre>';
+        }
+      } catch (e) {}
+      return '<pre><code class="hljs">' + state.md.utils.escapeHtml(str) + '</code></pre>';
+    }
+  });
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  const html = state.md.render(text);
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ['p','br','strong','em','code','pre','ul','ol','li','a','h1','h2','h3','h4','h5','h6',
+                   'blockquote','hr','table','thead','tbody','tr','th','td','span','del','sub','sup','img'],
+    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt']
+  });
+}
+
+// =========================================================================
+// API-Helfer
+// =========================================================================
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: {'Content-Type':'application/json'},
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  if (!res.ok) throw new Error(`${res.status} ${path}`);
+  return res.json();
+}
+
+// =========================================================================
+// Environment-Badge (Dev / Prod)
+// =========================================================================
+// Wert kommt aus dem data-env-Attribut des <html>-Tags (server-injiziert).
+// Fallback: /api/env. Default: "prod".
+function initEnvBadge() {
+  const badge = document.getElementById('env-badge');
+  if (!badge) return;
+  let env = (document.documentElement.dataset.env || '').trim().toLowerCase();
+  if (env !== 'prod' && env !== 'dev') env = 'prod';
+  badge.textContent = env.toUpperCase();
+  badge.classList.add('env-badge-' + env);
+  if (env === 'dev') {
+    document.title = '[DEV] ' + document.title;
+  }
+}
+
+// Footer-Felder (Workspace/Model) aus /api/env befuellen, damit wir
+// nicht auf hardcodete Werte zurueckfallen, wenn sich die Umgebung
+// aendert (Dev-Workspace ~/Disco-dev, andere Deployments, ...).
+async function initEnvFooter() {
+  const wsEl = document.getElementById('settings-workspace');
+  const modelEl = document.getElementById('settings-model');
+  try {
+    const info = await api('/api/env');
+    if (wsEl && info.workspace) wsEl.textContent = info.workspace;
+    if (modelEl && info.model) modelEl.textContent = info.model;
+  } catch (e) {
+    // /api/env nicht erreichbar -> Platzhalter bleiben stehen
+  }
+}
+
+// =========================================================================
+// Init
+// =========================================================================
+window.addEventListener('DOMContentLoaded', async () => {
+  initEnvBadge();
+  initEnvFooter();
+  initMarkdown();
+  initSplitters();
+  initChatInput();
+
+  // Projekt-Liste laden
+  try {
+    state.projects = await api('/api/workspace/projects');
+  } catch (e) {
+    state.projects = [];
+  }
+  renderProjectSelect();
+
+  // Aktives Projekt aus LS oder erstes
+  const saved = localStorage.getItem(LS_KEY_PROJECT);
+  const found = state.projects.find(p => p.slug === saved);
+  const startSlug = found ? saved : (state.projects[0]?.slug || null);
+  if (startSlug) {
+    await switchProject(startSlug);
+  } else {
+    setSystemMessage('Kein Projekt vorhanden. Bitte im Terminal anlegen: <code>disco project init &lt;slug&gt;</code>');
+  }
+});
+
+// =========================================================================
+// Projekt-Switch
+// =========================================================================
+function renderProjectSelect() {
+  const sel = document.getElementById('project-select');
+  sel.innerHTML = state.projects.map(p =>
+    `<option value="${escAttr(p.slug)}">${escHtml(p.name)} (${p.slug})</option>`
+  ).join('');
+}
+
+async function onProjectChange() {
+  const slug = document.getElementById('project-select').value;
+  await switchProject(slug);
+}
+
+// --- Projekt anlegen (Sidebar-Button "+") ---
+// Nutzt ein eigenes Modal statt window.prompt(), weil prompt() in manchen
+// Browser-/Preview-Kontexten blockiert oder gar nicht erscheint.
+function createProject() {
+  // Backdrop + Modal dynamisch aufbauen
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-labelledby="np-title">
+      <h3 id="np-title">Neues Projekt anlegen</h3>
+      <p>Name:</p>
+      <input id="np-name" type="text" placeholder="z.B. Anlage Musterstadt"
+             style="width:100%; padding:6px 10px; background:var(--panel2);
+                    color:var(--text); border:1px solid var(--border);
+                    border-radius:3px; font-size:14px;" />
+      <p class="muted">Slug wird automatisch abgeleitet. Ordner wird unter
+        <code>&lt;workspace&gt;/projects/&lt;slug&gt;/</code> angelegt.</p>
+      <div id="np-err" class="muted" style="color:var(--red); display:none;"></div>
+      <div class="modal-actions">
+        <button id="np-cancel" class="icon-btn">Abbrechen</button>
+        <button id="np-ok" class="btn-primary">Anlegen</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const input = backdrop.querySelector('#np-name');
+  const errEl = backdrop.querySelector('#np-err');
+  const okBtn = backdrop.querySelector('#np-ok');
+  const cancelBtn = backdrop.querySelector('#np-cancel');
+  const close = () => backdrop.remove();
+  input.focus();
+
+  const submit = async () => {
+    const name = input.value.trim();
+    if (!name) { errEl.textContent = 'Bitte einen Namen eingeben.'; errEl.style.display='block'; return; }
+    okBtn.disabled = true; okBtn.textContent = 'Lege an …';
+    try {
+      const resp = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await resp.json();
+      if (data.error) {
+        errEl.textContent = data.error;
+        errEl.style.display = 'block';
+        okBtn.disabled = false; okBtn.textContent = 'Anlegen';
+        return;
+      }
+      close();
+      state.projects = await api('/api/workspace/projects');
+      renderProjectSelect();
+      if (data.slug) await switchProject(data.slug);
+    } catch (e) {
+      errEl.textContent = 'Konnte Projekt nicht anlegen: ' + e.message;
+      errEl.style.display = 'block';
+      okBtn.disabled = false; okBtn.textContent = 'Anlegen';
+    }
+  };
+
+  okBtn.addEventListener('click', submit);
+  cancelBtn.addEventListener('click', close);
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); submit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+  });
+  backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) close(); });
+}
+
+// --- Aktuelles Projekt archivieren (Sidebar-Button "🗄") ---
+async function archiveCurrentProject() {
+  const slug = state.activeProjectSlug;
+  if (!slug) {
+    alert('Kein Projekt ausgewaehlt.');
+    return;
+  }
+  const proj = state.projects.find(p => p.slug === slug);
+  const label = proj ? `${proj.name} (${slug})` : slug;
+  if (!confirm(
+    `Projekt "${label}" archivieren?\n\n`
+    + 'Der gesamte Projektordner wird nach <workspace>/archive/ verschoben und '
+    + 'ist fuer Disco nicht mehr sichtbar.\n\n'
+    + 'Reversibel: manuell zurueckschieben + DB-Status auf "active" setzen.'
+  )) return;
+  try {
+    const resp = await fetch(
+      `/api/workspace/projects/${encodeURIComponent(slug)}/archive`,
+      { method: 'POST' },
+    );
+    const data = await resp.json();
+    if (data.error) {
+      alert('Fehler: ' + data.error);
+      return;
+    }
+    // Aktiven Chat schliessen, LS-Eintrag loeschen
+    if (state.ws) { try { state.ws.close(); } catch(e) {} state.ws = null; }
+    localStorage.removeItem(LS_KEY_PROJECT);
+    state.activeProjectSlug = null;
+
+    // Projekt-Liste neu laden
+    state.projects = await api('/api/workspace/projects');
+    renderProjectSelect();
+
+    // Auf erstes verbleibendes Projekt wechseln (wenn vorhanden)
+    if (state.projects.length > 0) {
+      await switchProject(state.projects[0].slug);
+    } else {
+      document.getElementById('chat-title').textContent = 'Disco';
+      document.getElementById('chat-project-tag').textContent = '(kein Projekt)';
+      document.getElementById('chat-messages').innerHTML = '';
+      setSystemMessage('Kein Projekt vorhanden. Mit <b>+</b> oben ein neues anlegen.');
+    }
+  } catch (e) {
+    alert('Konnte Projekt nicht archivieren: ' + e.message);
+  }
+}
+
+async function switchProject(slug) {
+  state.activeProjectSlug = slug;
+  localStorage.setItem(LS_KEY_PROJECT, slug);
+  document.getElementById('project-select').value = slug;
+
+  // Projektname im Chat-Header
+  const proj = state.projects.find(p => p.slug === slug);
+  document.getElementById('chat-title').textContent = proj ? proj.name : 'Disco';
+  document.getElementById('chat-project-tag').textContent = slug ? slug : '(kein Projekt)';
+
+  // Chat schliessen, warning-state zuruecksetzen
+  if (state.ws) { try { state.ws.close(); } catch(e) {} state.ws = null; }
+  state.wsProjectSlug = null;
+  state._criticalWarningShown = false;
+
+  // Chat-Messages leeren + Platzhalter zeigen
+  const msgs = document.getElementById('chat-messages');
+  msgs.innerHTML = '';
+
+  // Parallel: Chat-State + Messages + Explorer + DB-Tabellen + Flows laden
+  await Promise.all([
+    loadChatState(slug),
+    loadMessages(slug),
+    loadExplorer(slug),
+    loadDbTables(slug),
+    loadFlows(slug),
+  ]);
+
+  // WebSocket verbinden (ein persistenter Chat pro Projekt)
+  connectWS(slug);
+
+  // Eingabe fokussieren
+  document.getElementById('chat-input').focus();
+}
+
+// =========================================================================
+// Chat-State: Token-Counter + Warn-Badges (Migration 006)
+// =========================================================================
+async function loadChatState(slug) {
+  try {
+    const s = await api(`/api/projects/${encodeURIComponent(slug)}/chat/state`);
+    state.chatState = s;
+    updateTokenCounter(s);
+  } catch (e) {
+    state.chatState = null;
+  }
+}
+
+function updateTokenCounter(s) {
+  const el = document.getElementById('chat-token-counter');
+  const btn = document.getElementById('btn-compact');
+  if (!el) return;
+  if (!s) {
+    el.textContent = '– / 180k · 0 %';
+    el.className = '';
+    btn.classList.remove('urgent');
+    return;
+  }
+  const tok = s.token_estimate || 0;
+  const budget = s.token_budget || 180000;
+  const pct = Math.round((s.percent || 0) * 100);
+  el.textContent = `${_fmtTokens(tok)} / ${_fmtTokens(budget)} · ${pct} %`;
+  el.className = '';
+  btn.classList.remove('urgent');
+  if (s.warn_level === 'warn') {
+    el.classList.add('warn');
+  } else if (s.warn_level === 'critical') {
+    el.classList.add('critical');
+    btn.classList.add('urgent');
+    // Einmalig automatisches Vorschlags-Modal
+    if (!state._criticalWarningShown) {
+      state._criticalWarningShown = true;
+      setTimeout(() => openCompactModal(true), 400);
+    }
+  } else {
+    state._criticalWarningShown = false;
+  }
+}
+
+function _fmtTokens(n) {
+  if (n == null) return '0';
+  if (n < 1000) return String(n);
+  if (n < 10000) return (n/1000).toFixed(1).replace('.', ',') + 'k';
+  return Math.round(n/1000) + 'k';
+}
+
+// ----- Compact-Modal -----------------------------------------------------
+function openCompactModal(auto) {
+  // Doppelung vermeiden
+  if (document.getElementById('compact-modal')) return;
+  const s = state.chatState || {};
+  const pct = Math.round((s.percent || 0) * 100);
+  const tok = _fmtTokens(s.token_estimate || 0);
+  const budget = _fmtTokens(s.token_budget || 180000);
+
+  const autoHint = auto
+    ? `<p class="err"><b>Kritischer Fuellstand erreicht (${pct} %).</b>
+        Disco sollte bald komprimieren, sonst drohen Token-Limit-Fehler.</p>`
+    : '';
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'compact-modal';
+  backdrop.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Chat komprimieren</h3>
+      ${autoHint}
+      <p>Aktueller Fuellstand: <b>${tok} / ${budget}</b> (${pct} %).</p>
+      <p>Beim Komprimieren wird Disco gebeten, die wichtigsten Erkenntnisse
+         aus dem bisherigen Verlauf in die Memory-Bank
+         (<code>.disco/memory/</code>) zu schreiben. Anschliessend wird
+         der sichtbare Verlauf eingeklappt — der Agent arbeitet mit
+         frischem Kontext weiter und liest die Memory-Bank neu ein.</p>
+      <p class="muted">Der Verlauf bleibt in der Projekt-DB erhalten
+         (<code>is_compacted = 1</code>), nur der Agent-Kontext wird
+         geleert.</p>
+      <div class="modal-actions">
+        <button onclick="closeCompactModal()">Abbrechen</button>
+        <button class="btn-primary" onclick="runCompaction()">Disco mit Kompression beauftragen</button>
+      </div>
+    </div>`;
+  backdrop.onclick = closeCompactModal;
+  document.body.appendChild(backdrop);
+}
+
+function closeCompactModal() {
+  const el = document.getElementById('compact-modal');
+  if (el) el.remove();
+}
+
+function runCompaction() {
+  // Strategie: Disco bekommt via Chat-Prompt den Auftrag. ER schreibt
+  // Memory-Bank-Updates (memory_write) und ruft am Ende chat_compact_finish
+  // auf. Alternativ: direkter POST /chat/compact (harter Cut ohne Memory-
+  // Update — falls der Nutzer weiss, dass er nichts braucht).
+  closeCompactModal();
+  const prompt = 'Bitte komprimiere jetzt den Chat: Fasse die wichtigsten '
+    + 'Erkenntnisse, offenen Entscheidungen und naechsten Schritte in der '
+    + 'Memory-Bank zusammen (memory_write / memory_append_adr nach Bedarf). '
+    + 'Halte activeContext.md und progress.md aktuell. Danach nur einen '
+    + 'kurzen Bestaetigungstext in den Chat schreiben — der Frontend-Code '
+    + 'erledigt das technische Zuruecksetzen anschliessend.';
+  const input = document.getElementById('chat-input');
+  input.value = prompt;
+  // Hinweis fuer den Nutzer
+  setSystemMessage('Kompressions-Auftrag ist ins Eingabefeld eingesetzt. '
+    + 'Pruefe den Text und druecke Enter (oder klicke Senden) um '
+    + 'Disco zu beauftragen. Nach Disco\'s Bestaetigung den Verlauf '
+    + 'via <button onclick="hardCompact()" style="font-size:11px;padding:2px 8px;">⏹ Harter Cut</button> einklappen.');
+  input.focus();
+}
+
+// Harter Cut OHNE Memory-Update (nur wenn der Nutzer wirklich will)
+async function hardCompact() {
+  if (!state.activeProjectSlug) return;
+  if (!confirm('Wirklich alle aktuellen Messages als komprimiert markieren? '
+    + 'Der Verlauf bleibt in der DB, verschwindet aber aus dem Agent-Kontext. '
+    + 'Dieser Schritt ist nicht automatisch an eine Memory-Update geknuepft '
+    + '— nur durchfuehren wenn Disco bereits alles Wichtige in die Memory-Bank '
+    + 'geschrieben hat.')) return;
+  try {
+    const r = await fetch(
+      `/api/projects/${encodeURIComponent(state.activeProjectSlug)}/chat/compact`,
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})}
+    );
+    const d = await r.json();
+    if (d.error) { alert('Fehler: ' + d.error); return; }
+    setSystemMessage(`Verlauf komprimiert: ${d.marked_compacted} Messages eingeklappt. Neuer Token-Fill ≈ ${_fmtTokens(d.new_token_estimate || 0)}.`);
+    // State + Messages neu laden
+    await loadChatState(state.activeProjectSlug);
+    await loadMessages(state.activeProjectSlug);
+  } catch (e) {
+    alert('Kompression fehlgeschlagen: ' + e.message);
+  }
+}
+
+// =========================================================================
+// Explorer
+// =========================================================================
+async function loadExplorer(slug) {
+  const container = document.getElementById('explorer-tree');
+  container.innerHTML = '<span class="muted">lade …</span>';
+  try {
+    const tree = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/tree`);
+    container.innerHTML = '';
+    container.appendChild(renderTreeNode(tree, true));
+  } catch (e) {
+    container.innerHTML = '<span class="err">Fehler beim Laden des Explorers.</span>';
+  }
+}
+
+function renderTreeNode(node, isRoot=false) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tree-node';
+  const row = document.createElement('div');
+  row.className = 'tree-row ' + node.type;
+
+  if (node.type === 'dir') {
+    const toggle = document.createElement('span');
+    toggle.className = 'tree-toggle';
+    toggle.textContent = isRoot ? '▾' : '▸';
+    row.appendChild(toggle);
+    row.appendChild(spanIcon('📁'));
+    row.appendChild(spanName(node.name + '/'));
+    const childWrap = document.createElement('div');
+    childWrap.className = 'tree-node-children';
+    childWrap.style.display = isRoot ? 'block' : 'none';
+    (node.children || []).forEach(c => childWrap.appendChild(renderTreeNode(c, false)));
+    toggle.onclick = (e) => {
+      e.stopPropagation();
+      const open = childWrap.style.display !== 'none';
+      childWrap.style.display = open ? 'none' : 'block';
+      toggle.textContent = open ? '▸' : '▾';
+    };
+    row.onclick = () => toggle.click();
+    wrap.appendChild(row);
+    wrap.appendChild(childWrap);
+  } else {
+    row.appendChild(spanIcon(fileIcon(node.name)));
+    row.appendChild(spanName(node.name));
+    const sz = document.createElement('span');
+    sz.className = 'tree-size';
+    sz.textContent = humanSize(node.size);
+    row.appendChild(sz);
+    row.title = node.path + (node.modified ? '\n' + node.modified : '');
+    row.onclick = () => openFileInViewer(node.path, node.name);
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+function spanIcon(emoji) { const s = document.createElement('span'); s.className = 'tree-icon'; s.textContent = emoji; return s; }
+function spanName(text) { const s = document.createElement('span'); s.className = 'tree-name'; s.textContent = text; return s; }
+function fileIcon(name) {
+  const e = (name.split('.').pop() || '').toLowerCase();
+  if (['md','txt'].includes(e)) return '📄';
+  if (['xlsx','xlsm','csv'].includes(e)) return '📊';
+  if (['pdf'].includes(e)) return '📕';
+  if (['db','sqlite'].includes(e)) return '🗄️';
+  if (['png','jpg','jpeg','svg'].includes(e)) return '🖼️';
+  if (['json'].includes(e)) return '📋';
+  return '📄';
+}
+function humanSize(b) {
+  if (b == null) return '';
+  if (b < 1024) return b + ' B';
+  if (b < 1024*1024) return (b/1024).toFixed(1) + ' k';
+  return (b/(1024*1024)).toFixed(1) + ' M';
+}
+
+// =========================================================================
+// Messages laden (1 persistenter Chat pro Projekt — Migration 006)
+// =========================================================================
+async function loadMessages(slug) {
+  const msgs = document.getElementById('chat-messages');
+  msgs.innerHTML = '';
+  if (!slug) return;
+  try {
+    // Nur aktive (nicht-komprimierte) Messages laden. Fuer einen UI-Divider
+    // mit komprimiertem Verlauf koennten wir spaeter include_compacted=1
+    // nehmen.
+    const items = await api(`/api/projects/${encodeURIComponent(slug)}/chat/messages`);
+    if (items.error) throw new Error(items.error);
+    if (!items.length) {
+      setSystemMessage('Neuer Projekt-Chat. Wie kann Disco helfen?');
+      return;
+    }
+    for (const m of items) {
+      if (m.role === 'user') appendMessage('user', m.content || '');
+      else if (m.role === 'assistant') {
+        if (m.content) appendMessage('agent', m.content);
+        if (Array.isArray(m.tool_calls)) {
+          for (const tc of m.tool_calls) {
+            const result = findHistoricResult(items, tc.call_id);
+            appendToolCallBlock(tc.call_id, tc.name, tc.arguments, result, 'completed');
+          }
+        }
+      }
+    }
+  } catch (e) {
+    setSystemMessage('Fehler beim Laden des Chat-Verlaufs: ' + escHtml(e.message));
+  }
+}
+
+function findHistoricResult(allMessages, callId) {
+  for (const m of allMessages) {
+    if (m.role === 'tool' && Array.isArray(m.tool_results)) {
+      for (const tr of m.tool_results) if (tr.call_id === callId) return tr.result;
+    }
+  }
+  return null;
+}
+
+// =========================================================================
+// WebSocket (1 persistenter Chat pro Projekt)
+// =========================================================================
+function connectWS(slug) {
+  if (!slug) return;
+  if (state.ws && state.wsProjectSlug !== slug) {
+    try { state.ws.close(); } catch(e) {}
+    state.ws = null;
+  }
+  if (state.ws && state.wsProjectSlug === slug) return;
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/chat?project=${encodeURIComponent(slug)}`);
+  state.ws = ws;
+  state.wsProjectSlug = slug;
+  state.wsReady = false;
+
+  ws.onopen  = () => { state.wsReady = true; setStatus('Verbunden'); };
+  ws.onclose = () => {
+    state.wsReady = false;
+    // Nur auto-reconnecten wenn das Projekt noch das aktive ist
+    if (state.wsProjectSlug === slug && state.activeProjectSlug === slug) {
+      setStatus('Verbindung getrennt — Reconnect in 2s …', 'warn');
+      setTimeout(() => connectWS(slug), 2000);
+    }
+  };
+  ws.onerror = () => { state.wsReady = false; setStatus('WebSocket-Fehler', 'err'); };
+  ws.onmessage = (ev) => {
+    try { handleEvent(JSON.parse(ev.data)); }
+    catch(e) { console.error('Bad WS payload', e); }
+  };
+}
+
+// =========================================================================
+// Senden + Stream-Events
+// =========================================================================
+let currentBubble = null;
+let currentText = '';
+let typingEl = null;
+
+function initChatInput() {
+  const input = document.getElementById('chat-input');
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+}
+
+function sendMessage() {
+  if (!state.wsReady) { setStatus('Nicht verbunden', 'warn'); return; }
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  input.style.height = '';
+  appendMessage('user', text);
+  typingEl = appendTyping();
+  state.ws.send(JSON.stringify({ text }));
+  currentBubble = null; currentText = '';
+  state._isStreaming = true;
+  showStopButton(true);
+  setStatus('Disco denkt …');
+}
+
+function stopResponse() {
+  // WebSocket schließen um den laufenden Turn abzubrechen
+  if (state.ws) {
+    try { state.ws.close(); } catch(e) {}
+    state.ws = null;
+    state.wsReady = false;
+  }
+  state._isStreaming = false;
+  showStopButton(false);
+  if (typingEl) { typingEl.remove(); typingEl = null; }
+  // Bisherige Teil-Antwort stehen lassen
+  if (currentBubble && currentText) {
+    currentBubble.innerHTML = renderMarkdown(currentText + '\n\n*[abgebrochen]*');
+  }
+  currentBubble = null; currentText = '';
+  setStatus('Abgebrochen — neuen Prompt senden um fortzufahren');
+  // WebSocket nach kurzer Pause neu verbinden
+  setTimeout(() => {
+    if (state.activeProjectSlug) connectWS(state.activeProjectSlug);
+  }, 1000);
+}
+
+function showStopButton(show) {
+  document.getElementById('btn-stop').classList.toggle('hidden', !show);
+  document.getElementById('btn-send').classList.toggle('hidden', show);
+}
+
+function handleEvent(ev) {
+  if (typingEl) { typingEl.remove(); typingEl = null; }
+  switch (ev.type) {
+    case 'text_delta':
+      if (!currentBubble) {
+        const m = appendMessage('agent', '');
+        currentBubble = m.querySelector('.bubble');
+      }
+      currentText += ev.text;
+      currentBubble.innerHTML = renderMarkdown(currentText);
+      scrollChat();
+      break;
+    case 'tool_call_start':
+      // Laufende Text-Bubble schliessen, damit nachfolgender Live-Kommentar
+      // in einer NEUEN Bubble unter dem Tool-Block landet (chronologische
+      // Ansicht: Ansage → Tool → Ansage → Tool → ...).
+      currentBubble = null; currentText = '';
+      appendToolCallBlock(ev.call_id, ev.name, null, null, 'pending');
+      break;
+    case 'tool_call_args':
+      updateToolArgs(ev.call_id, ev.arguments);
+      break;
+    case 'tool_result':
+      updateToolResult(ev.call_id, ev.result);
+      break;
+    case 'code_interpreter':
+      currentBubble = null; currentText = '';
+      renderCodeInterpreter(ev);
+      break;
+    case 'file_search':
+      currentBubble = null; currentText = '';
+      renderFileSearch(ev);
+      break;
+    case 'error':
+      setSystemMessage('FEHLER: ' + (ev.message || ev.text || 'unbekannt'));
+      setStatus('Fehler', 'err');
+      break;
+    case 'done':
+      currentBubble = null; currentText = '';
+      state._isStreaming = false;
+      showStopButton(false);
+      setStatus(`Bereit  ·  ${ev.tokens_input || 0}/${ev.tokens_output || 0} Tokens (Turn)`);
+      // Token-Counter aktualisieren (kumulativer Chat-Fuellstand)
+      if (ev.total_token_estimate != null && state.chatState) {
+        state.chatState.token_estimate = ev.total_token_estimate;
+        const budget = state.chatState.token_budget || 180000;
+        const pct = budget ? ev.total_token_estimate / budget : 0;
+        state.chatState.percent = pct;
+        state.chatState.warn_level = pct >= 0.90 ? 'critical' : (pct >= 0.70 ? 'warn' : 'ok');
+        updateTokenCounter(state.chatState);
+      } else if (state.activeProjectSlug) {
+        // Fallback: neu vom Server holen
+        loadChatState(state.activeProjectSlug);
+      }
+      // Nach Disco-Aktion: alles refreshen (Threads sind Geschichte — Migration 006)
+      if (state.activeProjectSlug) {
+        loadExplorer(state.activeProjectSlug);
+        loadDbTables(state.activeProjectSlug);
+        loadFlows(state.activeProjectSlug);
+        // Viewer auto-refresh: wenn eine Datei offen ist, nochmal laden
+        refreshOpenViewer();
+      }
+      break;
+  }
+}
+
+// =========================================================================
+// Render-Helfer Chat
+// =========================================================================
+function appendMessage(role, text) {
+  const msgs = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  const sender = role === 'user' ? 'Du' : role === 'agent' ? 'Disco' : 'System';
+  div.innerHTML = `
+    <div class="sender">${sender}</div>
+    <div class="bubble">${renderMarkdown(text)}</div>
+  `;
+  msgs.appendChild(div);
+  scrollChat();
+  return div;
+}
+
+function appendTyping() {
+  const msgs = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'typing';
+  div.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
+  msgs.appendChild(div);
+  scrollChat();
+  return div;
+}
+
+function appendToolCallBlock(callId, name, args, result, statusText) {
+  const msgs = document.getElementById('chat-messages');
+  const det = document.createElement('details');
+  det.className = 'tool-call';
+  const argsStr = args ? JSON.stringify(args, null, 2) : '…';
+  const resStr = result ? (typeof result === 'string' ? result : JSON.stringify(result, null, 2)) : '';
+  det.innerHTML = `
+    <summary>
+      <span class="tool-name">${escHtml(name)}</span>
+      <span class="tool-status ${statusText==='pending' ? 'pending' : ''}" data-r="status">${escHtml(statusText || 'pending')}</span>
+    </summary>
+    <div class="tool-body">
+      <div class="tool-label">Argumente</div>
+      <div class="tool-args" data-r="args">${escHtml(argsStr)}</div>
+      <div class="tool-label">Ergebnis</div>
+      <div class="tool-result" data-r="result">${escHtml(resStr || '(läuft …)')}</div>
+    </div>
+  `;
+  msgs.appendChild(det);
+  _activeToolCalls[callId] = {
+    name, el: det,
+    statusEl: det.querySelector('[data-r=status]'),
+    argsEl: det.querySelector('[data-r=args]'),
+    resultEl: det.querySelector('[data-r=result]'),
+  };
+  scrollChat();
+}
+function updateToolArgs(callId, args) {
+  const tc = _activeToolCalls[callId];
+  if (tc) tc.argsEl.textContent = JSON.stringify(args, null, 2);
+}
+function updateToolResult(callId, result) {
+  const tc = _activeToolCalls[callId];
+  if (!tc) return;
+  let pretty = result;
+  try { pretty = JSON.stringify(JSON.parse(result), null, 2); } catch(e) {}
+  tc.resultEl.textContent = pretty;
+  tc.statusEl.textContent = 'ok';
+  tc.statusEl.classList.remove('pending');
+}
+
+function renderCodeInterpreter(ev) {
+  const msgs = document.getElementById('chat-messages');
+  const key = '__ci_' + (state._ciCount = (state._ciCount || 0));
+  let el = state[key];
+  if (ev.phase === 'in_progress' || !el) {
+    el = document.createElement('details');
+    el.className = 'tool-call code-interpreter';
+    el.open = true;
+    el.innerHTML = `
+      <summary>
+        <span class="tool-name">Code Interpreter</span>
+        <span class="tool-status pending" data-r="status">läuft …</span>
+      </summary>
+      <div class="tool-body">
+        <div class="tool-label">Code</div>
+        <div class="tool-args" data-r="code">(wird erstellt …)</div>
+      </div>`;
+    msgs.appendChild(el);
+    state[key] = el;
+  }
+  if (ev.phase === 'code' && ev.code) el.querySelector('[data-r=code]').textContent = ev.code;
+  if (ev.phase === 'interpreting') el.querySelector('[data-r=status]').textContent = 'rechnet …';
+  if (ev.phase === 'completed') {
+    el.querySelector('[data-r=status]').textContent = 'fertig';
+    el.querySelector('[data-r=status]').classList.remove('pending');
+    state._ciCount++;
+  }
+  scrollChat();
+}
+
+function renderFileSearch(ev) {
+  // analog zu Code-Interpreter, nur kosmetisch
+  const msgs = document.getElementById('chat-messages');
+  const key = '__fs_' + (state._fsCount = (state._fsCount || 0));
+  let el = state[key];
+  if (ev.phase === 'in_progress' || !el) {
+    el = document.createElement('details');
+    el.className = 'tool-call file-search';
+    el.innerHTML = `<summary><span class="tool-name">File Search</span><span class="tool-status pending" data-r="status">…</span></summary>`;
+    msgs.appendChild(el);
+    state[key] = el;
+  }
+  el.querySelector('[data-r=status]').textContent = ev.phase;
+  if (ev.phase === 'completed') { el.querySelector('[data-r=status]').classList.remove('pending'); state._fsCount++; }
+  scrollChat();
+}
+
+function setSystemMessage(html) {
+  const m = document.createElement('div');
+  m.className = 'msg system';
+  m.innerHTML = `<div class="bubble">${html}</div>`;
+  document.getElementById('chat-messages').appendChild(m);
+  scrollChat();
+}
+
+function setStatus(text, cls) {
+  const s = document.getElementById('chat-status');
+  s.textContent = text;
+  s.className = cls === 'warn' ? 'warn' : (cls === 'err' ? 'err' : 'muted');
+}
+
+function scrollChat() {
+  const m = document.getElementById('chat-messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+// =========================================================================
+// Viewer
+// =========================================================================
+function fileUrl(slug, path) {
+  return `/api/workspace/projects/${encodeURIComponent(slug)}/file?path=${encodeURIComponent(path)}`;
+}
+
+// Track was aktuell im Viewer offen ist (fuer Auto-Refresh)
+state._viewerOpenFile = null;   // {path, name} oder null
+state._viewerOpenTable = null;  // table-name oder null
+
+async function openFileInViewer(path, name) {
+  if (!state.activeProjectSlug) return;
+  state._viewerOpenFile = {path, name};
+  state._viewerOpenTable = null;
+  setViewerTitle(name, path);
+  ensureViewerOpen();
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const url = fileUrl(state.activeProjectSlug, path);
+
+  setViewerHtml('<div class="viewer-body muted">lade …</div>');
+  try {
+    if (['md','markdown'].includes(ext)) await renderMarkdownFile(url);
+    else if (ext === 'csv') await renderCsvFile(url);
+    else if (['json'].includes(ext)) await renderJsonFile(url);
+    else if (['xlsx','xlsm','xls'].includes(ext)) await renderExcelFile(url);
+    else if (ext === 'pdf') await renderPdfFile(url);
+    else if (['png','jpg','jpeg','gif','svg','webp'].includes(ext)) renderImage(url);
+    else await renderTextFile(url);
+  } catch (e) {
+    setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
+  }
+}
+
+function setViewerTitle(name, path) {
+  const t = document.getElementById('viewer-title');
+  t.textContent = name;
+  t.title = path || '';
+}
+
+function setViewerHtml(html) {
+  document.getElementById('viewer-content').innerHTML = html;
+}
+
+function ensureViewerOpen() {
+  document.getElementById('app').classList.remove('viewer-collapsed');
+}
+
+function refreshOpenViewer() {
+  // Wenn eine Datei oder Tabelle gerade offen ist: nochmal laden
+  if (state._viewerOpenFile) {
+    openFileInViewer(state._viewerOpenFile.path, state._viewerOpenFile.name);
+  } else if (state._viewerOpenTable) {
+    openTableInViewer(state._viewerOpenTable);
+  }
+}
+
+function closeViewer() {
+  state._viewerOpenFile = null;
+  state._viewerOpenTable = null;
+  setViewerTitle('Viewer', '');
+  setViewerHtml(`
+    <div id="viewer-empty">
+      Keine Datei geöffnet.<br>
+      Klick im Explorer auf eine Datei oder Tabelle.
+    </div>`);
+}
+
+// ----- Markdown ----------------------------------------------------------
+async function renderMarkdownFile(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} beim Laden`);
+  const text = await r.text();
+  state._mdSource = text;
+  state._mdRendered = false;        // Default: Quelltext
+  drawMarkdownView();
+}
+
+function drawMarkdownView() {
+  const text = state._mdSource || '';
+  const rendered = state._mdRendered;
+  const toolbar = `
+    <div class="viewer-toolbar">
+      <span>${text.length.toLocaleString('de-DE')} Zeichen</span>
+      <span class="spacer"></span>
+      <button onclick="toggleMarkdownView()">
+        ${rendered ? '⟶ Quelltext' : '⟶ Gerendert'}
+      </button>
+    </div>`;
+  const body = rendered
+    ? `<div class="viewer-body viewer-md">${renderMarkdown(text)}</div>`
+    : `<pre class="viewer-pre">${escHtml(text)}</pre>`;
+  setViewerHtml(toolbar + body);
+}
+
+function toggleMarkdownView() {
+  state._mdRendered = !state._mdRendered;
+  drawMarkdownView();
+}
+
+// ----- CSV ---------------------------------------------------------------
+async function renderCsvFile(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} beim Laden`);
+  const text = await r.text();
+  const parsed = Papa.parse(text, { header: false, skipEmptyLines: true });
+  const rows = parsed.data;
+  if (!rows.length) { setViewerHtml('<div class="viewer-body muted">(leer)</div>'); return; }
+  // Heuristik: erste Zeile ist Header
+  const header = rows[0];
+  const body = rows.slice(1);
+  let h = `<div class="viewer-toolbar">${body.length} Zeilen × ${header.length} Spalten<span class="spacer"></span></div>`;
+  h += `<div style="overflow:auto"><table class="viewer-table"><thead><tr>`;
+  for (const c of header) h += `<th>${escHtml(c)}</th>`;
+  h += `</tr></thead><tbody>`;
+  // Begrenzen auf erste 1000 Zeilen, Performance
+  const max = Math.min(body.length, 1000);
+  for (let i = 0; i < max; i++) {
+    h += '<tr>';
+    for (const c of body[i]) h += `<td title="${escAttr(c)}">${escHtml(c)}</td>`;
+    h += '</tr>';
+  }
+  h += `</tbody></table></div>`;
+  if (body.length > max) {
+    h += `<div class="viewer-pagination muted">${body.length - max} weitere Zeilen ausgeblendet (Performance-Limit)</div>`;
+  }
+  setViewerHtml(h);
+}
+
+// ----- JSON / TXT --------------------------------------------------------
+async function renderJsonFile(url) {
+  const r = await fetch(url);
+  const text = await r.text();
+  let pretty = text;
+  try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch(e) {}
+  setViewerHtml(`<pre class="viewer-pre">${escHtml(pretty)}</pre>`);
+}
+async function renderTextFile(url) {
+  const r = await fetch(url);
+  const text = await r.text();
+  setViewerHtml(`<pre class="viewer-pre">${escHtml(text)}</pre>`);
+}
+
+function renderImage(url) {
+  setViewerHtml(`<div class="viewer-body" style="text-align:center"><img src="${url}" style="max-width:100%;border:1px solid var(--border)"></div>`);
+}
+
+// ----- Excel via SheetJS -------------------------------------------------
+async function renderExcelFile(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} beim Laden`);
+  const buf = await r.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  if (!wb.SheetNames.length) { setViewerHtml('<div class="viewer-body muted">(keine Sheets)</div>'); return; }
+
+  state._xlsx = wb;
+  state._xlsxSheet = wb.SheetNames[0];
+  renderExcelSheet();
+}
+
+function renderExcelSheet() {
+  const wb = state._xlsx; if (!wb) return;
+  const sheetName = state._xlsxSheet;
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+  // Toolbar mit Sheet-Auswahl
+  let h = '<div class="viewer-toolbar">';
+  h += '<label>Sheet:</label><select id="xlsx-sheet-sel">';
+  for (const n of wb.SheetNames) {
+    h += `<option value="${escAttr(n)}"${n===sheetName?' selected':''}>${escHtml(n)}</option>`;
+  }
+  h += '</select>';
+  h += `<span class="spacer"></span>${rows.length} Zeilen`;
+  h += '</div>';
+
+  if (!rows.length) {
+    h += '<div class="viewer-body muted">(leer)</div>';
+    setViewerHtml(h);
+    document.getElementById('xlsx-sheet-sel').onchange = onExcelSheetChange;
+    return;
+  }
+  // Erste Zeile als Header rendern
+  const maxCols = Math.max(...rows.map(r => r.length));
+  h += '<div style="overflow:auto"><table class="viewer-table"><thead><tr>';
+  for (let i = 0; i < maxCols; i++) {
+    const v = rows[0][i] ?? '';
+    h += `<th>${escHtml(v)}</th>`;
+  }
+  h += '</tr></thead><tbody>';
+  const max = Math.min(rows.length, 1000);
+  for (let i = 1; i < max; i++) {
+    h += '<tr>';
+    for (let j = 0; j < maxCols; j++) {
+      const v = rows[i][j] ?? '';
+      h += `<td title="${escAttr(v)}">${escHtml(v)}</td>`;
+    }
+    h += '</tr>';
+  }
+  h += '</tbody></table></div>';
+  if (rows.length > max) {
+    h += `<div class="viewer-pagination muted">${rows.length - max} weitere Zeilen ausgeblendet</div>`;
+  }
+  setViewerHtml(h);
+  document.getElementById('xlsx-sheet-sel').onchange = onExcelSheetChange;
+}
+function onExcelSheetChange(e) {
+  state._xlsxSheet = e.target.value;
+  renderExcelSheet();
+}
+
+// ----- PDF via pdf.js ----------------------------------------------------
+async function renderPdfFile(url) {
+  if (!window.pdfjsLib) { setViewerHtml('<div class="viewer-body err">pdf.js nicht geladen</div>'); return; }
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} beim Laden`);
+  const buf = await r.arrayBuffer();
+  const task = window.pdfjsLib.getDocument({ data: buf });
+  const pdf = await task.promise;
+
+  state._pdf = pdf;
+  state._pdfPage = 1;
+  state._pdfTotal = pdf.numPages;
+
+  setViewerHtml(`
+    <div class="viewer-toolbar">
+      <button onclick="pdfPrev()">‹</button>
+      <span>Seite <span id="pdf-page">1</span> / ${pdf.numPages}</span>
+      <button onclick="pdfNext()">›</button>
+      <span class="spacer"></span>
+      <label>Zoom:</label>
+      <select id="pdf-zoom" onchange="renderPdfPage()">
+        <option value="0.75">75%</option>
+        <option value="1.0">100%</option>
+        <option value="1.25" selected>125%</option>
+        <option value="1.5">150%</option>
+        <option value="2.0">200%</option>
+      </select>
+    </div>
+    <div id="pdf-canvas-container"></div>
+  `);
+  await renderPdfPage();
+}
+async function renderPdfPage() {
+  if (!state._pdf) return;
+  const page = await state._pdf.getPage(state._pdfPage);
+  const zoom = parseFloat(document.getElementById('pdf-zoom').value || '1.25');
+  const viewport = page.getViewport({ scale: zoom });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  const c = document.getElementById('pdf-canvas-container');
+  c.innerHTML = '';
+  c.appendChild(canvas);
+  document.getElementById('pdf-page').textContent = state._pdfPage;
+}
+function pdfPrev() { if (state._pdfPage > 1) { state._pdfPage--; renderPdfPage(); } }
+function pdfNext() { if (state._pdfPage < state._pdfTotal) { state._pdfPage++; renderPdfPage(); } }
+
+// =========================================================================
+// DB-Tabellen-Liste in Sidebar + Tabellen-Viewer
+// =========================================================================
+async function loadDbTables(slug) {
+  const c = document.getElementById('db-tables-list');
+  c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  try {
+    const tables = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/db/tables`);
+    if (!Array.isArray(tables) || !tables.length) {
+      c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Keine work_*/agent_*-Tabellen.</div>';
+      return;
+    }
+    c.innerHTML = '';
+    for (const t of tables) {
+      const row = document.createElement('div');
+      row.className = 'tree-row file';
+      row.innerHTML = `
+        <span class="tree-icon">▤</span>
+        <span class="tree-name" title="${escAttr(t.columns.join(', '))}">${escHtml(t.name)}</span>
+        <span class="tree-size">${t.row_count}</span>
+      `;
+      row.onclick = () => openTableInViewer(t.name);
+      c.appendChild(row);
+    }
+  } catch (e) {
+    c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
+  }
+}
+
+async function openTableInViewer(table) {
+  if (!state.activeProjectSlug) return;
+  state._viewerOpenTable = table;
+  state._viewerOpenFile = null;
+  setViewerTitle('▤ ' + table, 'Projekt-DB');
+  ensureViewerOpen();
+  state._dbTable = table;
+  state._dbOffset = 0;
+  state._dbLimit = 100;
+  state._dbOrderBy = null;
+  state._dbOrderDir = 'ASC';
+  await loadDbRows();
+}
+
+async function loadDbRows() {
+  const slug = state.activeProjectSlug;
+  const t = state._dbTable;
+  let url = `/api/workspace/projects/${encodeURIComponent(slug)}/db/rows?table=${encodeURIComponent(t)}`
+          + `&limit=${state._dbLimit}&offset=${state._dbOffset}`;
+  if (state._dbOrderBy) url += `&order_by=${encodeURIComponent(state._dbOrderBy)}&order_dir=${state._dbOrderDir}`;
+  setViewerHtml('<div class="viewer-body muted">lade …</div>');
+  try {
+    const data = await api(url);
+    if (data.error) throw new Error(data.error);
+    renderDbTable(data);
+  } catch (e) {
+    setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
+  }
+}
+
+function renderDbTable(data) {
+  const { table, total, limit, offset, columns, rows } = data;
+  let h = `<div class="viewer-toolbar">
+    Tabelle <strong>${escHtml(table)}</strong>
+    <span class="spacer"></span>
+    ${total.toLocaleString('de-DE')} Zeilen total
+  </div>`;
+  h += '<div style="overflow:auto"><table class="viewer-table"><thead><tr>';
+  for (const col of columns) {
+    const isOrd = state._dbOrderBy === col;
+    const arrow = isOrd ? (state._dbOrderDir === 'ASC' ? ' ▲' : ' ▼') : '';
+    h += `<th onclick="dbToggleSort('${escAttr(col)}')">${escHtml(col)}${arrow}</th>`;
+  }
+  h += '</tr></thead><tbody>';
+  for (const r of rows) {
+    h += '<tr>';
+    for (const col of columns) {
+      const v = r[col];
+      const display = v === null ? '<span class="muted">NULL</span>' : escHtml(String(v));
+      h += `<td title="${escAttr(String(v ?? ''))}">${display}</td>`;
+    }
+    h += '</tr>';
+  }
+  h += '</tbody></table></div>';
+  // Pagination
+  const from = offset + 1;
+  const to = Math.min(offset + rows.length, total);
+  const hasPrev = offset > 0;
+  const hasNext = to < total;
+  h += `<div class="viewer-pagination">
+    <button onclick="dbPage(-1)" ${hasPrev?'':'disabled'}>‹ Zurück</button>
+    <span class="muted">${from.toLocaleString('de-DE')} – ${to.toLocaleString('de-DE')} von ${total.toLocaleString('de-DE')}</span>
+    <button onclick="dbPage(1)" ${hasNext?'':'disabled'}>Weiter ›</button>
+    <span class="spacer"></span>
+    <label>Pro Seite:</label>
+    <select onchange="dbSetLimit(this.value)">
+      ${[50,100,250,500].map(n => `<option value="${n}" ${n===limit?'selected':''}>${n}</option>`).join('')}
+    </select>
+  </div>`;
+  setViewerHtml(h);
+}
+function dbPage(dir) {
+  state._dbOffset = Math.max(0, state._dbOffset + dir * state._dbLimit);
+  loadDbRows();
+}
+function dbSetLimit(n) {
+  state._dbLimit = parseInt(n, 10);
+  state._dbOffset = 0;
+  loadDbRows();
+}
+function dbToggleSort(col) {
+  if (state._dbOrderBy === col) {
+    state._dbOrderDir = state._dbOrderDir === 'ASC' ? 'DESC' : 'ASC';
+  } else {
+    state._dbOrderBy = col;
+    state._dbOrderDir = 'ASC';
+  }
+  state._dbOffset = 0;
+  loadDbRows();
+}
+
+// =========================================================================
+// Splitter (resize)
+// =========================================================================
+function initSplitters() {
+  // Defaults: 25% Sidebar, 25% Viewer (Mitte = 50% via 1fr).
+  // Beim ersten Start (kein LS-Wert) anhand Viewport-Breite berechnen.
+  const vw = window.innerWidth;
+  const swDefault = Math.max(220, Math.floor(vw * 0.25));
+  const vwDefault = Math.max(280, Math.floor(vw * 0.25));
+  const sw = parseInt(localStorage.getItem(LS_KEY_SIDEBAR_W) || String(swDefault), 10);
+  const vwS = parseInt(localStorage.getItem(LS_KEY_VIEWER_W)  || String(vwDefault), 10);
+  document.documentElement.style.setProperty('--sidebar-w', sw + 'px');
+  document.documentElement.style.setProperty('--viewer-w',  vwS + 'px');
+
+  setupSplitter('splitter-left',  '--sidebar-w', LS_KEY_SIDEBAR_W, 'left');
+  setupSplitter('splitter-right', '--viewer-w',  LS_KEY_VIEWER_W,  'right');
+}
+
+function setupSplitter(id, cssVar, lsKey, side) {
+  const el = document.getElementById(id);
+  let dragging = false; let startX = 0; let startW = 0;
+  el.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    dragging = true;
+    startX = e.clientX;
+    startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    let delta = e.clientX - startX;
+    if (side === 'right') delta = -delta;
+    // Min 100px, Max 60% des Viewports — erlaubt breite Viewer
+    const maxW = Math.floor(window.innerWidth * 0.6);
+    let w = Math.max(100, Math.min(maxW, startW + delta));
+    document.documentElement.style.setProperty(cssVar, w + 'px');
+  });
+  document.addEventListener('mouseup', () => {
+    if (dragging) {
+      dragging = false;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
+      localStorage.setItem(lsKey, String(w));
+    }
+  });
+}
+
+function toggleSidebar() {
+  document.getElementById('app').classList.toggle('sidebar-collapsed');
+}
+function toggleViewer() {
+  document.getElementById('app').classList.toggle('viewer-collapsed');
+}
+
+// =========================================================================
+// Misc
+// =========================================================================
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s) {
+  return String(s ?? '').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// hljs-Languages registrieren
+if (window.hljs) {
+  if (window.hljs.registerLanguage) {
+    // bereits per CDN-Loader geladen — siehe head
+  }
+}
+
+// =========================================================================
+// Flows — Sidebar-Liste, Flow-Details, Run-Details, Polling
+// =========================================================================
+state._flowPoll = null;           // setInterval-Handle fuer Polling
+state._flowView = null;           // 'flow'|'run'|null
+state._flowViewName = null;       // Flow-Name oder null
+state._flowViewRunId = null;      // Run-ID oder null
+
+async function loadFlows(slug) {
+  const c = document.getElementById('flows-list');
+  if (!slug) { c.innerHTML = ''; return; }
+  c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  try {
+    const data = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/flows`);
+    if (!data.flows || !data.flows.length) {
+      c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Noch keine Flows.<br>Via Chat: „erstelle einen Flow …"</div>';
+      return;
+    }
+    c.innerHTML = '';
+    for (const f of data.flows) {
+      const row = document.createElement('div');
+      const running = f.running_run_id ? ' has-running' : '';
+      row.className = 'sb-row flow-row' + running;
+      row.innerHTML = `
+        <span class="icon">⚙</span>
+        <span class="label" title="${escAttr(f.readme_excerpt || f.name)}">${escHtml(f.name)}</span>
+        <span class="meta" title="Anzahl Runs">${f.run_count}</span>
+      `;
+      row.onclick = () => openFlowInViewer(f.name);
+      c.appendChild(row);
+    }
+  } catch (e) {
+    c.innerHTML = '<span class="err" style="font-size:11px">Fehler beim Laden.</span>';
+  }
+}
+
+// ----- Flow-Details-Ansicht ---------------------------------------------
+async function openFlowInViewer(flowName) {
+  if (!state.activeProjectSlug) return;
+  _stopFlowPoll();
+  state._flowView = 'flow';
+  state._flowViewName = flowName;
+  state._flowViewRunId = null;
+  state._viewerOpenFile = null;
+  state._viewerOpenTable = null;
+  setViewerTitle('⚙ ' + flowName, 'Flow');
+  ensureViewerOpen();
+  await renderFlowDetails();
+}
+
+async function renderFlowDetails() {
+  const slug = state.activeProjectSlug;
+  const name = state._flowViewName;
+  if (!slug || !name) return;
+  setViewerHtml('<div class="viewer-body muted">lade …</div>');
+  try {
+    const d = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/flows/${encodeURIComponent(name)}`);
+    if (d.error && !d.name) throw new Error(d.error);
+
+    const readmeHtml = d.readme_content
+      ? `<div class="viewer-md">${renderMarkdown(d.readme_content)}</div>`
+      : '<div class="muted">(Keine README.md)</div>';
+
+    const hasRun = (d.recent_runs || []).some(r => r.status === 'running' || r.status === 'pending');
+    const startBtn = hasRun
+      ? '<button disabled title="Es laeuft bereits ein Run">▶ Run laeuft …</button>'
+      : `<button class="btn-primary" onclick="startFlowRun('${escAttr(name)}')">▶ Neuen Run starten</button>`;
+
+    const runsRows = (d.recent_runs || []).map(r => {
+      const cost = (r.total_cost_eur || 0).toFixed(2);
+      const prog = r.total_items > 0
+        ? `${r.done_items || 0}/${r.total_items}${r.failed_items ? ' · '+r.failed_items+'f' : ''}`
+        : '–';
+      return `
+        <tr class="clickable" onclick="openRunInViewer(${r.id})">
+          <td>${r.id}</td>
+          <td><span class="status-badge status-${escHtml(r.status)}">${escHtml(r.status)}</span></td>
+          <td title="${escAttr(r.title || '')}">${escHtml(r.title || '(ohne Titel)')}</td>
+          <td>${prog}</td>
+          <td>${cost} €</td>
+          <td class="muted">${escHtml((r.created_at || '').substring(5, 16))}</td>
+        </tr>`;
+    }).join('');
+
+    const runsTable = runsRows
+      ? `<table class="flow-runs-table">
+           <thead><tr><th>ID</th><th>Status</th><th>Titel</th><th>Items</th><th>Kosten</th><th>Start</th></tr></thead>
+           <tbody>${runsRows}</tbody>
+         </table>`
+      : '<div class="muted">Noch keine Runs.</div>';
+
+    setViewerHtml(`
+      <div class="viewer-toolbar">
+        <span>Flow · ${escHtml(d.path)}</span>
+        <span class="spacer"></span>
+        <button onclick="renderFlowDetails()">↻ Neu laden</button>
+        <button onclick="closeFlowView()">× Schliessen</button>
+      </div>
+      <div class="flow-section">
+        <div class="flow-controls">${startBtn}</div>
+        <h3>README.md</h3>
+        ${readmeHtml}
+        <h3>Letzte Runs (${(d.recent_runs||[]).length})</h3>
+        ${runsTable}
+      </div>
+    `);
+  } catch (e) {
+    setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
+  }
+}
+
+async function startFlowRun(flowName) {
+  const slug = state.activeProjectSlug;
+  const defaultTitle = `Run ${new Date().toISOString().replace('T',' ').substring(0,16)}`;
+  const title = prompt('Titel fuer den Run:', defaultTitle);
+  if (title === null) return;  // abgebrochen
+  const configStr = prompt('Config (JSON) oder leer lassen:', '');
+  if (configStr === null) return;
+  let config = null;
+  if (configStr.trim()) {
+    try { config = JSON.parse(configStr); }
+    catch (e) { alert('Ungueltiges JSON in config: ' + e.message); return; }
+  }
+  try {
+    const body = { title: title.trim() || null };
+    if (config) body.config = config;
+    const resp = await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/flows/${encodeURIComponent(flowName)}/runs`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (data.error && !data.id) { alert('Fehler: ' + data.error); return; }
+    await openRunInViewer(data.id);
+    // Nach ~1.5s nochmal laden — Worker wechselt idR von pending auf running
+    setTimeout(() => loadFlows(slug), 1500);
+  } catch (e) {
+    alert('Start fehlgeschlagen: ' + e.message);
+  }
+}
+
+// ----- Run-Details-Ansicht ----------------------------------------------
+async function openRunInViewer(runId) {
+  if (!state.activeProjectSlug) return;
+  _stopFlowPoll();
+  state._flowView = 'run';
+  state._flowViewRunId = runId;
+  setViewerTitle(`▶ Run ${runId}`, 'Flow-Run');
+  ensureViewerOpen();
+  await renderRunDetails();
+  _startFlowPoll();
+}
+
+async function renderRunDetails() {
+  const slug = state.activeProjectSlug;
+  const id = state._flowViewRunId;
+  if (!slug || !id) return;
+  try {
+    const [run, itemsData, logsData] = await Promise.all([
+      api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${id}`),
+      api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${id}/items?limit=100`),
+      api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${id}/logs?tail=40`),
+    ]);
+    // Unterscheidung API-Error (kein `id`) vs Run-eigener Error (hat `id`).
+    if (run.error && !run.id) throw new Error(run.error);
+
+    const total = run.total_items || 0;
+    const done = run.done_items || 0;
+    const failed = run.failed_items || 0;
+    const skipped = run.skipped_items || 0;
+    const pct = total > 0 ? Math.min(100, Math.round((done + failed + skipped) / total * 100)) : 0;
+    const progClass = run.status === 'paused' ? 'paused'
+                    : run.status === 'failed' ? 'failed'
+                    : run.status === 'done'   ? 'done'
+                    : '';
+
+    // Controls je nach Status
+    let ctl = '';
+    if (run.status === 'running' || run.status === 'pending') {
+      ctl = `<button onclick="runPause(${id})">⏸ Pause</button>
+             <button onclick="runCancel(${id}, false)">■ Cancel</button>
+             <button class="btn-stop" onclick="runCancel(${id}, true)">✕ Force-Kill</button>`;
+    } else if (run.status === 'paused') {
+      ctl = `<button class="btn-primary" disabled title="Resume via CLI: disco flow run &lt;name&gt; (noch kein UI-Resume)">▶ Pausiert</button>
+             <button onclick="runCancel(${id}, false)">■ Cancel</button>
+             <button class="btn-stop" onclick="runCancel(${id}, true)">✕ Force-Kill</button>`;
+    } else {
+      ctl = `<span class="muted">Run beendet. Status: <span class="status-badge status-${escHtml(run.status)}">${escHtml(run.status)}</span></span>`;
+    }
+
+    const cfgStr = run.config ? JSON.stringify(run.config) : '(leer)';
+    const errorBlk = run.error
+      ? `<div class="flow-section"><h3>Fehler</h3><pre class="viewer-pre" style="color:var(--red)">${escHtml(run.error)}</pre></div>`
+      : '';
+
+    // Items-Liste (bis zu 100, neueste unten). Bei done: alles. Bei running: Verlauf.
+    const items = itemsData.items || [];
+    const itemRows = items.map(it => {
+      const short = (it.input_ref || '').length > 80 ? (it.input_ref.substring(0, 77) + '…') : it.input_ref;
+      const err = it.error ? `<span class="err" title="${escAttr(it.error)}">${escHtml(it.error.substring(0,60))}</span>` : '';
+      return `<div class="row">
+        <span>#${it.id}</span>
+        <span class="status-badge status-${escHtml(it.status)}">${escHtml(it.status)}</span>
+        <span class="ref" title="${escAttr(it.input_ref)}">${escHtml(short)}</span>
+        <span>${err}</span>
+      </div>`;
+    }).join('');
+
+    setViewerHtml(`
+      <div class="viewer-toolbar">
+        <span>Run ${id} · Flow <b>${escHtml(run.flow_name)}</b></span>
+        <span class="spacer"></span>
+        <button onclick="openFlowInViewer('${escAttr(run.flow_name)}')">⚙ Zum Flow</button>
+        <button onclick="renderRunDetails()">↻ Neu laden</button>
+        <button onclick="closeFlowView()">× Schliessen</button>
+      </div>
+      <div class="flow-section">
+        <h3>${escHtml(run.title || '(ohne Titel)')}</h3>
+        <div class="flow-stats-grid">
+          <div class="flow-stat"><div class="lbl">Status</div><div class="val"><span class="status-badge status-${escHtml(run.status)}">${escHtml(run.status)}</span></div></div>
+          <div class="flow-stat"><div class="lbl">Fortschritt</div><div class="val">${done}/${total || '?'}</div></div>
+          <div class="flow-stat"><div class="lbl">Fehler</div><div class="val">${failed}</div></div>
+          <div class="flow-stat"><div class="lbl">Skipped</div><div class="val">${skipped}</div></div>
+          <div class="flow-stat"><div class="lbl">Kosten</div><div class="val">${(run.total_cost_eur||0).toFixed(2)} €</div></div>
+          <div class="flow-stat"><div class="lbl">Tokens</div><div class="val">${(run.total_tokens_in||0).toLocaleString('de-DE')}/${(run.total_tokens_out||0).toLocaleString('de-DE')}</div></div>
+        </div>
+        <div class="flow-progress ${progClass}"><div class="flow-progress-bar" style="width:${pct}%"></div></div>
+        <div class="flow-controls">${ctl}</div>
+        <div class="muted" style="font-size:11px">Config: <code>${escHtml(cfgStr)}</code> · PID: ${run.worker_pid || '–'} · Start: ${escHtml(run.started_at || '–')} · Ende: ${escHtml(run.finished_at || '–')}</div>
+      </div>
+      ${errorBlk}
+      <div class="flow-section">
+        <h3>Log (tail 40)</h3>
+        <div class="flow-logs">${escHtml(logsData.log_text || '(kein Log)')}${logsData.stderr_text ? '\n--- stderr ---\n'+escHtml(logsData.stderr_text) : ''}</div>
+      </div>
+      <div class="flow-section">
+        <h3>Items (${items.length}${items.length >= 100 ? ' / 100+' : ''})</h3>
+        <div class="flow-items-list">${itemRows || '<div class="muted">Noch keine Items.</div>'}</div>
+      </div>
+    `);
+  } catch (e) {
+    setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
+  }
+}
+
+async function runPause(runId) {
+  const slug = state.activeProjectSlug;
+  try {
+    const r = await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/pause`, {method:'POST'});
+    const d = await r.json();
+    if (d.error && !d.id) alert('Pause-Fehler: ' + d.error);
+  } catch (e) { alert('Pause fehlgeschlagen: ' + e.message); }
+  await renderRunDetails();
+}
+
+async function runCancel(runId, force) {
+  const slug = state.activeProjectSlug;
+  const msg = force
+    ? 'Force-Kill: Worker wird per SIGTERM abgebrochen. Fortfahren?'
+    : 'Cancel: Worker stoppt am naechsten Item-Boundary. Fortfahren?';
+  if (!confirm(msg)) return;
+  try {
+    const r = await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/cancel`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({force: !!force}),
+    });
+    const d = await r.json();
+    if (d.error && !d.id) alert('Cancel-Fehler: ' + d.error);
+  } catch (e) { alert('Cancel fehlgeschlagen: ' + e.message); }
+  await renderRunDetails();
+  await loadFlows(slug);
+}
+
+// ----- Polling ----------------------------------------------------------
+function _startFlowPoll() {
+  _stopFlowPoll();
+  let tickCount = 0;
+  state._flowPoll = setInterval(async () => {
+    if (state._flowView !== 'run' || !state._flowViewRunId) {
+      _stopFlowPoll(); return;
+    }
+    try {
+      const slug = state.activeProjectSlug;
+      const r = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${state._flowViewRunId}`);
+      if (['running','pending','paused'].includes(r.status)) {
+        await renderRunDetails();
+        // Alle 4 Ticks (~10s) auch die Sidebar-Indikatoren aktualisieren.
+        if (++tickCount % 4 === 0) loadFlows(slug);
+      } else {
+        await renderRunDetails();  // einmal final aktualisieren
+        _stopFlowPoll();
+        loadFlows(slug);  // Sidebar: running-Indikator aus
+      }
+    } catch (e) { /* stillschweigend — nicht spammen */ }
+  }, 2500);
+}
+
+function _stopFlowPoll() {
+  if (state._flowPoll) { clearInterval(state._flowPoll); state._flowPoll = null; }
+}
+
+function closeFlowView() {
+  _stopFlowPoll();
+  state._flowView = null;
+  state._flowViewName = null;
+  state._flowViewRunId = null;
+  closeViewer();
+}
+
+// =========================================================================
+// Run-Streifen — projekt-uebergreifend, zeigt aktive Flow-Runs
+// Poll alle 3s /api/workspace/active-runs, rendert je Run eine Zeile.
+// =========================================================================
+
+state._runStripPoll = null;       // setInterval handle
+state._runStripLastRuns = new Map();  // key = "slug:id" → last snapshot fuer Status-Wechsel-Erkennung
+state._runStripPending = new Set();   // "slug:id" — User hat Pause/Cancel geklickt, UI sperren
+
+const RUN_STRIP_POLL_MS = 3000;
+
+function runStripInit() {
+  // Sofort einmal fetchen (sonst Blinken), dann Intervall.
+  runStripPoll();
+  if (state._runStripPoll) clearInterval(state._runStripPoll);
+  state._runStripPoll = setInterval(runStripPoll, RUN_STRIP_POLL_MS);
+}
+
+async function runStripPoll() {
+  let data;
+  try {
+    data = await api('/api/workspace/active-runs');
+  } catch (_e) {
+    return;  // still: API kurz weg, beim naechsten Tick wieder versuchen
+  }
+  if (!data || !Array.isArray(data.runs)) return;
+
+  // Status-Wechsel-Erkennung: alles was im letzten Snapshot war, aber nicht mehr
+  // in der aktiven Liste, ist fertig geworden → Toast.
+  const nowKeys = new Set(data.runs.map(r => `${r.project_slug}:${r.id}`));
+  for (const [key, prev] of state._runStripLastRuns.entries()) {
+    if (!nowKeys.has(key)) {
+      // Dieser Run ist verschwunden = Endstatus erreicht. Final-Snapshot holen.
+      runStripFetchFinal(prev).then(finalRun => {
+        if (finalRun) runStripToast(finalRun);
+      });
+      state._runStripPending.delete(key);
+    }
+  }
+
+  // Neuen Snapshot merken
+  const newMap = new Map();
+  for (const r of data.runs) {
+    newMap.set(`${r.project_slug}:${r.id}`, r);
+  }
+  state._runStripLastRuns = newMap;
+
+  runStripRender(data.runs);
+}
+
+async function runStripFetchFinal(prev) {
+  // prev ist ein Run aus dem letzten aktiven Snapshot. Wir holen seinen
+  // finalen Status (done/failed/cancelled) einmalig fuer den Toast.
+  try {
+    return await api(`/api/workspace/projects/${encodeURIComponent(prev.project_slug)}/runs/${prev.id}`);
+  } catch (_e) {
+    return null;
+  }
+}
+
+function runStripRender(runs) {
+  const strip = document.getElementById('run-strip');
+  if (!strip) return;
+  if (!runs.length) {
+    strip.classList.remove('has-runs');
+    strip.innerHTML = '';
+    return;
+  }
+  strip.classList.add('has-runs');
+  strip.innerHTML = runs.map(runStripRenderRow).join('');
+}
+
+function runStripRenderRow(r) {
+  const key = `${r.project_slug}:${r.id}`;
+  const status = r.status || 'running';
+  const total = r.total_items || 0;
+  const done = r.done_items || 0;
+  const failed = r.failed_items || 0;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const runtime = _runStripElapsed(r.started_at || r.created_at);
+  const cost = (r.total_cost_eur || 0).toFixed(2);
+  const budget = (r.config && r.config.budget_eur) ? Number(r.config.budget_eur) : null;
+  const overBudget = budget != null && (r.total_cost_eur || 0) > budget;
+
+  const disabled = state._runStripPending.has(key) ? 'disabled' : '';
+  const pauseLabel = status === 'paused' ? '▶ Weiter' : '⏸ Pause';
+  const pauseAction = status === 'paused'
+    ? `runStripResume('${escAttr(r.project_slug)}', ${r.id})`
+    : `runStripPause('${escAttr(r.project_slug)}', ${r.id})`;
+
+  const budgetStr = budget != null
+    ? `${cost} / ${budget.toFixed(2)} €`
+    : `${cost} €`;
+
+  const failedStr = failed > 0 ? `<span class="run-failed">· ${failed} failed</span>` : '';
+
+  return `
+    <div class="run-row status-${escAttr(status)}" data-key="${escAttr(key)}">
+      <span class="run-dot"></span>
+      <span class="run-id" onclick="runStripOpenDetails('${escAttr(r.project_slug)}', ${r.id})"
+            title="Details im Viewer oeffnen">#${r.id}</span>
+      <span class="run-flow" title="${escAttr(r.flow_name)}">${escHtml(r.flow_name)}</span>
+      <span class="run-project" title="Projekt: ${escAttr(r.project_name || r.project_slug)}">${escHtml(r.project_slug)}</span>
+      <span class="run-progress">
+        <span class="run-bar"><span class="run-bar-fill" style="width:${pct}%"></span></span>
+        <span class="run-counts">${done}/${total} (${pct}%)${failedStr}</span>
+      </span>
+      <span class="run-meta">
+        <span title="Laufzeit seit Start">⏱ ${runtime}</span>
+        <span class="run-cost ${overBudget ? 'over-budget' : ''}" title="${budget != null ? 'Budget: ' + budget.toFixed(2) + ' €' : 'Kein Budget gesetzt'}">💶 ${budgetStr}</span>
+      </span>
+      <span class="run-actions">
+        <button class="run-btn" onclick="${pauseAction}" ${disabled}
+                title="${status === 'paused' ? 'Worker fortsetzen' : 'Worker pausieren — aktueller Item laeuft noch zu Ende'}">${pauseLabel}</button>
+        <button class="run-btn run-btn-danger" onclick="runStripCancel('${escAttr(r.project_slug)}', ${r.id})" ${disabled}
+                title="Run abbrechen — Done-Items bleiben">✕ Cancel</button>
+      </span>
+    </div>
+  `;
+}
+
+function _runStripElapsed(startedAtIso) {
+  if (!startedAtIso) return '—';
+  const started = new Date(startedAtIso.replace(' ', 'T') + (startedAtIso.endsWith('Z') ? '' : 'Z'));
+  if (isNaN(started.getTime())) return '—';
+  const diffSec = Math.max(0, (Date.now() - started.getTime()) / 1000);
+  if (diffSec < 60) return `${Math.round(diffSec)}s`;
+  if (diffSec < 3600) return `${Math.round(diffSec / 60)}m`;
+  const h = Math.floor(diffSec / 3600);
+  const m = Math.round((diffSec - h * 3600) / 60);
+  return `${h}h${m}m`;
+}
+
+async function runStripPause(slug, runId) {
+  const key = `${slug}:${runId}`;
+  state._runStripPending.add(key);
+  runStripPoll();  // UI-Update mit disabled Buttons
+  try {
+    await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/pause`, { method: 'POST' });
+  } catch (e) {
+    alert(`Pause fehlgeschlagen: ${e.message}`);
+  }
+  state._runStripPending.delete(key);
+  runStripPoll();
+}
+
+async function runStripResume(slug, runId) {
+  // Ein "paused"-Run hat worker_pid != NULL nur wenn Worker noch laeuft —
+  // bei Pause-Signal laeuft er zu Ende und beendet sich. Resume = neuer Run-Start
+  // mit gleichem Flow, der die noch-pending Items aufgreift (Idempotenz).
+  // Fuer MVP: einfachen Hinweis geben, tatsaechliches Resume macht der User ueber
+  // "Flow erneut starten" im Flow-Panel.
+  alert(
+    'Resume-Button: im MVP muss der Run neu gestartet werden ueber ' +
+    '„Neuen Run starten" im Flow-Panel. Done-Items werden dank Idempotenz uebersprungen.'
+  );
+}
+
+async function runStripCancel(slug, runId) {
+  const ok = confirm(
+    `Run #${runId} sofort abbrechen?\n\n` +
+    `• Worker wird per SIGTERM beendet — aktuell laufender Item ist verloren.\n` +
+    `• Bereits abgeschlossene Items bleiben in der DB.\n` +
+    `• Pending-Items werden NICHT verarbeitet.\n\n` +
+    `Tipp: Wenn Du stattdessen sanft stoppen willst (Item zu Ende, dann halt),\n` +
+    `nimm „⏸ Pause".\n\n` +
+    `Ok = sofort abbrechen, Abbrechen = weiterlaufen lassen.`
+  );
+  if (!ok) return;
+  const key = `${slug}:${runId}`;
+  state._runStripPending.add(key);
+  runStripPoll();
+  try {
+    await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
+  } catch (e) {
+    alert(`Cancel fehlgeschlagen: ${e.message}`);
+  }
+  state._runStripPending.delete(key);
+  runStripPoll();
+}
+
+async function runStripOpenDetails(slug, runId) {
+  // Wechsel ins Ziel-Projekt (falls noetig), dann Run-Viewer oeffnen.
+  if (state.activeProjectSlug !== slug) {
+    await switchProject(slug);
+  }
+  if (typeof openRunInViewer === 'function') {
+    await openRunInViewer(runId);
+  }
+}
+
+function runStripToast(run) {
+  const container = document.getElementById('run-toast-container');
+  if (!container) return;
+  const status = run.status || 'done';
+  const total = run.total_items || 0;
+  const done = run.done_items || 0;
+  const failed = run.failed_items || 0;
+  const skipped = run.skipped_items || 0;
+  const cost = (run.total_cost_eur || 0).toFixed(2);
+
+  const emoji = status === 'done' ? '✅'
+              : status === 'failed' ? '❌'
+              : status === 'cancelled' ? '⊘'
+              : 'ℹ';
+  const label = status === 'done' ? 'fertig'
+              : status === 'failed' ? 'FEHLGESCHLAGEN'
+              : status === 'cancelled' ? 'abgebrochen'
+              : status;
+
+  const slug = run.project_slug || run.project_name || '';
+  const flow = run.flow_name || '?';
+
+  const toast = document.createElement('div');
+  toast.className = `run-toast status-${status}`;
+  toast.innerHTML = `
+    <button class="run-toast-close" title="Schliessen">✕</button>
+    <div class="run-toast-title">${emoji} Run #${run.id} ${escHtml(label)}</div>
+    <div class="run-toast-body">
+      ${escHtml(flow)} · ${escHtml(slug)}<br>
+      ${done}/${total} done${failed > 0 ? ' · <span style="color:var(--red)">' + failed + ' failed</span>' : ''}${skipped > 0 ? ' · ' + skipped + ' skipped' : ''} · ${cost} €
+      ${slug ? `<br><a href="#" onclick="runStripOpenDetails('${escAttr(slug)}', ${run.id}); return false;" style="color:var(--accent)">Details oeffnen</a>` : ''}
+    </div>
+  `;
+  const close = () => { if (toast.parentNode) toast.parentNode.removeChild(toast); };
+  toast.querySelector('.run-toast-close').addEventListener('click', close);
+  container.appendChild(toast);
+  // Auto-close nach 10s — bei 'failed' laenger (15s)
+  const ttl = status === 'failed' ? 15000 : 10000;
+  setTimeout(close, ttl);
+}
+
+// Start des Run-Streifen-Pollings: sobald der DOM bereit ist.
+// Wir fuegen uns in den bestehenden DOMContentLoaded-Hook ein, indem wir
+// NACH dem vorhandenen addEventListener noch einen zweiten anhaengen.
+// Der zweite feuert ebenfalls nach DOM-Ready.
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', runStripInit);
+} else {
+  runStripInit();
+}
+</script>
+</body>
+</html>

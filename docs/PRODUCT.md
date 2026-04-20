@@ -116,7 +116,7 @@ Für Heavy-Lifting-Aufgaben über Tausende Dokumente:
 ### Workspace-Trennung
 
 ```
-~/Claude/BEW Doku Projekt/    ← Code (GitHub-synced)
+<repo-root>/                   ← Code (GitHub-synced)
 ~/Disco/                       ← Daten (NIEMALS in Git)
 ```
 
@@ -125,7 +125,7 @@ LLM-Inferenz). Code-Repo enthält keine Daten.
 
 ### Agent-Architektur
 
-- **Portal-Agent** ("bew-doku-agent") im Foundry-Portal: System-Prompt,
+- **Portal-Agent** ("disco-prod-agent" / "disco-dev-agent") im Foundry-Portal: System-Prompt,
   Tool-Schemas, Modell — zentral verwaltet, versioniert, per Portal
   editierbar
 - **Runtime:** Azure OpenAI Responses API via agent_reference.

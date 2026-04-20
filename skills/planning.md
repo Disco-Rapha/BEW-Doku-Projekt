@@ -59,7 +59,7 @@ plan_write({
 ```
 
 **Titel-Beispiele** (gut):
-- „IBL-Klassifikation Elektro-Dokumente"
+- „Dokumenten-Klassifikation Elektro"
 - „SOLL/IST-Abgleich Bauwerk gegen VGB A.3"
 - „Context-Onboarding für 16 neue Normen"
 
@@ -162,7 +162,7 @@ Faustregel: **Plan = heutige Arbeit. NOTES = Projektverlauf. memory = dauerhaft.
 ## Beispiel-Plan
 
 ```markdown
-# Plan: IBL-Klassifikation Elektro-Dokumente
+# Plan: Dokumenten-Klassifikation Elektro
 
 **Status:** in-progress
 **Erstellt:** 2026-04-17 10:15:00
