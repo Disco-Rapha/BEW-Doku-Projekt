@@ -28,7 +28,10 @@ dependencies = [
     "pypdf>=5.0",
     # Excel lesen/schreiben mit Formatierung (Phase 2b)
     "openpyxl>=3.1",
-    "docling>=2.90.0",
+    # Lokale PDF -> Markdown via Docling. Das [vlm]-Extra bringt mlx-vlm
+    # auf macOS-arm64 (M1/M2/M3) und transformers fuer alle anderen
+    # Plattformen — wir brauchen es fuer Granite-Docling-258M.
+    "docling[vlm]>=2.90.0",
 ]
 
 [build-system]

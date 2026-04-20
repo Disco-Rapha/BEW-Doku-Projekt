@@ -173,4 +173,5 @@ from . import skills   # noqa: E402,F401 — list_skills, load_skill
 from . import sources   # noqa: E402,F401 — sources_register, attach_metadata, detect_duplicates
 from . import executor  # noqa: E402,F401 — run_python
 from . import docint         # noqa: E402,F401 — extract_pdf_to_markdown
+from . import markdown       # noqa: E402,F401 — markdown_extract (Docling: granite-mlx, smol-mlx, standard)
 from . import markdown_tools # noqa: E402,F401 — extract_markdown_structure

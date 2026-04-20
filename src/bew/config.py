@@ -6,10 +6,22 @@ Disco trennt strikt zwischen:
 
 Diese Trennung ist DSGVO-relevant: Kundendaten landen nie im Code-Repo,
 auch wenn `git add -A` versehentlich falsch tippt.
+
+Offline-Policy
+--------------
+Beim Modul-Import werden HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE /
+HF_DATASETS_OFFLINE in os.environ gesetzt, damit alle Subprozesse
+(Flow-Worker, run_python) sie erben. Default: alle drei auf 1.
+Das verhindert, dass Docling/transformers/HF-Hub beim Laden eines
+gecachten Modells einen Online-Check macht — hat uns heute einen
+Flow-Run mit 3 min Socket-Hang gekostet.
+Zum Modelle-Laden: `uv run python scripts/download_models.py` —
+das Skript setzt die Flags temporaer aus.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -66,6 +78,17 @@ class Settings(BaseSettings):
     foundry_api_key: str | None = None
     foundry_model_deployment: str = "gpt-5"
     foundry_agent_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # Offline-Modus fuer ML-Modelle (default: AN)
+    # ------------------------------------------------------------------
+    # Diese Flags werden beim Modul-Import in os.environ gespiegelt, damit
+    # sie an Subprozesse (Flow-Worker, run_python) vererbt werden.
+    # Verhindert, dass Docling/HF/transformers Online-Checks gegen
+    # huggingface.co machen, wenn das Modell eigentlich im Cache liegt.
+    hf_hub_offline: bool = True
+    transformers_offline: bool = True
+    hf_datasets_offline: bool = True
 
     # ------------------------------------------------------------------
     # Pfad-Properties — alles geht durchs Workspace
@@ -143,4 +166,24 @@ class Settings(BaseSettings):
         return self.workspace_root / ".msal_token_cache.json"
 
 
+def _apply_offline_env(s: Settings) -> None:
+    """Spiegelt die Offline-Flags in os.environ, damit Subprozesse sie erben.
+
+    Wir respektieren aber explizit bereits gesetzte Werte in der aktuellen
+    Umgebung — dann kann z.B. `HF_HUB_OFFLINE=0 uv run ...` einen
+    einmaligen Online-Pfad erzwingen (fuer download_models.py).
+    """
+    mapping = {
+        "HF_HUB_OFFLINE": s.hf_hub_offline,
+        "TRANSFORMERS_OFFLINE": s.transformers_offline,
+        "HF_DATASETS_OFFLINE": s.hf_datasets_offline,
+    }
+    for key, flag in mapping.items():
+        # Wenn der User die Var im Shell gesetzt hat, nicht ueberschreiben.
+        if key in os.environ:
+            continue
+        os.environ[key] = "1" if flag else "0"
+
+
 settings = Settings()
+_apply_offline_env(settings)

@@ -2406,11 +2406,13 @@ async function runStripResume(slug, runId) {
 
 async function runStripCancel(slug, runId) {
   const ok = confirm(
-    `Run #${runId} wirklich abbrechen?\n\n` +
-    `• Bereits verarbeitete Items bleiben in der DB erhalten.\n` +
-    `• Laufender Item-Call wird sauber zu Ende gefuehrt.\n` +
-    `• Pending-Items werden NICHT mehr verarbeitet.\n\n` +
-    `Ok = abbrechen, Abbrechen = weiterlaufen lassen.`
+    `Run #${runId} sofort abbrechen?\n\n` +
+    `• Worker wird per SIGTERM beendet — aktuell laufender Item ist verloren.\n` +
+    `• Bereits abgeschlossene Items bleiben in der DB.\n` +
+    `• Pending-Items werden NICHT verarbeitet.\n\n` +
+    `Tipp: Wenn Du stattdessen sanft stoppen willst (Item zu Ende, dann halt),\n` +
+    `nimm „⏸ Pause".\n\n` +
+    `Ok = sofort abbrechen, Abbrechen = weiterlaufen lassen.`
   );
   if (!ok) return;
   const key = `${slug}:${runId}`;
@@ -2420,7 +2422,7 @@ async function runStripCancel(slug, runId) {
     await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ force: false }),
+      body: JSON.stringify({ force: true }),
     });
   } catch (e) {
     alert(`Cancel fehlgeschlagen: ${e.message}`);

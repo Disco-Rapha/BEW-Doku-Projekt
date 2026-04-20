@@ -262,6 +262,7 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
 
 ```bash
 uv sync                                        # Dependencies
+uv run python scripts/download_models.py       # Docling-MLX-Modelle (einmalig, ~1.1 GB, idempotent)
 disco project list                             # Alle Projekte
 disco project init <slug> --name "..." [--sample]  # Neues Projekt
 disco project show <slug>                      # Details

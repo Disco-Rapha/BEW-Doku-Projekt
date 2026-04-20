@@ -104,7 +104,56 @@ fs_read({"path": "flows/<name>/README.md"})
 → Schreibe die README um, so dass sie **dem gemeinsamen Gespräch
 entspricht**: alle Punkte aus Phase 1 rein, plus den Abschnitt
 „Entscheidungen" mit den konkreten Abstimmungen („am YYYY-MM-DD:
-Nutzer entschied X"). Danach:
+Nutzer entschied X").
+
+**Pflicht: Der erste Abschnitt der README ist IMMER `## Flow auf einen
+Blick`.** Eine Tabelle + ein ASCII-Datenflussbild — damit jeder (Nutzer,
+spätere Disco-Sessions, Review-Kolleg\*innen) in 10 Sekunden versteht,
+was dieser Flow tut, was rein geht und was raus kommt. Nimm diese
+Vorlage 1:1 und fülle die Felder aus dem Phase-1-Gespräch:
+
+````markdown
+## Flow auf einen Blick
+
+| Aspekt           | Wert                                                              |
+|------------------|-------------------------------------------------------------------|
+| **Was**          | _Ein Satz: was macht dieser Flow._                                |
+| **Eingabe**      | _Tabelle + Filter / Ordner + Glob (z. B. `agent_sources WHERE mime='application/pdf'`)._ |
+| **Verarbeitung** | _Pro-Item-Schritt in einem Satz (z. B. `markdown_extract(engine='granite-mlx')`)._ |
+| **Ausgabe**      | _Dateipfad UND/ODER Tabelle (z. B. `.disco/markdown-extracts/*.md` + `agent_md_extracts`)._ |
+| **Extern**       | _Azure DI / Azure OpenAI / lokal / 0 EUR._                        |
+| **Budget**       | _Pro-Item-Kosten × Item-Zahl — oder „gratis (lokal)"._            |
+| **Laufzeit**     | _Grobe Schätzung für Full-Run (z. B. „~20 min für 20 PDFs à 4 Seiten")._ |
+
+```
+eingabe_quelle ──▶ flow_name ──▶ ausgabe_ziel
+weitere_infos      runner-kern     weitere_infos
+```
+````
+
+Beispiel (Granite-Markdown-Extract):
+
+````markdown
+## Flow auf einen Blick
+
+| Aspekt           | Wert                                                               |
+|------------------|--------------------------------------------------------------------|
+| **Was**          | PDFs → Markdown lokal mit Granite-Docling-MLX konvertieren.        |
+| **Eingabe**      | `agent_sources` WHERE `mime='application/pdf'` AND `status='active'`. |
+| **Verarbeitung** | Pro PDF: `markdown_extract(engine='granite-mlx')`, sequenziell.    |
+| **Ausgabe**      | `.disco/markdown-extracts/granite-mlx/<name>.md` + `agent_md_extracts`. |
+| **Extern**       | Nur lokal (MLX auf M1-GPU), kein Cloud-Call.                       |
+| **Budget**       | Gratis. ~15–25 s/Seite auf M1.                                     |
+| **Laufzeit**     | 20 PDFs à ~4 Seiten ≈ 20 min.                                      |
+
+```
+sources/*.pdf  ──▶  runner.py     ──▶  .disco/markdown-extracts/*.md
+agent_sources      granite-mlx          agent_md_extracts (DB)
+```
+````
+
+Danach kommen die restlichen README-Abschnitte (Ziel ausführlich,
+Akzeptanzkriterien, Entscheidungen). Dann:
 
 ```text
 fs_write({"path": "flows/<name>/README.md", "content": "..."})
