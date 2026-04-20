@@ -38,7 +38,7 @@ MAX_MAX_CHARS = 500_000
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Pfad zum PDF, relativ zu data/ (z.B. 'raw/vattenfall/foo.pdf').",
+                "description": "Pfad zum PDF, relativ zu data/ (z.B. 'raw/dokumente/foo.pdf').",
             },
             "page_start": {
                 "type": "integer",

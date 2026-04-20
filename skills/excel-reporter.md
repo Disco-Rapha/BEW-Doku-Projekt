@@ -1,7 +1,7 @@
 ---
 name: excel-reporter
 description: Formatierte Multi-Sheet-Excel serverseitig via build_xlsx_from_tables bauen (Header-Style, AutoFilter, Status-Farben).
-when_to_use: Benutzer will eine Excel, einen Report oder Export — egal ob IBL, Komponentenliste, Auswertung oder SOLL/IST-Matrix.
+when_to_use: Benutzer will eine Excel, einen Report oder Export — egal ob Dokumenten-Index, Komponentenliste, Auswertung oder SOLL/IST-Matrix.
 ---
 
 # Skill: excel-reporter
@@ -25,7 +25,7 @@ beliebig grosse Excel.
 
 ## Datei-Naming
 
-`<thema>_YYYY-MM-DD_v<N>.xlsx` z.B. `ibl_lagerhalle_2026-04-16_v1.xlsx`.
+`<thema>_YYYY-MM-DD_v<N>.xlsx` z.B. `dokumenten_index_2026-04-16_v1.xlsx`.
 Mehrfach am selben Tag → `_v2`, `_v3`. **Niemals ueberschreiben** —
 wenn die Datei existiert, gibt das Tool einen Fehler.
 
@@ -46,8 +46,8 @@ wenn die Datei existiert, gibt das Tool einen Fehler.
       "column_renames": {"id": "ID", "kks": "KKS", "ebene": "Ebene"}
     },
     {
-      "name": "2-IBL",
-      "sql": "SELECT id, kks, dcc, dokumentenart, status FROM work_ibl ORDER BY kks",
+      "name": "2-Index",
+      "sql": "SELECT id, kks, dcc, dokumentenart, status FROM work_index ORDER BY kks",
       "column_renames": {"id": "Lfd.", "dokumentenart": "Dokumentenart", "status": "Status"},
       "status_column": "status"
     },
@@ -88,8 +88,8 @@ hast, gib ihren Schluessel als `status_column` mit:
 
 ```json
 {
-  "name": "3-IBL",
-  "sql": "SELECT id, kks, dcc, status, bewertung FROM work_ibl",
+  "name": "3-Index",
+  "sql": "SELECT id, kks, dcc, status, bewertung FROM work_index",
   "status_column": "status"
 }
 ```
@@ -101,23 +101,23 @@ hast, gib ihren Schluessel als `status_column` mit:
 Werte im Format `"Anzeige|#Ziel-Sheet!Zelle"`. Beispiel:
 
 ```json
-{"name": "3-IBL",
+{"name": "3-Index",
  "sql": "SELECT id, kks, ('siehe ' || dok_id || '|#Dokumente!A' || (dok_row+1)) AS doc_link FROM ...",
  "hyperlink_column": "doc_link"}
 ```
 
 Das wird zu `siehe DOK-123` mit Klick auf Sheet `Dokumente`, Zeile `dok_row+1`.
 
-## Beispiel: kompletter IBL-Export
+## Beispiel: kompletter Dokumenten-Index-Export
 
 ```text
 build_xlsx_from_tables(
-  target_path="exports/ibl_lagerhalle_2026-04-16_v1.xlsx",
-  title="IBL Lagerhalle Reuter — Prototyp",
+  target_path="exports/dokumenten_index_2026-04-16_v1.xlsx",
+  title="Dokumenten-Index — Prototyp",
   overview_rows=[
     ["Komponenten total", 322],
     ["KKS-Systeme", 12],
-    ["IBL-Einträge", 72],
+    ["Index-Einträge", 72],
     ["DCC-Codes", 395]
   ],
   sheets=[
@@ -127,13 +127,13 @@ build_xlsx_from_tables(
       "column_renames": {"id":"ID","kks":"KKS","ebene":"Ebene","parent_kks":"Parent KKS","anlagenteil":"Anlagenteil","disziplin":"Disziplin"}
     },
     {
-      "name": "2-IBL",
-      "sql": "SELECT id, kks, dcc, dokumentenart, prioritaet FROM work_ibl ORDER BY kks, dcc",
+      "name": "2-Index",
+      "sql": "SELECT id, kks, dcc, dokumentenart, prioritaet FROM work_index ORDER BY kks, dcc",
       "column_renames": {"id":"Lfd.","kks":"KKS","dcc":"DCC","dokumentenart":"Dokumentenart","prioritaet":"Priorität"}
     },
     {
       "name": "3-DCC-Referenz",
-      "sql": "SELECT dcc, vorzugsbezeichnung_de FROM work_dcc WHERE dcc IN (SELECT DISTINCT dcc FROM work_ibl) ORDER BY dcc",
+      "sql": "SELECT dcc, vorzugsbezeichnung_de FROM work_dcc WHERE dcc IN (SELECT DISTINCT dcc FROM work_index) ORDER BY dcc",
       "column_renames": {"dcc":"DCC","vorzugsbezeichnung_de":"Vorzugsbezeichnung DE"}
     }
   ]

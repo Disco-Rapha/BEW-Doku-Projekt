@@ -312,7 +312,7 @@ existiert im SDK).
 
 Beobachtung beim Chat-Reset in Prod (nach Modellwechsel gpt-5 →
 gpt-5.1_prod): sobald die Conversation-History leer ist, weiß Disco
-praktisch nichts mehr über das Projekt. Disco-alt (bew-doku-agent:29)
+praktisch nichts mehr über das Projekt. Disco-alt (Agent-Version:29)
 hat über Monate Gespräche nichts in `.disco/memory/` hinterlassen —
 die einzigen dauerhaften Fakten sind in `README.md` / `NOTES.md`,
 und das auch nur wenn der User sie dort abgelegt hat.
@@ -607,6 +607,67 @@ Kosten verursachen.
 - Budget-Limits in der Projekt-Config (README oder .disco/config.json)
 - Alert wenn ein einzelner Turn > 1 € kostet
 
+### Kostenlimit verifizieren — ziehen die existierenden Schutzmechanismen wirklich? (Priorität: hoch — aus UAT 2026-04-20)
+
+Status: Kurz-Notiz aus Live-Test. Wir haben an mehreren Stellen Deckel
+eingebaut (MAX_TOOL_ROUNDS, DI-Page-Check im Skill, Flow-Budget), aber
+**noch nie überprüft, ob die auch wirklich greifen**, wenn Disco in
+einen Kostenfresser hineinrennt.
+
+**Test-Szenarien, die durchlaufen werden sollten:**
+
+1. **Agent-Loop-Deckel:** Disco in eine Schleife schicken
+   (z.B. "rufe list_skills 40× hintereinander auf") — bricht er bei
+   Round 24 ab? Was sieht der Nutzer?
+2. **DI-Page-Limit:** PDF mit > 200 Seiten durch `extract_pdf_to_markdown`
+   jagen — kommt die Warnung? Wird der Call trotzdem ausgeführt oder
+   blockiert (aktuell: nur Warnung, keine Blockade).
+3. **Flow-Budget:** Flow-SDK hat `budget_eur`-Feld (siehe flows/sdk.py).
+   Mini-Flow schreiben, der bewusst das Budget überschreiten würde —
+   stoppt der Worker wirklich, oder läuft er einfach weiter?
+4. **Context-Onboarding > 5 PDFs:** Context-Ordner mit 10 kleinen PDFs
+   füllen — fragt Disco wirklich nach, oder schickt er alle auf
+   einmal los?
+
+**Ergebnis der Tests in Backlog nachtragen** und offene Lücken
+(z.B. Flow-Budget zieht nicht) als separate Bug-Einträge aufmachen.
+
+### DI-Kosten im Chat sichtbar machen (Priorität: hoch — aus UAT 2026-04-20)
+
+Status: Nutzer-Beobachtung — "Bei DI sind keine Kosten sichtbar.
+Müssen vielleicht vorher für bestimmte Parameter gesetzt werden."
+
+**Was der Code aktuell tut** (`functions/docint.py`):
+
+- `extract_pdf_to_markdown` liefert `estimated_cost_eur` im Tool-Result
+  zurück (0.01 €/Seite für `prebuilt-layout`, 0.005 €/Seite sonst — hardcoded).
+- Berechnung: `n_pages * cost_per_page`.
+
+**Mögliche Gründe, warum der Nutzer nichts sieht:**
+
+1. **UI rendert das Feld nicht prominent.** Tool-Result-Block zeigt JSON,
+   aber `estimated_cost_eur` geht in der Masse unter. → im Tool-Call-Block
+   (index.html) eigene Cost-Zeile / Badge, z.B. "≈ 0,12 € (12 Seiten)".
+2. **Disco erwähnt Kosten nicht aktiv im Live-Kommentar.** System-Prompt
+   hat keine Regel dazu. → Ergänzung: "Nach jedem DI-Call eine Zeile
+   `≈ 0,XX € für N Seiten` in die Assistant-Message."
+3. **Andere DI-Nutzungsstellen haben keine Kostenrückgabe.**
+   z.B. Context-Onboarding, Flow-Worker, wenn sie DI direkt aufrufen
+   statt über das Tool. → Einheitlicher Helper (`_di_cost(pages, model)`)
+   und konsequente Propagation.
+4. **Modell liefert `n_pages=0`.** Manche PDF-Varianten (gerenderte
+   Bilder ohne Page-Metadaten) — dann ist Cost=0. → Fallback auf
+   tatsächliche Seitenanzahl des Input-PDFs (pypdf).
+
+**Test + Fix in einem Rutsch:**
+
+1. Bekanntes PDF (z.B. 20 Seiten) durch `extract_pdf_to_markdown` jagen
+2. Tool-Result prüfen — kommt `estimated_cost_eur` sauber an?
+3. Assistant-Message prüfen — erwähnt Disco die Kosten?
+4. UI-Block prüfen — steht die Zahl irgendwo sichtbar?
+
+Danach die Lücken gezielt schließen.
+
 ### Batch-Aufgaben GRUNDSÄTZLICH über Pipeline (Priorität: kritisch)
 
 Aktuell läuft die DI-Extraktion von Context-PDFs als Tool-Call
@@ -696,7 +757,7 @@ können welche Engine pro Datei oder global genutzt wird.
 **ToDo — Docling produktiv verfuegbar machen** (aus UAT-Session 2026-04-19):
 - Dependency ist bereits in `pyproject.toml` (`docling>=2.90.0`), aber
   **kein Produkt-Pfad nutzt sie aktuell** — nur ad-hoc Benchmark-Skripte
-  im `ibl-lagerhalle`-Projekt.
+  in einem Testprojekt.
 - **Option A (Tool):** neue Custom Function
   `markdown_extract_docling(pdf_path, engine_options)` in
   `src/bew/agent/functions/` — nutzt lokales docling, schreibt Markdown
@@ -1144,8 +1205,8 @@ Muss vor Umsetzung gemeinsam diskutiert werden. Baustellen:
   - PR von `dev` nach `main` nach Verifikation (manueller Release-Cut)
   - Keine direkten Pushes auf `main` mehr (Branch Protection Rule?)
 - **Zwei Installations-Pfade:**
-  - `~/Claude/BEW Doku Projekt/` (dev, wo wir jetzt arbeiten)
-  - `~/Claude/BEW Doku Projekt – PROD/` (neuer Checkout auf `main`)
+  - Dev-Checkout (wo wir jetzt arbeiten)
+  - Prod-Checkout (neuer Checkout auf `main`)
   - Jeweils eigenes `.venv/`, eigene `.env`
 - **Zwei Workspaces:**
   - `~/Disco-dev/` (bestehender `~/Disco/` wird umbenannt)
@@ -1159,8 +1220,8 @@ Muss vor Umsetzung gemeinsam diskutiert werden. Baustellen:
 - **Foundry-Agent:**
   - Option A: eine Agent-Version fuer beides (Prod faehrt die
     gleiche Version, Dev-Pushes ueberschreiben sie = nicht gut)
-  - Option B: zwei Agent-Deployments (`bew-doku-agent` = Prod,
-    `bew-doku-agent-dev` = Dev) mit eigenem `FOUNDRY_AGENT_ID`
+  - Option B: zwei Agent-Deployments (`disco-prod-agent` = Prod,
+    `disco-dev-agent` = Dev) mit eigenem `FOUNDRY_AGENT_ID`
   - Option C: `disco agent setup` pusht nur in Dev; Release-Cut auf
     Prod braucht `disco agent release` (Agent neu erstellen / Version
     bumpen)

@@ -1,53 +1,65 @@
-# BEW Doku Projekt
+# Disco
 
-Lokale Applikation zur strukturierten Aufbereitung von PDF-Dokumentationen mit Azure KI-Services (Document Intelligence, OpenAI) und SQLite-basierter Datenhaltung.
+Agentischer Reasoning-Assistent fuer Projektmitarbeiter in technischen
+Grossprojekten. Liest, verknuepft und wertet tausende Dokumente, Excel-
+Metadaten und Datenbanken aus. Laeuft lokal auf dem Nutzer-Rechner,
+Rechenleistung via Microsoft Azure (Sweden Central, DSGVO/EU).
+
+## Kernfaehigkeit
+
+Cross-Source-Reasoning — Disco versteht Dokumente und zieht Schluesse,
+statt sie nur zu verwalten. Kombiniert Dateisystem, SQL-Auswertungen,
+PDF-Inhalte und Normen zu einer Sicht.
 
 ## Stack
 
-- **Python 3.11+**, verwaltet mit [`uv`](https://docs.astral.sh/uv/)
-- **SQLite** als lokale Datenbank (`db/disco.db`)
-- **Datasette** als Browser-UI (Lesezugriff, Filter, Suche)
-- **Azure Document Intelligence** für PDF → Markdown
-- **Azure OpenAI** für Metadaten und Abgleich gegen VGB-S-831
-- **Claude Code** als Entwicklungs- und Analyseumgebung (siehe `CLAUDE.md`)
+- Python 3.11+, verwaltet mit [`uv`](https://docs.astral.sh/uv/)
+- **SQLite** — system.db (zentral) + data.db (pro Projekt)
+- **FastAPI + WebSocket** fuer Web-UI (`src/disco/api/`)
+- **Foundry Agent Service** (Portal-Agent mit `agent_reference`)
+- **Azure OpenAI** (Sweden Central) — Modell GPT-5.1
+- **Azure Document Intelligence** fuer PDF-OCR
+- **openpyxl**, **pypdf** fuer lokale Datei-Operationen
 
-## Ordnerstruktur
+## Workspace-Trennung
 
 ```
-data/raw/         Input-PDFs (gitignored)
-data/markdown/    Generiertes Markdown (gitignored)
-data/exports/     Export-Pakete (gitignored)
-db/disco.db         SQLite-Datenbank (gitignored)
-migrations/       SQL-Schema-Dateien
-src/bew/          Python-Anwendungscode
-scripts/          Hilfsskripte (z.B. Datasette-Start)
-notebooks/        Analysen, Experimente
+<repo-root>/                   ← Code-Repo (dev, GitHub-synced)
+├── src/, skills/, migrations/, scripts/
+
+~/Disco/                       ← Daten-Workspace Prod (NIEMALS in Git)
+~/Disco-dev/                   ← Daten-Workspace Dev
+├── system.db
+├── logs/
+└── projects/<slug>/           ← Ein Projekt je Ordner
+    ├── README.md, NOTES.md, DISCO.md    (3-Datei-Memory)
+    ├── sources/, context/, work/, exports/
+    ├── data.db                (Projekt-DB)
+    └── .disco/                (plans, sessions, extracts)
 ```
+
+Kundendaten verlassen nie das Repo. `.gitignore` schuetzt als
+Sicherheitsnetz.
 
 ## Erste Schritte
 
 ```bash
-# 1. Abhängigkeiten installieren
+# Dependencies
 uv sync
 
-# 2. .env anlegen (von Vorlage)
+# .env anlegen
 cp .env.example .env
-# Dann in .env die Azure-Keys eintragen
+# Azure-/Foundry-Keys in .env eintragen
 
-# 3. Datenbank initialisieren
-uv run bew db init
+# System-DB initialisieren
+disco db init
 
-# 4. Datasette starten (Browser öffnet sich)
-bash scripts/run-datasette.sh
+# Server starten
+uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-## Mit Claude Code arbeiten
+Details zu Architektur, Skills, Flows: siehe `CLAUDE.md`.
 
-Im Projektordner `claude` starten. Claude liest `CLAUDE.md` und kennt damit Struktur, DB-Schema und Konventionen.
+## Lizenz
 
-## Projektphasen
-
-- **Phase 0 (aktuell):** Fundament — Projektgerüst, DB, Datasette, Claude-Integration.
-- **Phase 1:** Ingest-Pipeline (PDF → Azure → Markdown + Metadaten in DB).
-- **Phase 2:** VGB-S-831 Informationsbedarfsliste, N:N-Abgleich via Azure OpenAI.
-- **Phase 3:** Exporte und Rückspielung nach SharePoint.
+Intern. Nicht fuer externe Verteilung.

@@ -7,10 +7,23 @@ when_to_use: Du wurdest vom System aufgeweckt (developer-Block enthaelt SYSTEM-T
 # Skill: flow-supervisor
 
 Dieser Skill ist Deine Routine, wenn Dich der **Flow-Watcher** automatisch
-aufweckt — ohne dass der Nutzer etwas geschrieben hat. Trigger-Kinds:
-`status_change`, `first_item`, `second_item`, `half`, `heartbeat`, `done`,
-`failed`. Das Heartbeat-Backoff ist exponentiell (1, 2, 4, 8, ... min,
-Cap 4 h).
+aufweckt — ohne dass der Nutzer etwas geschrieben hat.
+
+**Trigger-Modell (Stand April 2026):** Du wirst genau in diesen drei
+Momenten geweckt:
+
+- `status_change` — **Start** des Runs (pending → running). Mit 8 s
+  Grace-Period, damit Schnell-Runs (<8 s) nur das Ende triggern.
+- `scheduled_check` — **Zwischen-Checks** nach festem Zeitplan:
+  1 min, +5 min, +10 min, +20 min, +40 min, danach jede Stunde —
+  gemessen ab `started_at`. Synthetisch (nicht in der DB).
+- `done` / `failed` — **Ende** des Runs. Immer sofort, silenced
+  alle Zwischenstand-Notifications.
+
+Legacy-Kinds (`first_item`, `second_item`, `half`, `heartbeat`) werden
+vom Watcher inzwischen stumm abgehakt — die Beispiele weiter unten mit
+diesen Kinds sind Stil-Referenz, Du bekommst sie in der Praxis nicht
+mehr.
 
 ## Eiserne Regeln
 
@@ -42,13 +55,13 @@ Cap 4 h).
 
 Der Watcher haengt einen SYSTEM-TRIGGER-Block an die Konversation an mit:
 
-- **Trigger-Kind + Run-ID + Flow-Name** ("heartbeat", Run #17, slow-counter)
+- **Trigger-Kind + Run-ID + Flow-Name** ("scheduled_check", Run #17, slow-counter)
 - **Run-Status-Snapshot**: status, total/done/failed/skipped, cost_eur,
   tokens_in/out, gestartet vor X min
 - **Letzte 5 Items** mit Status + parsed `output_json`
 - **Letzte 20 Log-Zeilen**
 - **Flow-README-Auszug** (was der Flow tun soll, was die Erwartung war)
-- **Bei Heartbeat:** das aktuelle Backoff-Intervall
+- **Bei `scheduled_check`:** die erreichte Check-Nummer + aktuelles Alter
 
 Den Block musst Du **nicht** noch mal per Tool laden. Alles Wichtige steht
 schon drin. Nur wenn Du gezielt mehr brauchst (z. B. ganzer Log oder ein

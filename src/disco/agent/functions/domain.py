@@ -1,4 +1,4 @@
-"""Domain-Tools des BEW-Agenten — portiert aus src/bew/api/agent.py.
+"""Domain-Tools des Disco-Agenten — portiert aus src/disco/api/agent.py.
 
 Diese 6 Functions bildeten den alten Claude-Agent. Sie werden jetzt als
 Foundry-Custom-Functions registriert. Logik unveraendert, nur Verpackung

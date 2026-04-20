@@ -119,7 +119,7 @@ HEARTBEAT_MAX_SEC = 14400  # 4 h
 USD_TO_EUR = 1.09  # grober Stand 2026-04
 
 MODEL_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
-    # GPT-5 Familie (default fuer Portal-Agent "bew-doku-agent")
+    # GPT-5 Familie (default fuer Portal-Agent "disco-prod-agent")
     "gpt-5": {"input": 5.0, "output": 15.0},
     "gpt-5-mini": {"input": 0.5, "output": 2.0},
     "gpt-5-nano": {"input": 0.1, "output": 0.4},

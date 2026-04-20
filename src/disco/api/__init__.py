@@ -1,1 +1,1 @@
-"""FastAPI-Backend für das BEW Doku Projekt."""
+"""FastAPI-Backend für Disco."""

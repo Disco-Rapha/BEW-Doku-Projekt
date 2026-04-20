@@ -206,7 +206,7 @@ Pro Datei **2-3 Zeilen** im Chat:
 > **vgb-s-831.pdf** (287 S., ~2.87 EUR DI-Kosten)
 > Dokumentationsstandard VGB S 831 (2015). Kern: DCC-Matrizen in
 > A.3 (welche Dokumente pro Bauteiltyp), Systemzuordnung in A.2.
-> → Direkt relevant fuer Dein IBL-Ziel.
+> → Direkt relevant fuer Dein Projekt-Ziel.
 
 Am Ende:
 > "Kontext ist analysiert. Bei der Arbeit werde ich gezielt in die

@@ -716,6 +716,8 @@ a:hover { text-decoration: underline; }
     <div class="sb-section">
       <div class="sb-toolbar">
         <select id="project-select" onchange="onProjectChange()"></select>
+        <button class="icon-btn" title="Neues Projekt anlegen" onclick="createProject()">+</button>
+        <button class="icon-btn" title="Aktuelles Projekt archivieren" onclick="archiveCurrentProject()">🗄</button>
         <button class="icon-btn" title="Sidebar einklappen" onclick="toggleSidebar()">«</button>
       </div>
     </div>
@@ -950,6 +952,122 @@ function renderProjectSelect() {
 async function onProjectChange() {
   const slug = document.getElementById('project-select').value;
   await switchProject(slug);
+}
+
+// --- Projekt anlegen (Sidebar-Button "+") ---
+// Nutzt ein eigenes Modal statt window.prompt(), weil prompt() in manchen
+// Browser-/Preview-Kontexten blockiert oder gar nicht erscheint.
+function createProject() {
+  // Backdrop + Modal dynamisch aufbauen
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-labelledby="np-title">
+      <h3 id="np-title">Neues Projekt anlegen</h3>
+      <p>Name:</p>
+      <input id="np-name" type="text" placeholder="z.B. Anlage Musterstadt"
+             style="width:100%; padding:6px 10px; background:var(--panel2);
+                    color:var(--text); border:1px solid var(--border);
+                    border-radius:3px; font-size:14px;" />
+      <p class="muted">Slug wird automatisch abgeleitet. Ordner wird unter
+        <code>&lt;workspace&gt;/projects/&lt;slug&gt;/</code> angelegt.</p>
+      <div id="np-err" class="muted" style="color:var(--red); display:none;"></div>
+      <div class="modal-actions">
+        <button id="np-cancel" class="icon-btn">Abbrechen</button>
+        <button id="np-ok" class="btn-primary">Anlegen</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const input = backdrop.querySelector('#np-name');
+  const errEl = backdrop.querySelector('#np-err');
+  const okBtn = backdrop.querySelector('#np-ok');
+  const cancelBtn = backdrop.querySelector('#np-cancel');
+  const close = () => backdrop.remove();
+  input.focus();
+
+  const submit = async () => {
+    const name = input.value.trim();
+    if (!name) { errEl.textContent = 'Bitte einen Namen eingeben.'; errEl.style.display='block'; return; }
+    okBtn.disabled = true; okBtn.textContent = 'Lege an …';
+    try {
+      const resp = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await resp.json();
+      if (data.error) {
+        errEl.textContent = data.error;
+        errEl.style.display = 'block';
+        okBtn.disabled = false; okBtn.textContent = 'Anlegen';
+        return;
+      }
+      close();
+      state.projects = await api('/api/workspace/projects');
+      renderProjectSelect();
+      if (data.slug) await switchProject(data.slug);
+    } catch (e) {
+      errEl.textContent = 'Konnte Projekt nicht anlegen: ' + e.message;
+      errEl.style.display = 'block';
+      okBtn.disabled = false; okBtn.textContent = 'Anlegen';
+    }
+  };
+
+  okBtn.addEventListener('click', submit);
+  cancelBtn.addEventListener('click', close);
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); submit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+  });
+  backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) close(); });
+}
+
+// --- Aktuelles Projekt archivieren (Sidebar-Button "🗄") ---
+async function archiveCurrentProject() {
+  const slug = state.activeProjectSlug;
+  if (!slug) {
+    alert('Kein Projekt ausgewaehlt.');
+    return;
+  }
+  const proj = state.projects.find(p => p.slug === slug);
+  const label = proj ? `${proj.name} (${slug})` : slug;
+  if (!confirm(
+    `Projekt "${label}" archivieren?\n\n`
+    + 'Der gesamte Projektordner wird nach <workspace>/archive/ verschoben und '
+    + 'ist fuer Disco nicht mehr sichtbar.\n\n'
+    + 'Reversibel: manuell zurueckschieben + DB-Status auf "active" setzen.'
+  )) return;
+  try {
+    const resp = await fetch(
+      `/api/workspace/projects/${encodeURIComponent(slug)}/archive`,
+      { method: 'POST' },
+    );
+    const data = await resp.json();
+    if (data.error) {
+      alert('Fehler: ' + data.error);
+      return;
+    }
+    // Aktiven Chat schliessen, LS-Eintrag loeschen
+    if (state.ws) { try { state.ws.close(); } catch(e) {} state.ws = null; }
+    localStorage.removeItem(LS_KEY_PROJECT);
+    state.activeProjectSlug = null;
+
+    // Projekt-Liste neu laden
+    state.projects = await api('/api/workspace/projects');
+    renderProjectSelect();
+
+    // Auf erstes verbleibendes Projekt wechseln (wenn vorhanden)
+    if (state.projects.length > 0) {
+      await switchProject(state.projects[0].slug);
+    } else {
+      document.getElementById('chat-title').textContent = 'Disco';
+      document.getElementById('chat-project-tag').textContent = '(kein Projekt)';
+      document.getElementById('chat-messages').innerHTML = '';
+      setSystemMessage('Kein Projekt vorhanden. Mit <b>+</b> oben ein neues anlegen.');
+    }
+  } catch (e) {
+    alert('Konnte Projekt nicht archivieren: ' + e.message);
+  }
 }
 
 async function switchProject(slug) {

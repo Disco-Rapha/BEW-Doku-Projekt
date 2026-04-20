@@ -288,15 +288,15 @@ Siehe `src/bew/flows/README.md` für das Entwickler-Howto.
 ## Workspace-Trennung
 
 ```
-~/Claude/BEW Doku Projekt/    ← Code-Repo (GitHub-synced)
+<repo-root>/                   ← Code-Repo (GitHub-synced)
 ├── src/, skills/, migrations/, scripts/
 
 ~/Disco/                       ← Daten-Workspace (NIEMALS in Git)
 ├── system.db                  ← zentrale DB (Threads, Projekte)
 ├── logs/
 └── projects/
-    ├── ibl-lagerhalle/        ← ein Projekt (1764 Dateien)
-    ├── vattenfall-reuter/
+    ├── anlage-musterstadt/    ← ein Projekt (z. B. 1764 Dateien)
+    ├── kraftwerk-nord/
     └── ...
 ```
 
@@ -373,7 +373,7 @@ uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8000 --reload
 ### Weitere Skills
 - `dokument-klassifikator` — DCC-/Gewerks-Klassifikation
 - `sql-analyst` — Ad-hoc-SQL-Analysen mit Visualisierung
-- `soll-ist-abgleich` — SOLL/IST-Vergleich gegen IBL
+- `soll-ist-abgleich` — SOLL/IST-Vergleich gegen Informationsbedarfsliste
 
 ## Was NICHT tun
 

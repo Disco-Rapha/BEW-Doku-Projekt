@@ -20,9 +20,14 @@ from ..agent.core import get_agent_service
 from ..chat import repo as chat_repo
 from ..config import settings
 from ..db import connect
-from ..projects import list_projects, create_project, archive_project, count_documents as proj_doc_count
+from ..projects import list_projects, count_documents as proj_doc_count
 from ..sources import list_sources, create_source, get_source, parse_config, count_documents as src_doc_count
-from ..workspace import bootstrap_all_project_migrations
+from ..workspace import (
+    archive_project as workspace_archive_project,
+    bootstrap_all_project_migrations,
+    init_project,
+    slugify,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,21 +152,40 @@ async def api_list_projects():
 
 @app.post("/api/projects")
 async def api_create_project(body: dict):
-    name = body.get("name", "").strip()
-    description = body.get("description", "").strip() or None
-    if not name:
-        return {"error": "Name fehlt"}, 400
+    """Legt ein neues Projekt an — volle Struktur (Verzeichnis + DB + Templates).
+
+    Body:
+        name        (str, pflicht)  — Anzeigename, wird zu Slug verdichtet
+        slug        (str, optional) — expliziter Slug; sonst aus Name abgeleitet
+        description (str, optional)
+    """
+    name = (body.get("name") or "").strip()
+    raw_slug = (body.get("slug") or "").strip()
+    description = (body.get("description") or "").strip() or None
+    if not name and not raw_slug:
+        return {"error": "Name fehlt"}
+    slug = raw_slug or slugify(name)
+    display_name = name or slug.replace("-", " ").title()
     try:
-        p = create_project(name, description)
-        return {**p, "document_count": 0}
+        info = init_project(slug=slug, name=display_name, description=description)
+        return {**info, "document_count": 0}
     except ValueError as exc:
         return {"error": str(exc)}
 
 
-@app.delete("/api/projects/{project_id}")
-async def api_archive_project(project_id: int):
-    archive_project(project_id)
-    return {"ok": True}
+@app.post("/api/workspace/projects/{slug}/archive")
+async def api_archive_project_by_slug(slug: str):
+    """Archiviert ein Projekt: verschiebt Ordner + markiert DB-Status.
+
+    Verzeichnis landet unter `<workspace>/archive/<slug>-<timestamp>/`,
+    DB-Eintrag bekommt status='archived'. Reversibel per manuellem
+    Zurueckschieben.
+    """
+    try:
+        info = workspace_archive_project(slug)
+        return {"ok": True, **info}
+    except (ValueError, FileNotFoundError) as exc:
+        return {"error": str(exc)}
 
 
 # ---------------------------------------------------------------------------

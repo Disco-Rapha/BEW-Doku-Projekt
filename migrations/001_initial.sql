@@ -1,6 +1,6 @@
 -- Migration 001: Initiales Schema
 --
--- Anlegen der Basistabellen für das BEW Doku Projekt.
+-- Anlegen der Basistabellen fuer Disco.
 -- Metadaten-Felder (Titel, Autor, Summary, VGB-Zuordnungen) kommen
 -- in späteren Migrationen, sobald Modul 1 und 2 konzipiert sind.
 

@@ -568,7 +568,7 @@ def _check_writable(target: Path) -> None:
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Pfad relativ zu data/ (z.B. 'raw/ibl-reference/kks_lagerhalle.xlsx').",
+                "description": "Pfad relativ zu data/ (z.B. 'raw/referenz/kks.xlsx').",
             },
             "max_bytes": {
                 "type": "integer",

@@ -6,7 +6,7 @@ Konzept (analog zur Anthropic Agent-Skills-Spec):
         ---
         name: excel-reporter
         description: Multi-Sheet-Excel mit konsistenter Formatierung
-        when_to_use: User will eine Excel als Output, Reports, IBL-Exports
+        when_to_use: User will eine Excel als Output, Reports, Daten-Exports
         ---
   - Der Body ist Markdown mit konkreten Code-Patterns + Best Practices.
 

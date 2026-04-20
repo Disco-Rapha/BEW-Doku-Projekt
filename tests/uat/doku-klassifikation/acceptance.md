@@ -131,7 +131,7 @@ vorgesehenen Pruefweg.
 
 **Weich:**
 
-- Farbcodierung nach Konfidenz oder Gewerk (wie im IBL-Vorbild).
+- Farbcodierung nach Konfidenz oder Gewerk.
 - Hyperlinks von der Uebersicht in die Detail-Sheets oder zu den
   Ursprungs-PDFs.
 

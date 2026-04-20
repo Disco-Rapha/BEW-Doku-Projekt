@@ -1,7 +1,7 @@
 """Konvertiert einen SharePoint REST-API Atom-XML-Export in JSON.
 
 Der SP REST-Endpunkt `_api/Web/Lists(guid'...')/Items` liefert per Default
-Atom-XML (application/atom+xml). Der Importer `bew sp import-json` erwartet
+Atom-XML (application/atom+xml). Der Importer `disco sp import-json` erwartet
 aber JSON. Dieses Skript erzeugt ein JSON-Array aus dem XML, das direkt in
 den Importer passt.
 
@@ -11,7 +11,7 @@ Aufruf:
 Beispiel:
     uv run python scripts/sp_xml_to_json.py \\
         "Sharepoint Download/items.txt" \\
-        data/sp_vattenfall_reuter.json
+        data/sp_export.json
 
 Design:
     - Streaming-Parsing mit iterparse → konstanter Speicher, auch bei 30+ MB

@@ -10,8 +10,8 @@
 -- alte Eintraege ohne Slug (NULL) nicht kollidieren.
 --
 -- Backfill: bestehende Projekte bekommen einen Slug aus REPLACE/LOWER
--- des Namens (einfache, ASCII-only Naeherung — fuer "Vattenfall Reuter"
--- und "Testprojekt" passt das exakt zur _project_slug-Logik in Python).
+-- des Namens (einfache, ASCII-only Naeherung — fuer gaengige Namen wie
+-- "Anlage Musterstadt" passt das exakt zur _project_slug-Logik in Python).
 
 BEGIN;
 

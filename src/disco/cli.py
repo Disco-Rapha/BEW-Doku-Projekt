@@ -97,7 +97,7 @@ def project_init(
 ) -> None:
     """Legt ein neues Projekt im Workspace an (idempotent).
 
-    SLUG: kurze ID, lowercase, '-' und '_' erlaubt. z.B. 'vattenfall-reuter'
+    SLUG: kurze ID, lowercase, '-' und '_' erlaubt. z.B. 'anlage-musterstadt'
     """
     from pathlib import Path as _Path
     from .workspace import init_project, validate_slug, seed_sample_sources
@@ -183,11 +183,32 @@ def project_show(slug: str) -> None:
 
 
 @project_group.command("archive")
-@click.option("--id", "project_id", required=True, type=int, help="System-Projekt-ID (siehe 'disco project show').")
-def project_archive(project_id: int) -> None:
-    """Archiviert ein Projekt in der system.db (reversibel — Verzeichnis bleibt)."""
-    projects_module.archive_project(project_id)
-    click.echo(f"Projekt {project_id} archiviert (Verzeichnis im Workspace bleibt erhalten).")
+@click.argument("slug")
+@click.option("--yes", is_flag=True, default=False, help="Ohne Rueckfrage archivieren.")
+def project_archive(slug: str, yes: bool) -> None:
+    """Archiviert ein Projekt: Ordner nach <workspace>/archive/ verschieben + DB-Status setzen.
+
+    SLUG: Slug des Projekts (siehe 'disco project list').
+
+    Reversibel: Ordner manuell zurueckschieben + status in DB auf 'active' setzen.
+    """
+    from .workspace import archive_project as ws_archive
+
+    if not yes:
+        click.confirm(
+            f"Projekt '{slug}' archivieren? Der Ordner wird nach <workspace>/archive/ verschoben.",
+            abort=True,
+        )
+    try:
+        info = ws_archive(slug)
+    except (ValueError, FileNotFoundError) as exc:
+        click.echo(f"Fehler: {exc}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"OK Projekt '{info['slug']}' archiviert.")
+    click.echo(f"   Neuer Pfad: {info['archive_path']}")
+    if info["project_id"] is not None:
+        click.echo(f"   DB-Status:  archived (projects.id={info['project_id']})")
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +463,7 @@ def agent_group() -> None:
 
 @agent_group.command("setup")
 def agent_setup() -> None:
-    """Registriert den BEW-Agent im Foundry-Portal (einmalig).
+    """Registriert den Disco-Agent im Foundry-Portal (einmalig).
 
     Voraussetzungen:
       - `az login` im Terminal

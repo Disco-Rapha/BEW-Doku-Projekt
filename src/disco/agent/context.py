@@ -72,7 +72,7 @@ def use_project(slug: str | None) -> Iterator[None]:
     """Context-Manager fuer einen Tool-Block in einem Projekt-Sandbox.
 
     Beispiel:
-        with use_project("vattenfall-reuter"):
+        with use_project("anlage-musterstadt"):
             # alle Tool-Aufrufe sind jetzt projekt-scoped
             ...
 

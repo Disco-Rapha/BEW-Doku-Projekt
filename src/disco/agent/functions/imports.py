@@ -647,20 +647,20 @@ def _build_one_sheet(wb, spec: dict, fetched_rows: list[dict], styles: dict) -> 
             "target_path": {
                 "type": "string",
                 "description": (
-                    "Zielpfad relativ zu data/ (z.B. 'exports/ibl_2026-04-16_v1.xlsx'). "
+                    "Zielpfad relativ zu data/ (z.B. 'exports/report_2026-04-16_v1.xlsx'). "
                     "Muss mit .xlsx enden. Kein Ueberschreiben — wenn die Datei "
                     "schon existiert, Fehler (nutze Versions-Suffix)."
                 ),
             },
             "title": {
                 "type": "string",
-                "description": "Titel oben im Uebersichts-Sheet (z.B. 'IBL Lagerhalle Reuter').",
+                "description": "Titel oben im Uebersichts-Sheet (z.B. 'Dokumenten-Index — Prototyp').",
             },
             "overview_rows": {
                 "type": "array",
                 "description": (
                     "Optional: Liste von [Kennzahl, Wert]-Paaren fuer das Uebersichts-Sheet "
-                    "(z.B. [['Komponenten', 322], ['IBL', 72]]). Wenn leer, wird kein Uebersichts-Sheet erzeugt."
+                    "(z.B. [['Komponenten', 322], ['Eintraege', 72]]). Wenn leer, wird kein Uebersichts-Sheet erzeugt."
                 ),
                 "items": {
                     "type": "array",

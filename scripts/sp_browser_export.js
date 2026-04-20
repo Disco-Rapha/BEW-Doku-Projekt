@@ -33,9 +33,10 @@
 
 (async () => {
   // ====== KONFIGURATION ======
-  const siteUrl   = "https://vattenfall.sharepoint.com/sites/ReuterSiteDevelopment";
-  const startPath = "/sites/ReuterSiteDevelopment/External Documents/Austauschordner_LagerhalleReuter/finale-Doku/Elektro";
-  const outFile   = "elektro_export.json";
+  // Vor dem Start anpassen — projekt-/kundenspezifische Werte.
+  const siteUrl   = "https://<tenant>.sharepoint.com/sites/<site-name>";
+  const startPath = "/sites/<site-name>/<library>/<subfolder>";
+  const outFile   = "export.json";
   // ===========================
 
   const esc   = s => s.replaceAll("'", "''");            // OData-Quote-Escape

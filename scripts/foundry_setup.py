@@ -95,12 +95,18 @@ def main() -> int:
     print(f"Tools: {len(tools)} ({len(tools) - 1} Custom Functions + Code Interpreter)")
 
     # --- Request-Body ---
+    # reasoning + text setzen wir direkt in der Agent-Definition, nicht per
+    # Request. Foundry blockt "reasoning"/"text" bei Portal-Agent-Calls mit
+    # HTTP 400 "Not allowed when agent is specified" — die Werte muessen
+    # beim Agent selbst liegen. Siehe GPT-5.1 Prompting Guide + config.py.
     body = {
         "definition": {
             "kind": "prompt",
             "model": settings.foundry_model_deployment,
             "instructions": instructions,
             "tools": tools,
+            "reasoning": {"effort": settings.foundry_reasoning_effort},
+            "text": {"verbosity": settings.foundry_verbosity},
         },
         "description": (
             "Disco — Haupt-Agent fuer technische Dokumentation, "
@@ -108,6 +114,11 @@ def main() -> int:
         ),
         "metadata": {"project": "disco", "phase": "2a"},
     }
+
+    print(
+        f"Reasoning-Effort: {settings.foundry_reasoning_effort}  "
+        f"Verbosity: {settings.foundry_verbosity}"
+    )
 
     base = settings.foundry_endpoint.rstrip("/")
     url = f"{base}/agents/{agent_name}/versions"

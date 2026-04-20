@@ -51,7 +51,7 @@ async def project_lock(project_slug: str) -> asyncio.Lock:
 
     Verwendung::
 
-        lock = await project_lock("ibl-lagerhalle")
+        lock = await project_lock("anlage-musterstadt")
         async with lock:
             ...  # mein Turn laeuft, andere Turns fuer dasselbe Projekt warten
     """

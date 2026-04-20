@@ -85,6 +85,23 @@ class Settings(BaseSettings):
     foundry_agent_id: str | None = None
 
     # ------------------------------------------------------------------
+    # GPT-5.1 Inference-Settings (per Request uebergeben, ueberschreibt
+    # Portal-Agent-Defaults). Haben spuerbaren Einfluss auf Tool-Use:
+    #
+    # - reasoning_effort: 'minimal' | 'low' | 'medium' | 'high'
+    #   Wieviele interne "Denk-Tokens" das Modell vor der Antwort erzeugt.
+    #   Bei 'minimal' neigt GPT-5.1 zu tool-faulem Verhalten (einfach
+    #   antworten statt erst list_skills / plan_write / memory_read zu
+    #   rufen). 'medium' ist die sinnvolle Baseline fuer Agent-Loops.
+    #   'high' teurer, aber gruendlicher bei komplexen Aufgaben.
+    #
+    # - verbosity: 'low' | 'medium' | 'high'
+    #   Tendenz der Ausgabelaenge. 'low' = kuerzer, fokussierter.
+    # ------------------------------------------------------------------
+    foundry_reasoning_effort: str = "medium"
+    foundry_verbosity: str = "low"
+
+    # ------------------------------------------------------------------
     # Offline-Modus fuer ML-Modelle (default: AN)
     # ------------------------------------------------------------------
     # Diese Flags werden beim Modul-Import in os.environ gespiegelt, damit

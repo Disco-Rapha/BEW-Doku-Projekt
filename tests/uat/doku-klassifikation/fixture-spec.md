@@ -103,6 +103,6 @@ Die Quell-PDFs und der context bleiben unberuehrt.
 ## Aktuelle Referenz-Fixture (fuer Entwickler)
 
 Das Projekt `doku-klassifikation-pilot` im Workspace dient aktuell als
-konkrete Referenz-Fixture. Seine Daten (Vattenfall-Lagerhalle, DCC-Katalog
+konkrete Referenz-Fixture. Seine Daten (Beispiel-Anlage, DCC-Katalog
 mit 395 Codes, 20 PDFs) sind **nicht** Teil des Gold-Standards — sie sind
 Beispiel-Input, der sich aendern darf.

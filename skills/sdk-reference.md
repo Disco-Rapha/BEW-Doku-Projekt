@@ -160,8 +160,8 @@ SDK man nutzt:
 
 | SDK | Hostname | Beispiel |
 |---|---|---|
-| `openai.AzureOpenAI` (Chat Completions) | `<name>.openai.azure.com` | `https://bew-foundry.openai.azure.com` |
-| `azure-ai-projects` / Foundry Portal-Agent | `<name>.services.ai.azure.com/api/projects/<proj>` | `https://bew-foundry.services.ai.azure.com/api/projects/BEW-Project` |
+| `openai.AzureOpenAI` (Chat Completions) | `<name>.openai.azure.com` | `https://myorg-foundry.openai.azure.com` |
+| `azure-ai-projects` / Foundry Portal-Agent | `<name>.services.ai.azure.com/api/projects/<proj>` | `https://myorg-foundry.services.ai.azure.com/api/projects/MyOrg-Project` |
 
 Fuer Flow-Worker mit `openai.AzureOpenAI` **immer** die `.openai.azure.com`-Variante
 nehmen (`settings.azure_openai_endpoint` in `.env`). Mit der `services.ai.azure.com/api/projects/...`-URL

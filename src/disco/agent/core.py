@@ -163,7 +163,7 @@ class AgentService:
 
     Nutzung:
         svc = AgentService()
-        for event in svc.run_turn(project_slug="ibl-lagerhalle", user_text="Hi"):
+        for event in svc.run_turn(project_slug="anlage-musterstadt", user_text="Hi"):
             ... # event: AgentEvent
     """
 
@@ -301,7 +301,7 @@ class AgentService:
             return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
         except OSError:
             logger.warning("system_prompt.md nicht lesbar — nutze Fallback")
-            return "Du bist der BEW-Dokumenten-Assistent. Antworte auf Deutsch."
+            return "Du bist Disco — Reasoning-Assistent fuer technische Dokumentation. Antworte auf Deutsch."
 
     # -------------------- Agent-Referenz (Portal-Agent-Weg) --------------------
 
@@ -310,8 +310,8 @@ class AgentService:
         agent_reference fuer den `extra_body`-Param zurueck.
 
         Formate, die wir akzeptieren:
-          - "bew-doku-agent"      -> name=bew-doku-agent, latest Version
-          - "bew-doku-agent:2"    -> name=bew-doku-agent, version=2
+          - "disco-prod-agent"      -> name=disco-prod-agent, latest Version
+          - "disco-prod-agent:2"    -> name=disco-prod-agent, version=2
         """
         raw = (settings.foundry_agent_id or "").strip()
         if not raw:
@@ -346,7 +346,8 @@ class AgentService:
         `run_system_turn()` — typische Caller setzen es NICHT. Wenn
         es gesetzt ist, erwartet run_turn ein Dict mit Keys:
 
-            {"kind": "heartbeat"|"first_item"|..., "summary": "kurz fuer UI",
+            {"kind": "status_change"|"scheduled_check"|"done"|"failed",
+             "summary": "kurz fuer UI",
              "is_system": True}
 
         In diesem Fall wird die Message mit role='system' persistiert
@@ -523,12 +524,21 @@ class AgentService:
                 # Portal-Agent-Weg: Modell/Prompt/Tools kommen aus dem Portal.
                 # Die agent_reference wird ueber extra_body geschickt, weil
                 # es eine Azure-Erweiterung der OpenAI-Responses-API ist.
+                # WICHTIG: `reasoning` / `text` duerfen hier NICHT mitkommen —
+                # Foundry antwortet sonst mit HTTP 400 "Not allowed when agent
+                # is specified". Diese Settings gehoeren in die Portal-Agent-
+                # Definition selbst (siehe scripts/foundry_setup.py).
                 call_kwargs["extra_body"] = {"agent_reference": agent_ref}
             else:
-                # Direkt-Modell-Weg (ohne Portal-Agent)
+                # Direkt-Modell-Weg (ohne Portal-Agent) — hier duerfen wir
+                # reasoning/verbosity pro Request steuern.
                 call_kwargs["model"] = model
                 call_kwargs["instructions"] = instructions
                 call_kwargs["tools"] = tools
+                # GPT-5.1 Inference-Settings (siehe config.py). Offizielle
+                # Responses-API-Form.
+                call_kwargs["reasoning"] = {"effort": settings.foundry_reasoning_effort}
+                call_kwargs["text"] = {"verbosity": settings.foundry_verbosity}
 
             # previous_response_id nur uebergeben, wenn gesetzt — sonst meldet
             # die API "type: Value is 'null' but should be 'string'"
@@ -816,11 +826,13 @@ class AgentService:
         Parameter
         ---------
         trigger_kind : str
-            first_item | second_item | half | heartbeat | status_change |
-            done | failed
+            status_change | scheduled_check | done | failed.
+            (Legacy-Kinds first_item/second_item/half/heartbeat werden
+            vom Watcher inzwischen stumm silenced — kommen hier in der
+            Regel nicht mehr an.)
         trigger_summary : str
             Kurz (eine Zeile), wird im Chat als role='system'-Message
-            persistiert. Beispiel: "Heartbeat Run #5 — 3/100 fertig nach 1 min".
+            persistiert. Beispiel: "Zwischenstand Run #5 (3/100) — laeuft 6 min".
         trigger_context : str
             Voller Trigger-Text mit Run-Stand, letzten Items, Logs,
             Flow-README-Excerpt, urspruenglicher Erwartung. Wird als

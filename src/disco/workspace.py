@@ -50,7 +50,7 @@ _SLUGIFY_DASHES = re.compile(r"-{2,}")
 def slugify(name: str) -> str:
     """Wandelt einen Namen in einen sauberen Slug.
 
-    'Vattenfall Reuter' -> 'vattenfall-reuter'
+    'Anlage Musterstadt'   -> 'anlage-musterstadt'
     'KKW: Block 09 (Süd)' -> 'kkw-block-09-sued'
     """
     s = (name or "").strip().lower()
@@ -218,7 +218,7 @@ Tabellen in die DB zu importieren (`context_*`-Praefix).
 **Was gehoert in `context/`?**
 - Dokumentationsstandards (VGB S 831, DIN-Normen)
 - Lookup-Tabellen (DCC-Katalog, KKS-Hierarchie, Hersteller-Aliasse)
-- Projekt-/Firmenrichtlinien (BEW-Standard-Dokumentensatz)
+- Projekt-/Firmenrichtlinien (Firmen-Standard-Dokumentensatz)
 - Referenzwerte (Materialklassen-Tabellen, Grenzwerte)
 
 **Was gehoert NICHT hierher?**
@@ -586,23 +586,27 @@ def list_workspace_projects() -> list[dict[str, Any]]:
             "created_at": db_entry["created_at"] if db_entry else None,
         })
 
-    # Eintraege in DB ohne Verzeichnis
+    # Eintraege in DB ohne Verzeichnis — archivierte ueberspringen
+    # (Verzeichnis liegt unter <workspace>/archive/, nicht im projects/-Dir)
     for slug, db_entry in by_slug.items():
-        if slug not in seen_slugs:
-            out.append({
-                "slug": slug,
-                "name": db_entry["name"],
-                "path": None,
-                "db_id": db_entry["id"],
-                "status": "orphan-db-only",
-                "description": db_entry["description"],
-                "has_data_db": False,
-                "files_in_sources": 0,
-                "files_in_context": 0,
-                "files_in_exports": 0,
-                "files_in_work": 0,
-                "created_at": db_entry["created_at"],
-            })
+        if slug in seen_slugs:
+            continue
+        if db_entry.get("status") == "archived":
+            continue
+        out.append({
+            "slug": slug,
+            "name": db_entry["name"],
+            "path": None,
+            "db_id": db_entry["id"],
+            "status": "orphan-db-only",
+            "description": db_entry["description"],
+            "has_data_db": False,
+            "files_in_sources": 0,
+            "files_in_context": 0,
+            "files_in_exports": 0,
+            "files_in_work": 0,
+            "created_at": db_entry["created_at"],
+        })
 
     out.sort(key=lambda x: (x["status"] != "active", x["name"].lower()))
     return out
@@ -678,4 +682,78 @@ def show_project(slug: str) -> dict[str, Any]:
         "db_size": db_size,
         "db_tables": db_tables,
         **meta,
+    }
+
+
+# ---------------------------------------------------------------------------
+# archive_project — Projekt verschieben + in DB markieren
+# ---------------------------------------------------------------------------
+
+
+def archive_project(slug: str) -> dict[str, Any]:
+    """Archiviert ein Projekt: verschiebt den Ordner + markiert DB-Status.
+
+    Wirkung:
+      - Verzeichnis wird verschoben nach `<workspace>/archive/<slug>-<timestamp>/`
+      - `projects`-Eintrag in system.db bekommt status='archived'
+      - Projekt taucht in `list_workspace_projects()` nicht mehr auf
+        (das dortige `iterdir()` liest nur `<workspace>/projects/`, und der
+        projects-DB-Eintrag wird als "archived" gefiltert).
+
+    Reversibel: Manuelles Zurueckverschieben des Ordners + Status-Reset
+    stellt das Projekt wieder her.
+
+    Args:
+        slug: Slug des zu archivierenden Projekts.
+
+    Returns:
+        Dict mit slug, archive_path (neuer Pfad), project_id.
+
+    Raises:
+        ValueError: Ungueltiger Slug.
+        FileNotFoundError: Projekt-Verzeichnis existiert nicht.
+    """
+    slug = validate_slug(slug)
+    project_path = settings.projects_dir / slug
+    if not project_path.exists() or not project_path.is_dir():
+        raise FileNotFoundError(
+            f"Projekt-Verzeichnis nicht gefunden: {project_path}"
+        )
+
+    archive_root = settings.projects_dir.parent / "archive"
+    archive_root.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    archive_path = archive_root / f"{slug}-{timestamp}"
+    # Falls doch exakter Namens-Clash (unrealistisch, Sekunden-Genauigkeit):
+    suffix = 1
+    while archive_path.exists():
+        archive_path = archive_root / f"{slug}-{timestamp}-{suffix}"
+        suffix += 1
+
+    # 1) Verzeichnis verschieben
+    project_path.rename(archive_path)
+
+    # 2) System-DB-Eintrag markieren
+    sysconn = connect()
+    project_id: int | None = None
+    try:
+        row = sysconn.execute(
+            "SELECT id FROM projects WHERE slug = ?", (slug,)
+        ).fetchone()
+        if row is not None:
+            project_id = row[0]
+            sysconn.execute(
+                "UPDATE projects SET status = 'archived', "
+                "updated_at = datetime('now') WHERE id = ?",
+                (project_id,),
+            )
+            sysconn.commit()
+    finally:
+        sysconn.close()
+
+    return {
+        "slug": slug,
+        "archive_path": str(archive_path),
+        "project_id": project_id,
     }
