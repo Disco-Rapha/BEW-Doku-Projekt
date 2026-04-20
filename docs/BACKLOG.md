@@ -308,6 +308,48 @@ existiert im SDK).
 → Umsetzung: SDK-Feature prüfen, sonst selbst bauen (Zusammenfassungs-
   Prompt → neuer Response-Anker → alte Chain verwerfen).
 
+### Memory-Funktion härten — Disco verliert alles bei Chat-Reset (Priorität: hoch — aus UAT 2026-04-20)
+
+Beobachtung beim Chat-Reset in Prod (nach Modellwechsel gpt-5 →
+gpt-5.1_prod): sobald die Conversation-History leer ist, weiß Disco
+praktisch nichts mehr über das Projekt. Disco-alt (bew-doku-agent:29)
+hat über Monate Gespräche nichts in `.disco/memory/` hinterlassen —
+die einzigen dauerhaften Fakten sind in `README.md` / `NOTES.md`,
+und das auch nur wenn der User sie dort abgelegt hat.
+
+Folge: Chat-Reset = Amnesie. Das widerspricht der CLAUDE.md-Zusage,
+dass `.disco/` das „Hirn" des Projekts ist.
+
+Ursachen (zu prüfen):
+- Skill `project-onboarding` ruft `memory_read` nur passiv ab, schreibt
+  aber nichts zurück, wenn Disco etwas Wichtiges dazulernt.
+- Es gibt kein implizites „merk Dir das" — Disco muss explizit
+  `memory_write`/`memory_append` aufrufen, und der System-Prompt
+  fordert das nicht genug ein.
+- Kein automatischer Snapshot am Session-Ende, der den Gesprächs-
+  Verlauf destilliert (ähnlich Conversation-Compaction oben, aber
+  mit Ziel „persistentes Projekt-Gedächtnis" statt „Kontext kürzen").
+
+Umsetzung (zu entwerfen):
+1. System-Prompt-Regel „Wenn Du eine Entscheidung triffst, eine neue
+   Tabelle baust, einen Hersteller/Typen lernst, eine Konvention
+   festlegst — **schreibe es in `.disco/memory/MEMORY.md`** mit
+   Datum und Kontext."
+2. Am Ende jedes Turns (oder alle N Turns) ein implizites
+   `memory_compact`: Agent fasst zusammen, was gelernt wurde,
+   und hängt einen Eintrag an MEMORY.md an.
+3. NOTES.md wird vom Skill `project-onboarding` automatisch
+   fortgeschrieben (nicht nur gelesen) — mit Session-Header,
+   Datum, Stichwort-Liste der Aktivitäten.
+4. Bei Chat-Reset: User sollte gefragt werden „Soll Disco vorher
+   die aktuelle Session in MEMORY.md destillieren?" (analog zum
+   Compaction-Feature).
+
+Abgrenzung: Conversation-Compaction (oben) ist für den
+Kontext-Fenster-Druck. Memory (hier) ist für die **Projekt-
+Persistenz** über Sessions hinweg. Technisch ähnlich, Zweck
+unterschiedlich — möglicherweise gemeinsame Pipeline.
+
 ### Iterativer, gesprächiger Tool-Loop wie Claude Code (Priorität: hoch)
 
 **Beobachtung des Nutzers:** Disco macht viele Tool-Calls hintereinander
