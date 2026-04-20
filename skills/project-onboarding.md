@@ -1,19 +1,19 @@
 ---
 name: project-onboarding
-description: Session-Start-Routine — README + NOTES + memory + context/_manifest lesen, Stand zusammenfassen, naechsten Schritt vorschlagen.
+description: Session-Start-Routine — README + NOTES + DISCO.md + context/_manifest lesen, Stand zusammenfassen, naechsten Schritt vorschlagen.
 when_to_use: "wo waren wir?", "was haben wir letztes Mal gemacht?", "erinnerst Du dich?" oder frische Session ohne bisherigen Chat-Verlauf.
 ---
 
 # Skill: project-onboarding
 
-Wenn Du in eine neue Chat-Session in einem Projekt kommst, weißt Du
-zunächst nichts. Diese Routine bringt Dich auf Stand. Sie ist **kurz**
-und **strukturiert**, damit der Benutzer nicht warten muss.
+Wenn Du in eine neue Chat-Session in einem Projekt kommst, weisst Du
+zunaechst nichts. Diese Routine bringt Dich auf Stand — **kurz** und
+**strukturiert**, damit der Nutzer nicht warten muss.
 
 ## Verbindlicher Workflow
 
-Sobald Du erkennst, dass eine Session frisch ist (kein vorheriger Chat-
-Verlauf in diesem Thread, oder der Benutzer fragt explizit nach Stand):
+Sobald Du erkennst, dass die Session frisch ist (kein vorheriger Chat-
+Verlauf in diesem Thread, oder der Nutzer fragt explizit nach Stand):
 
 ### 1. Projekt-Wurzel auflisten
 
@@ -21,150 +21,160 @@ Verlauf in diesem Thread, oder der Benutzer fragt explizit nach Stand):
 fs_list({"path": ""})
 ```
 
-Damit weißt Du, welche Standard-Verzeichnisse befüllt sind und welche
-Dateien im Projekt-Root liegen.
+Damit siehst Du, welche Standard-Verzeichnisse befuellt sind und welche
+Dateien im Projekt-Root liegen. Erwartet: README.md, NOTES.md, DISCO.md,
+sources/, context/, work/, exports/, data.db.
 
-### 2. README.md lesen — Projektziel prüfen
+### 2. README.md lesen — Projektziel pruefen
 
 ```text
-fs_read({"path": "README.md"})
+memory_read({"file": "README.md"})
 ```
 
-Das ist der Kontext-Text, den der Benutzer selbst gepflegt hat.
-**WICHTIG: Prüfe ob ein konkretes Projektziel drinsteht.**
+Das ist der Kontext-Text, den der Nutzer selbst gepflegt hat.
+**WICHTIG: Pruefe ob ein konkretes Projektziel drinsteht.**
 
-Wenn README.md nur das leere Template enthält (kein Projektziel,
-nur Platzhalter-Text wie "*(Hier traegst Du den Projekt-Kontext
-ein...)*") → **frag den Benutzer aktiv:**
+Wenn README.md nur das leere Template enthaelt (kein Projektziel, nur
+Platzhalter wie "*(Was soll am Ende dieses Projekts herauskommen?...)*")
+→ **frag den Nutzer aktiv:**
 
 > "Ich sehe, dass das Projektziel noch nicht festgehalten ist.
-> Bevor wir richtig arbeiten koennen, brauche ich Dein Ziel:
+> Bevor wir richtig arbeiten koennen, brauche ich Dein Briefing:
 >
 > 1. **Was ist das Ziel** dieses Projekts?
 >    (z.B. 'Dokumente nach VGB S 831 klassifizieren')
-> 2. **Was sollen die Ergebnisse sein?**
+> 2. **Welche Ergebnisse** soll ich am Ende liefern?
 >    (z.B. 'Excel mit Klassifikation + neue Ordnerstruktur')
-> 3. **Welche Quellen wirst Du laden?**
+> 3. **Welche Quellen** wirst Du laden?
 >    (z.B. '1600 PDFs aus SharePoint + KKS-Liste als Excel')
+> 4. **Kontext/Frist** — gibt es einen Auftraggeber, eine Deadline?
 >
-> Ich trage das dann ins README.md ein."
+> Ich trage das strukturiert ins README ein."
 
-Nachdem der Benutzer geantwortet hat: schreibe ein **strukturiertes
-README** mit den Angaben (Projektziel, erwartete Ergebnisse, Quellen,
-ggf. Frist). Dann erst mit dem restlichen Onboarding fortfahren.
+Nach der Antwort: **ein** `memory_write({"file": "README.md", ...})` mit
+den vier Abschnitten (Projektziel / Kontext / Quellen / Erwartete Ergebnisse).
+Dann erst mit dem Onboarding fortfahren.
 
-### 3. NOTES.md lesen (chronologisches Logbuch)
-
-```text
-fs_read({"path": "NOTES.md", "max_bytes": 30000})
-```
-
-Das ist Dein eigenes Logbuch aus früheren Sessions: was wurde getan,
-was kam raus, was war noch offen. Lies die letzten 1–2 Einträge.
-
-### 4. .disco/memory.md lesen (Faustregeln)
+### 3. NOTES.md lesen (Ende — letzter Stand)
 
 ```text
-fs_read({"path": ".disco/memory.md"})
+memory_read({"file": "NOTES.md"})
 ```
 
-Dauerhafte Erkenntnisse: Konventionen, Vorlieben des Benutzers,
-Schlüssel-Erkenntnisse zu den Daten. Immer komplett lesen.
+Das ist Dein chronologisches Logbuch aus frueheren Sessions. Lies die
+letzten 1–2 Eintraege (der Anfang ist meist Boilerplate). Ziel: **Was
+wurde zuletzt getan, was war offen?**
 
-### 4b. context/_manifest.md lesen (Arbeitsgrundlagen)
+### 4. DISCO.md lesen (Dein destilliertes Arbeitsgedaechtnis)
+
+```text
+memory_read({"file": "DISCO.md"})
+```
+
+Das ist Deine "zweite Wahrheit" nach dem README. Dort stehen
+Konventionen, Projekt-Tabellen, Lookup-Pfade, Glossar, Entscheidungen —
+alles was Du brauchst, um sofort wieder arbeitsfaehig zu sein.
+**Komplett lesen** — DISCO.md ist absichtlich kurz und nachschlagbar.
+
+### 5. context/_manifest.md lesen (Arbeitsgrundlagen)
 
 ```text
 fs_read({"path": "context/_manifest.md"})
 ```
 
-Das Manifest zählt auf, welche Normen, Kataloge, Richtlinien im
-Projekt als Nachschlagewerke liegen. Lies es kurz durch — Du musst
-nicht jeden Volltext kennen, aber **welche Datei bei welcher Frage
-hilft**. Wenn das Manifest nicht existiert oder leer wirkt:
-`fs_list({"path": "context"})` — wenn da unpflegte Dateien liegen,
-sag dem Benutzer Bescheid, dass wir den `context-onboarding`-Skill
-durchlaufen sollten.
+Das Manifest zaehlt auf, welche Normen/Kataloge/Richtlinien im Projekt
+liegen — Du musst nicht jeden Volltext kennen, aber **welche Datei bei
+welcher Frage hilft**. Wenn das Manifest nicht existiert oder leer ist
+und `fs_list({"path": "context"})` zeigt unpflegte Dateien: sag dem
+Nutzer, dass wir `context-onboarding` durchlaufen sollten.
 
-### 5. Aktive Pläne prüfen (fast immer sinnvoll)
+### 6. Aktive Plaene pruefen
 
 ```text
 plan_list({})
 ```
 
-Listet alle Pläne mit Titel, Status und Datum. Wenn ein Plan mit Status
-`in-progress` oder `blocked` dabei ist: **zuerst reinschauen**, bevor
-Du etwas Neues anfängst:
+Wenn ein Plan mit Status `in-progress` oder `blocked` dabei ist:
+**zuerst reinschauen** bevor Du etwas Neues anfaengst:
 
 ```text
 plan_read({"filename": "<aus plan_list>"})
 ```
 
-Im Onboarding-Antwortblock (siehe unten) nennst Du dann explizit:
-„**Offener Plan:** `<Titel>` — Status `in-progress`, Schritt 3 von 5."
-Der Benutzer kann dann entscheiden, ob er dort weitermacht oder etwas
-anderes startet.
+### 7. Projekt-DB-Status (optional, wenn relevant)
 
-### 6. Projekt-DB-Status (optional, wenn relevant)
-
-Wenn das Projekt schon Datenarbeit gesehen hat, ein kurzer SQL-Check:
+Bei Datenarbeit kurzer Check:
 
 ```text
-sqlite_query({"sql": "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'work_%' OR name LIKE 'agent_%' ORDER BY name"})
+sqlite_query({"sql": "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'work_%' OR name LIKE 'agent_%' OR name LIKE 'context_%') ORDER BY name"})
 ```
 
-Damit siehst Du auf einen Blick, welche Arbeits-Tabellen bereits
-existieren.
+Damit siehst Du, welche Arbeits-/Kontext-Tabellen existieren.
 
-## Antwort an den Benutzer
+## Antwort an den Nutzer
 
 Halte die Antwort **kurz** (max. 8 Zeilen):
 
-1. **Eine Zeile** zum Projekt-Kontext (aus README)
-2. **Eine Zeile** zum letzten Stand (aus NOTES letzter Eintrag)
-3. **Eine Zeile** zu Konventionen oder Faustregeln, die heute relevant sind
-4. **Eine Zeile** zu Arbeitsgrundlagen (Kontext-Manifest): wenn Du
-   Normen/Lookup-Tabellen gesehen hast, nenne sie kurz; wenn leer, erwaehn es nicht.
-5. **Eine Zeile** zu offenen Plänen (wenn vorhanden)
-6. **Frage** an den Benutzer: "Womit starten wir heute?"
+1. **Eine Zeile** Projekt-Kontext (aus README)
+2. **Eine Zeile** letzter Stand (aus NOTES, letzter Eintrag)
+3. **Eine Zeile** zu aktuellem Fokus/Konventionen aus DISCO.md
+4. **Eine Zeile** zu Arbeitsgrundlagen (Kontext-Manifest), wenn relevant
+5. **Eine Zeile** zu offenen Plaenen (wenn vorhanden)
+6. **Frage** an den Nutzer: "Womit starten wir heute?"
 
 Beispiel:
 
 > Wir sind im Projekt **Vattenfall Reuter** (Lagerhalle Reuter,
 > SOLL/IST nach VGB S 831, Frist 18.05.2026).
-> Letzter Stand: IBL-Prototyp mit 72 Einträgen erstellt, Excel-Export
-> nach `exports/` lief.
-> Faustregel: Du nutzt für Hersteller-Zuordnung den Standard-
-> Dokumentensatz, nicht VGB-T-Marker.
-> Offen: Bauwerk-Komponenten BW-001 bis BW-018 sind noch nicht in
-> die IBL übernommen.
+> Letzter Stand: IBL-Prototyp mit 72 Eintraegen, Excel-Export lief.
+> Aktueller Fokus laut DISCO: Bauwerk-Komponenten BW-001…BW-018
+> noch nicht in der IBL.
+> Arbeitsgrundlage VGB-S-831: DI-Extrakt + Kapitelverzeichnis liegen unter
+> `.disco/context-summaries/`.
+> Keine offenen Plaene.
 >
 > Womit starten wir heute?
 
 ## Wann das Onboarding NICHT laufen muss
 
-- Wenn der Benutzer sofort eine konkrete Aufgabe stellt, ohne nach Stand
-  zu fragen — dann arbeite los, das Onboarding schiebst Du in den Hintergrund.
-- Wenn Du im selben Thread schon Tool-Calls gemacht hast — dann hast Du
-  den Kontext.
+- Nutzer stellt sofort eine konkrete Aufgabe, ohne nach Stand zu fragen
+  → arbeite los, Onboarding minimal (`fs_list` + `memory_read("DISCO.md")`).
+- Im selben Thread schon Tool-Calls gemacht → Kontext hast Du.
 
 ## Wann das Onboarding ZWINGEND laufen muss
 
-- Wenn der Benutzer fragt: "Wo waren wir?" / "Was haben wir hier letztes Mal gemacht?"
-- Wenn Dein letzter Eintrag in NOTES.md älter als 7 Tage ist — dann
-  könntest Du den Kontext "vergessen" haben.
+- Nutzer fragt "Wo waren wir?" / "Was haben wir letztes Mal gemacht?"
+- Dein letzter Eintrag in NOTES.md ist aelter als 7 Tage — dann
+  koennte Deine grobe Erinnerung veraltet sein.
 
-## NOTES.md fortführen am Session-Ende
+## NOTES.md fortfuehren am Session-Ende
 
-Wenn der Benutzer sagt "danke, das war's" oder die Session endet, **bevor**
-Du Dich verabschiedest:
+Wenn der Nutzer sagt "danke, das war's" oder die Session endet,
+**bevor** Du Dich verabschiedest:
 
 ```text
-project_notes_append({
-  "project_id": <id>,
-  "section_title": "<datum> – <kurzes Thema>",
+memory_append({
+  "file": "NOTES.md",
+  "heading": "<kurzes Thema>",
   "content": "<3–6 Zeilen: was wurde gemacht, was ist das Ergebnis, was ist offen>"
 })
 ```
 
-Wenn der Benutzer das nicht explizit will, frag einmal kurz:
+Wenn der Nutzer das nicht explizit will, kurz fragen:
 "Soll ich den Stand noch in NOTES festhalten?"
+
+## DISCO.md pflegen — wann und wie
+
+**Wann:**
+- Neue Konvention entstanden ("wir nennen die Gewerke immer kleingeschrieben")
+- Neue Tabelle angelegt, die ueberdauern soll (nicht work_*)
+- Lookup-Pfad eingerichtet (DCC-Katalog-Kapitel, Hersteller-Alias-Tabelle)
+- Wichtige Entscheidung getroffen
+- Fokus des Projekts hat sich verschoben
+
+**Wie:**
+- Fuer gezielte Updates eines Abschnitts: `memory_append({"file":
+  "DISCO.md", "heading": "Projekt-Tabellen", "content": "`agent_sources` — Registry ..."})` — das haengt einen neuen H2-Abschnitt an.
+- Fuer vollstaendige Neufassung: vorher `memory_read`, dann
+  `memory_write({"file": "DISCO.md", "content": "<komplett>"})`.
+- Obsolete Eintraege **loeschen**, nicht durchstreichen (NOTES.md hat die Chronik).
