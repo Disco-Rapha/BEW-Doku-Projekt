@@ -174,3 +174,4 @@ from . import executor  # noqa: E402,F401 — run_python
 from . import docint         # noqa: E402,F401 — extract_pdf_to_markdown
 from . import markdown       # noqa: E402,F401 — markdown_extract (Docling: granite-mlx, smol-mlx, standard)
 from . import markdown_tools # noqa: E402,F401 — extract_markdown_structure
+from . import search         # noqa: E402,F401 — build_search_index, search_index
