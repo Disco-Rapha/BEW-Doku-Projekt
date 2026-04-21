@@ -651,13 +651,34 @@ class AgentService:
 
                     # --- Fehler / Abbruch ---
                     elif etype == "response.failed":
+                        # Foundry liefert bei 429 / Rate-Limit / Server-Fehlern
+                        # oft nur ein Teil-Feld. Wir ziehen alles raus, was da
+                        # ist, loggen den Rohzustand fuer Post-Mortem und
+                        # bauen dem User eine reichere Meldung zusammen.
                         err = getattr(event, "response", None)
-                        msg = getattr(getattr(err, "error", None), "message", "unbekannt")
-                        yield ErrorEvent(message=f"Foundry meldet Fehler: {msg}")
+                        err_obj = getattr(err, "error", None)
+                        msg = getattr(err_obj, "message", None)
+                        code = getattr(err_obj, "code", None)
+                        type_ = getattr(err_obj, "type", None)
+                        status = getattr(err, "status", None)
+                        logger.error(
+                            "Foundry response.failed — code=%r type=%r status=%r msg=%r event=%r",
+                            code, type_, status, msg, event,
+                        )
+                        parts = [str(p) for p in (code, type_, msg) if p]
+                        ui_msg = " — ".join(parts) if parts else "keine Details von Foundry"
+                        yield ErrorEvent(message=f"Foundry meldet Fehler: {ui_msg}")
                         return
                     elif etype == "error":
-                        msg = getattr(event, "message", "") or str(event)
-                        yield ErrorEvent(message=f"Stream-Fehler: {msg}")
+                        msg = getattr(event, "message", "") or ""
+                        code = getattr(event, "code", None) or getattr(event, "type", None)
+                        logger.error(
+                            "Stream-Error-Event — code=%r msg=%r event=%r",
+                            code, msg, event,
+                        )
+                        parts = [str(p) for p in (code, msg) if p]
+                        ui_msg = " — ".join(parts) if parts else repr(event)
+                        yield ErrorEvent(message=f"Stream-Fehler: {ui_msg}")
                         return
 
                     # andere Events (refusal, reasoning, mcp, image_gen, ...)
