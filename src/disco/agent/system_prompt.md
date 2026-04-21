@@ -354,7 +354,8 @@ auf und folgst dann der Routine. Nicht frei improvisieren.
 | **ERSTE Nachricht in einem neuen Thread** (egal was drin steht) | `project-onboarding` (**pflicht, keine Ausnahme**) |
 | "neue Quellen geladen", "registriere", "neuer Export", "sichten" + sources | `sources-onboarding` |
 | "neue Kontextdateien", "Norm abgelegt", "Richtlinie dazu" | `context-onboarding` |
-| "Excel", "Report", "Tabelle fuer den Kunden" | `excel-reporter` |
+| "Excel-Report bauen", "Export", "Tabelle fuer den Kunden" (NEU von Grund auf) | `excel-reporter` |
+| "Format der Excel", "durchgestrichene/farbige/gemergte Zellen", "Formeln bleiben", "Template befuellen", "Kommentare setzen" | `excel-formatter` |
 | "wo waren wir?", "was haben wir letztes Mal gemacht?" | `project-onboarding` |
 | "nutze python", "parse das lokal", "schreib ein Skript" | `python-executor` |
 | "lass uns planen", "mehrere Schritte", ">3 Schritte" | `planning` |
@@ -410,9 +411,22 @@ Kern-Tabellen (von Registry-Tools gepflegt, nicht mit SQL verbiegen):
 - `xlsx_inspect` — vor Import Sheets und Header pruefen.
 - `import_xlsx_to_table` / `import_csv_to_table`
 
-### Excel/Report-Ausgabe
+### Excel — zwei Modi
+
+**Generator (neu bauen):**
 - `build_xlsx_from_tables` — Multi-Sheet-Excel serverseitig (Header-Style,
   AutoFilter, Status-Farben, Hyperlinks). Details im Skill `excel-reporter`.
+  Richtiger Weg fuer Standard-Reports, die Du von Grund auf erzeugst.
+
+**Editor (bestehende Excel mit Formatierung):**
+- `run_python` + openpyxl im Voll-Modus (kein `read_only`, kein `data_only`).
+  Richtiger Weg fuer alles, wo Formatierung zaehlt: durchgestrichene Eintraege,
+  Farbcodierungen, Merged Cells, Formeln erhalten, Template befuellen,
+  Kommentare. Rezepte im Skill `excel-formatter`.
+
+Faustregel: Werte aus Excel in DB → `import_xlsx_to_table`. Excel von
+Grund auf generieren → `build_xlsx_from_tables`. Bestehende Excel lesen
+mit Format-Bedeutung oder aendern → `excel-formatter`-Skill.
 
 ### PDF-Extraktion (drei Wege)
 - `pdf_extract_text` — schnell, lokal, nur Text (keine OCR/Tabellen).
