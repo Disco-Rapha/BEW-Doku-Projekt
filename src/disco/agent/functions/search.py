@@ -59,6 +59,65 @@ DEFAULT_SEARCH_LIMIT = 10
 MAX_SEARCH_LIMIT = 50
 DEFAULT_SNIPPET_TOKENS = 20
 
+# FTS5-Syntax-Hilfe: Tokens, die nur aus diesen Zeichen bestehen, duerfen
+# unquoted in die Query. Alles andere wird automatisch in Anfuehrungs-
+# zeichen gesetzt, damit "3.1" oder "EN 10204" oder "1.1.PAC10.AP001"
+# nicht zum Syntax-Fehler fuehren.
+_FTS_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
+_FTS_TOKEN_SAFE = re.compile(r"^[A-Za-z0-9äöüÄÖÜß_*]+$")
+
+
+def _fts_safe_query(query: str) -> str:
+    """Macht eine User-Query FTS5-sicher, ohne Semantik zu aendern.
+
+    - Bereits gequotete Phrasen bleiben unangetastet.
+    - Bare Tokens mit Sonderzeichen (z.B. '3.1', 'P-101') werden
+      in Anfuehrungszeichen gewickelt.
+    - Operatoren (AND/OR/NOT/NEAR) und Klammern bleiben erhalten.
+    - Prefix-Stern (schall*) bleibt erhalten.
+    """
+    q = query.strip()
+    if not q:
+        return q
+    out: list[str] = []
+    i = 0
+    n = len(q)
+    while i < n:
+        c = q[i]
+        if c.isspace():
+            out.append(c)
+            i += 1
+            continue
+        if c == '"':
+            # Bereits gequotete Phrase: bis zum naechsten " uebernehmen
+            j = q.find('"', i + 1)
+            if j == -1:
+                # Unmatched quote — verwerfen, um FTS5-Syntax-Fehler zu vermeiden
+                i += 1
+                continue
+            out.append(q[i : j + 1])
+            i = j + 1
+            continue
+        if c in "(),":
+            out.append(c)
+            i += 1
+            continue
+        # Token bis Whitespace / Quote / Klammer / Komma
+        j = i
+        while j < n and not q[j].isspace() and q[j] not in '(),"':
+            j += 1
+        tok = q[i:j]
+        upper = tok.upper()
+        if upper in _FTS_OPERATORS:
+            out.append(upper)
+        elif _FTS_TOKEN_SAFE.match(tok):
+            out.append(tok)
+        else:
+            esc = tok.replace('"', '""')
+            out.append(f'"{esc}"')
+        i = j
+    return "".join(out).strip()
+
 
 # ---------------------------------------------------------------------------
 # build_search_index
@@ -303,6 +362,11 @@ def _search_index(
             f"Ungueltiges kind: {kind!r}. Erlaubt: sources, context, exports, work."
         )
 
+    # FTS5 lehnt nackte Tokens mit Sonderzeichen ab ('3.1' -> syntax error).
+    # Wir sanitizen die User-Query, protokollieren aber das Original.
+    user_query = query
+    fts_query = _fts_safe_query(query)
+
     conn = _connect()
     try:
         _ensure_schema(conn)
@@ -313,7 +377,8 @@ def _search_index(
         ).fetchone()["n"]
         if n_docs == 0:
             return {
-                "query": query,
+                "query": user_query,
+                "fts_query": fts_query,
                 "hits": [],
                 "n_hits": 0,
                 "total_matches": 0,
@@ -322,8 +387,6 @@ def _search_index(
                 ),
             }
 
-        # FTS5 ablehnen wenn Syntax-Fehler — sauberer Error-Return
-        # statt Stack-Trace
         sql = (
             "SELECT "
             "  doc_id, doc_path, kind, page_num, heading, "
@@ -332,7 +395,7 @@ def _search_index(
             "FROM agent_search_chunks_fts "
             "WHERE agent_search_chunks_fts MATCH ? "
         )
-        params: list[Any] = [DEFAULT_SNIPPET_TOKENS, query]
+        params: list[Any] = [DEFAULT_SNIPPET_TOKENS, fts_query]
 
         if kind is not None:
             sql += "  AND kind = ? "
@@ -345,7 +408,8 @@ def _search_index(
             rows = conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError as exc:
             return {
-                "query": query,
+                "query": user_query,
+                "fts_query": fts_query,
                 "hits": [],
                 "n_hits": 0,
                 "total_matches": 0,
@@ -369,7 +433,7 @@ def _search_index(
             "SELECT COUNT(*) AS n FROM agent_search_chunks_fts "
             "WHERE agent_search_chunks_fts MATCH ?"
         )
-        count_params: list[Any] = [query]
+        count_params: list[Any] = [fts_query]
         if kind is not None:
             count_sql += " AND kind = ?"
             count_params.append(kind)
@@ -379,7 +443,8 @@ def _search_index(
             total = len(hits)
 
         return {
-            "query": query,
+            "query": user_query,
+            "fts_query": fts_query,
             "hits": hits,
             "n_hits": len(hits),
             "total_matches": total,
