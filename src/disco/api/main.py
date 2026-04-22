@@ -852,9 +852,15 @@ def _resolve_project_path_or_error(slug: str):
 
 
 def _flow_info_to_dict(info, project_root) -> dict:
+    # Library-Flows liegen im Code-Repo, nicht im Projekt; dann gibt relative_to einen ValueError.
+    try:
+        path_str = str(info.path.relative_to(project_root))
+    except ValueError:
+        path_str = f"<library>/{info.name}"
     return {
         "name": info.name,
-        "path": str(info.path.relative_to(project_root)),
+        "path": path_str,
+        "source": info.source,
         "has_runner": info.has_runner,
         "has_readme": info.has_readme,
         "readme_excerpt": info.readme_excerpt,
