@@ -13,10 +13,15 @@ Beim Modul-Import werden HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE /
 HF_DATASETS_OFFLINE in os.environ gesetzt, damit alle Subprozesse
 (Flow-Worker, run_python) sie erben. Default: alle drei auf 1.
 Das verhindert, dass Docling/transformers/HF-Hub beim Laden eines
-gecachten Modells einen Online-Check macht — hat uns heute einen
-Flow-Run mit 3 min Socket-Hang gekostet.
-Zum Modelle-Laden: `uv run python scripts/download_models.py` —
-das Skript setzt die Flags temporaer aus.
+gecachten Modells einen Online-Check macht — hat uns bei einem
+frueheren Flow-Run 3 min Socket-Hang gekostet.
+
+Voraussetzung: die Docling-Modelle (DocLayNet + TableFormer + EasyOCR)
+muessen einmalig im HF-Cache liegen. Beim ersten Gebrauch auf einer
+frischen Maschine die Flags via Shell temporaer ausschalten, z.B.
+`HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 uv run disco flow run ...`
+— Docling laedt die Modelle dann automatisch einmal herunter. Danach
+wieder zurueck auf Default (1).
 """
 
 from __future__ import annotations
@@ -193,7 +198,8 @@ def _apply_offline_env(s: Settings) -> None:
 
     Wir respektieren aber explizit bereits gesetzte Werte in der aktuellen
     Umgebung — dann kann z.B. `HF_HUB_OFFLINE=0 uv run ...` einen
-    einmaligen Online-Pfad erzwingen (fuer download_models.py).
+    einmaligen Online-Pfad erzwingen (z.B. um Docling-Modelle beim
+    ersten Gebrauch in den HF-Cache zu laden).
     """
     mapping = {
         "HF_HUB_OFFLINE": s.hf_hub_offline,

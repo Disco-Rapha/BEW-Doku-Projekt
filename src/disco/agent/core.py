@@ -685,8 +685,52 @@ class AgentService:
                     # ignorieren wir still — bei Bedarf spaeter ergaenzen.
 
             except Exception as exc:
-                logger.exception("Fehler im Event-Stream")
-                yield ErrorEvent(message=f"Stream-Fehler: {exc}")
+                # openai.APIError traegt body/code/status mit. Ohne explizites
+                # Ausziehen geht die eigentliche Ursache (z. B. 429 Rate-Limit)
+                # im Log verloren und die UI sieht nur "Too Many Requests".
+                detail_parts: list[str] = []
+                status_code: int | None = None
+                code: str | None = None
+                body: Any = None
+                try:
+                    from openai import APIError, APIStatusError  # lazy
+                    if isinstance(exc, APIError):
+                        code = getattr(exc, "code", None)
+                        body = getattr(exc, "body", None)
+                        if isinstance(exc, APIStatusError):
+                            status_code = getattr(exc, "status_code", None)
+                except Exception:
+                    pass
+
+                # Azure-429 erkennen auch dann, wenn status_code fehlt
+                # (SSE-Stream-Error liefert oft nur message "Too Many Requests")
+                msg_text = str(exc) or ""
+                is_rate_limit = (
+                    status_code == 429
+                    or "429" in msg_text
+                    or "too many requests" in msg_text.lower()
+                    or (isinstance(code, str) and "rate" in code.lower())
+                )
+
+                if status_code is not None:
+                    detail_parts.append(f"status={status_code}")
+                if code:
+                    detail_parts.append(f"code={code}")
+                if body is not None:
+                    detail_parts.append(f"body={body!r}")
+                detail = " [" + " ".join(detail_parts) + "]" if detail_parts else ""
+
+                logger.exception("Fehler im Event-Stream%s", detail)
+
+                if is_rate_limit:
+                    ui_msg = (
+                        f"Azure OpenAI Rate-Limit (429): {msg_text or 'Too Many Requests'}. "
+                        "Moeglicherweise laeuft parallel ein Flow auf demselben Deployment — "
+                        "kurz warten und erneut versuchen."
+                    )
+                else:
+                    ui_msg = f"Stream-Fehler: {msg_text}{detail}"
+                yield ErrorEvent(message=ui_msg)
                 return
 
             # Nach der Runde: previous_response_id fuer die naechste Runde merken

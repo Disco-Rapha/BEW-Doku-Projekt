@@ -369,7 +369,9 @@ Kosten verursachen.
    - → Kosten-Schätzung VOR dem Run, Budget-Limit WÄHREND des Runs
 
 **Kurzfristig (jetzt):**
-- Im `extract_pdf_to_markdown`-Tool: Warnung wenn PDF > 200 Seiten
+- Im Flow `pdf_to_markdown`: Budget-Check vor dem Run
+  (Summe `estimated_cost_eur` aller gerouteten PDFs), bei > Limit
+  Rückfrage / Dry-Run-Mode
 - Im Context-Onboarding-Skill: nach > 5 PDFs oder > 300 Seiten
   kumuliert Rückfrage an den User
 - Token-Zähler im Chat-Status-Bar unten (haben wir schon teilweise)
@@ -391,9 +393,10 @@ einen Kostenfresser hineinrennt.
 1. **Agent-Loop-Deckel:** Disco in eine Schleife schicken
    (z.B. "rufe list_skills 40× hintereinander auf") — bricht er bei
    Round 24 ab? Was sieht der Nutzer?
-2. **DI-Page-Limit:** PDF mit > 200 Seiten durch `extract_pdf_to_markdown`
-   jagen — kommt die Warnung? Wird der Call trotzdem ausgeführt oder
-   blockiert (aktuell: nur Warnung, keine Blockade).
+2. **DI-Page-Limit:** PDF mit > 200 Seiten durch Flow `pdf_to_markdown`
+   (Engine `azure-di-hr`) jagen — kommt eine Warnung? Wird der Call
+   trotzdem ausgeführt oder blockiert? (aktuell: weder Warnung noch
+   Blockade — Policy muss erst definiert werden).
 3. **Flow-Budget:** Flow-SDK hat `budget_eur`-Feld (siehe flows/sdk.py).
    Mini-Flow schreiben, der bewusst das Budget überschreiten würde —
    stoppt der Worker wirklich, oder läuft er einfach weiter?
@@ -409,108 +412,48 @@ einen Kostenfresser hineinrennt.
 Status: Nutzer-Beobachtung — "Bei DI sind keine Kosten sichtbar.
 Müssen vielleicht vorher für bestimmte Parameter gesetzt werden."
 
-**Was der Code aktuell tut** (`functions/docint.py`):
+**Was der Code aktuell tut** (`src/disco/pdf/markdown.py`):
 
-- `extract_pdf_to_markdown` liefert `estimated_cost_eur` im Tool-Result
-  zurück (0.01 €/Seite für `prebuilt-layout`, 0.005 €/Seite sonst — hardcoded).
-- Berechnung: `n_pages * cost_per_page`.
+- Der Engine-Dispatcher liefert `estimated_cost_eur` im `meta`-Dict
+  (docling-standard = 0, azure-di = 0.01 €/Seite, azure-di-hr =
+  0.015 €/Seite — hardcoded).
+- Der Flow `pdf_to_markdown` ruft `run.add_cost(eur=cost)` fuer jede
+  Datei, damit das UI die akkumulierten Kosten anzeigt.
 
 **Mögliche Gründe, warum der Nutzer nichts sieht:**
 
-1. **UI rendert das Feld nicht prominent.** Tool-Result-Block zeigt JSON,
-   aber `estimated_cost_eur` geht in der Masse unter. → im Tool-Call-Block
-   (index.html) eigene Cost-Zeile / Badge, z.B. "≈ 0,12 € (12 Seiten)".
+1. **UI rendert das Feld nicht prominent.** Flow-Run-Kacheln zeigen
+   zwar die kumulierten Kosten, aber pro Dokument fehlt die Zahl.
+   → im Run-Items-Block eigene Cost-Spalte, z.B. "≈ 0,12 € (12 Seiten)".
 2. **Disco erwähnt Kosten nicht aktiv im Live-Kommentar.** System-Prompt
-   hat keine Regel dazu. → Ergänzung: "Nach jedem DI-Call eine Zeile
+   hat keine Regel dazu. → Ergänzung: "Nach jedem DI-Flow-Run eine Zeile
    `≈ 0,XX € für N Seiten` in die Assistant-Message."
-3. **Andere DI-Nutzungsstellen haben keine Kostenrückgabe.**
-   z.B. Context-Onboarding, Flow-Worker, wenn sie DI direkt aufrufen
-   statt über das Tool. → Einheitlicher Helper (`_di_cost(pages, model)`)
-   und konsequente Propagation.
-4. **Modell liefert `n_pages=0`.** Manche PDF-Varianten (gerenderte
+3. **Modell liefert `n_pages=0`.** Manche PDF-Varianten (gerenderte
    Bilder ohne Page-Metadaten) — dann ist Cost=0. → Fallback auf
-   tatsächliche Seitenanzahl des Input-PDFs (pypdf).
+   tatsächliche Seitenanzahl des Input-PDFs (PyMuPDF).
 
 **Test + Fix in einem Rutsch:**
 
-1. Bekanntes PDF (z.B. 20 Seiten) durch `extract_pdf_to_markdown` jagen
-2. Tool-Result prüfen — kommt `estimated_cost_eur` sauber an?
+1. Bekanntes PDF (z.B. 20 Seiten) durch Flow `pdf_to_markdown` jagen
+2. `agent_pdf_markdown` + Flow-Run-Kachel prüfen — kommt `estimated_cost_eur` sauber an?
 3. Assistant-Message prüfen — erwähnt Disco die Kosten?
 4. UI-Block prüfen — steht die Zahl irgendwo sichtbar?
 
 Danach die Lücken gezielt schließen.
 
-### PDF-Extraktion: User wählt Engine selbst (Priorität: mittel)
+### PDF-Extraktion: 3-Tier-Pipeline (DONE 2026-04-22)
 
-Aktuell gibt es zwei Engines (`pdf_extract_text` = pypdf,
-`extract_pdf_to_markdown` = Azure DI). Der User soll selbst wählen
-können welche Engine pro Datei oder global genutzt wird.
+**Status:** Umgesetzt. Pipeline `pdf_routing_decision` → `pdf_to_markdown`
+mit Engines `docling-standard` / `azure-di` / `azure-di-hr`. Agent liest
+nur noch ueber `pdf_markdown_read` aus `agent_pdf_markdown`. Altes
+`pdf_extract_text` (pypdf), `extract_pdf_to_markdown` (DI-Tool) und
+VLM-Varianten (granite-mlx / smol-mlx) sind entfernt.
 
-**Geplante Engines (3+1):**
-
-| Engine | Wo | Kosten | Qualität | Use-Case |
-|---|---|---|---|---|
-| **pypdf** | lokal | kostenlos | niedrig (kein OCR, keine Tabellen) | Quick-Check, Source-Bulk |
-| **Azure DI Standard** | Azure EU | ~0.01 €/Seite | hoch (OCR, Tabellen, Struktur) | Context-PDFs (Default) |
-| **Azure DI High-Res** | Azure EU | ~0.02+ €/Seite | sehr hoch (komplexe Layouts) | Schwierige Scans |
-| **Lokale OSS-Engine** | lokal (GPU) | kostenlos | hoch (mit GPU) | Datenschutz-sensitiv, offline |
-
-**Lokale OSS-Engine: MinerU** (https://opendatalab.github.io/MinerU/)
-- Apache 2.0 Lizenz (+ zusätzliche Bedingungen)
-- Unterstützt Apple Silicon GPU (MPS), CUDA, auch pure CPU
-- OCR mit 109 Sprachen, Tabellen → HTML, Formeln → LaTeX
-- Multi-Column, komplexe Layouts, Header/Footer-Entfernung
-- Output: Markdown + JSON
-- Lokal, offline, 0 €/Seite — ideal für Datenschutz + Bulk
-- Installation: Python-Paket (`magic-pdf`), Modelle ~einige GB Download
-- Qualitätsvergleich mit Azure DI: muss getestet werden
-  (insbesondere technische Normen mit komplexen Tabellen)
-
-**Benchmark-Ergebnis (10 diverse PDFs, 2026-04-17):**
-- docling und DI High-Res liefern vergleichbare Qualität
-- docling besser bei: Schaltplänen (+51%), Scans (+82%)
-- DI besser bei: Formularen, Datenblättern, handschriftlichen Teilen
-- Performance: docling 72s (10 PDFs, CPU-only), DI ~5-10s (Cloud)
-- Kosten: docling 0 €, DI ~1 € für 10 PDFs (102 Seiten)
-
-**Max-Quality-Durchlauf (images_scale=2.0, MPS, ACCURATE):**
-- Gesamt 89s für 10 PDFs auf Mac Silicon
-- **Schwäche bei technischen Zeichnungen:** Plankopf wird als
-  Fließtext extrahiert, nicht als Tabelle. DI baut den Plankopf
-  korrekt als Tabelle mit Nr/Blatt/Maßstab/Zeichner/Datum/Status.
-  Für SOLL/IST-Abgleiche über Planköpfe bleibt DI unverzichtbar.
-- docling ersetzt DI also NICHT, sondern ergänzt es für Bulk-Text
-  und Scans.
-
-**Architektur-Entscheidung:**
-- Default-Engine wird **docling** (kostenlos, lokal, MIT-Lizenz)
-- DI bleibt als Premium-Option (wenn User höchste Qualität bei
-  Formularen braucht oder Apple Silicon zu langsam ist)
-- pypdf bleibt für Quick-Checks (1 Seite, nur Text)
-
-**Umsetzung:**
-- `extract_pdf_to_markdown` bekommt einen Parameter `engine`:
-  `"docling"` (Default), `"di-standard"`, `"di-highres"`, `"pypdf"`
-- Im UI/CLI: Projekt-Setting für Default-Engine
-- Im Skill: Engine-Empfehlung je nach Dateityp
-- Kosten-Transparenz: pro Engine die geschätzten Kosten anzeigen
-- docling mit GPU/MPS testen für weitere Beschleunigung
-
-**ToDo — Docling produktiv verfuegbar machen** (aus UAT-Session 2026-04-19):
-- Dependency ist bereits in `pyproject.toml` (`docling>=2.90.0`), aber
-  **kein Produkt-Pfad nutzt sie aktuell** — nur ad-hoc Benchmark-Skripte
-  in einem Testprojekt.
-- **Option A (Tool):** neue Custom Function
-  `markdown_extract_docling(pdf_path, engine_options)` in
-  `src/bew/agent/functions/` — nutzt lokales docling, schreibt Markdown
-  zurueck oder in Tabelle.
-- **Option B (Skill/Flow):** Skill `markdown-extractor` mit Engine-Auswahl
-  + generischer Flow `markdown-extract` der pro Item die gewaehlte Engine
-  aufruft (docling/di-standard/di-highres/pypdf).
-- Im UAT-Projekt `uat-2026-04-19` hat der User Flow 1 mit DI-HighRes gewaehlt
-  (DI ist der erprobte Pfad), aber Docling soll als **gleichwertige Option**
-  zur Verfuegung stehen — bewusste Entscheidung pro Projekt/Lauf.
-- Nicht bloss installieren — auch **aufrufbar** vom Agent/Flow aus.
+Alter Text gekuerzt — Entscheidungshistorie: Benchmark-Ergebnis zeigte
+docling-standard ausreichend fuer Text + Tabellen, DI-HighRes (OCR-
+HighResolution) unverzichtbar fuer vector-drawing + Plankoepfe.
+VLM-Varianten waren zu langsam fuer Bulk-Runs und liefern keinen
+Qualitaetsvorteil gegenueber docling-standard.
 
 ---
 
@@ -637,8 +580,9 @@ Muss vor Umsetzung einmal gemeinsam diskutiert werden:
 - **Welche Flows sind „Standard"?** Kandidaten:
   - `sources_scan_and_register` — Sources scannen, hashen, in `agent_sources`
     registrieren (heute Tool, koennte aber als Flow laufen fuer Audit-Trail)
-  - `md_extract_granite` / `md_extract_smol` / `md_extract_di` — die drei
-    Engines als fertige Flows
+  - `pdf_routing_decision` + `pdf_to_markdown` — bereits als Library-Flows
+    umgesetzt (liegen unter `src/disco/flows/library/`), koennten aber per
+    Default in jedem neu angelegten Projekt sichtbar sein
   - `dcc_classify_gpt5` — DCC-Klassifikation ueber Markdown-Extrakte
   - `duplicate_detect` — Duplikat-Analyse per Hash + Name + Inhalt
   - `context_manifest_refresh` — Kontext-Ordner neu indizieren
@@ -662,15 +606,16 @@ Ziel: ein neues Projekt ist nach `disco project init` direkt
 DCC klassifizieren geht One-Click, ohne dass Disco fuer jedes neue
 Projekt denselben Flow nochmal baut.
 
-Ursprung: UAT-Session 2026-04-20, waehrend Run #15 (md_extract_granite
-auf uat-2026-04-19) lief und Disco parallel einen zweiten Flow
-`md_extract_smol` gebaut hat — wurde deutlich, dass solche Arbeit
-fuer jedes Projekt wiederholt wird, obwohl die Flows strukturell
-identisch sind.
+Ursprung: UAT-Session 2026-04-20, als waehrend eines laufenden
+Extraction-Runs parallel eine zweite Engine-Variante als eigener Flow
+nachgezogen wurde — dabei wurde klar, dass solche Arbeit fuer jedes
+Projekt wiederholt wird, obwohl die Flows strukturell identisch sind.
+Teil davon ist inzwischen ueber die Flow-Library (`src/disco/flows/library/`)
+geloest, der Gesamt-Bootstrap steht aber noch aus.
 
 ### Overnight-Betrieb + Resume nach Sleep/Restart (Priorität: hoch — aus UAT 2026-04-20)
 
-Bulk-Flows (md_extract_granite, DCC-Klassifikation, etc.) laufen
+Bulk-Flows (`pdf_to_markdown`, DCC-Klassifikation, etc.) laufen
 teils stundenlang. Der Nutzer moechte sie **ueber Nacht** laufen
 lassen, auch wenn der Rechner gesperrt ist — und einen laufenden
 Flow **nach Neustart** (Disco-Restart, Mac-Restart, Aufwachen aus
@@ -778,51 +723,16 @@ weil Raphael dort selten Agent+Flow gleichzeitig fahren wird.
 
 ## Docling / MLX
 
-### Hybride Markdown-Pipeline — DI ↔ VLM ↔ Standard (Priorität: hoch)
+### Hybride Markdown-Pipeline (DONE 2026-04-22)
 
-**Problem:** Granite-Docling-MLX läuft auf M1 zu langsam für produktive
-Bulk-Extraktion (Run #15: 20 Dokumente in ~55 min, grosse PDFs zogen
-einzeln 10-14 min). Selbst mit SmolDocling-MLX (schneller, weniger
-Parameter) ist das kein Ersatz fuer 1000+-Dokument-Läufe.
+**Status:** Umgesetzt als `pdf_routing_decision` (PyMuPDF-Heuristik pro
+Seite → Engine pro Dokument, Strategie A: eine Engine je Datei) und
+`pdf_to_markdown` (Engine-Dispatcher `src/disco/pdf/markdown.py`).
+VLM-Varianten entfernt — docling-standard deckt Text + Tabellen,
+azure-di A4-Scans, azure-di-hr Vector-Drawings / Plankoepfe ab.
 
-Gleichzeitig sind die drei Engines **nicht austauschbar**:
-
-| Engine | Kosten | Qualitaet | Durchlaufzeit | Ideal fuer |
-|---|---|---|---|---|
-| `standard` (DocLayNet + TableFormer) | 0 EUR | gut bei Text-PDFs, schwach bei Scans/Layout | schnell (CPU) | einfache Text-PDFs |
-| `granite-mlx` / `smol-mlx` (VLM) | 0 EUR (lokal) | sehr gut bei komplexem Layout, Tabellen, schlechten Scans | sehr langsam (M1) | Einzelstuecke, wo Qualitaet zaehlt |
-| Azure Document Intelligence | ~0.015 EUR/Seite | Profi-Qualitaet, Spaltenerkennung, Formeln, OCR | schnell (Cloud, parallel) | grosse Scan-Volumen, mehrspaltige Plaene |
-
-**Idee: Hybrid-Router, der pro Dokument die passende Engine waehlt.**
-Entscheidungskriterien (erste Skizze, noch nicht final):
-
-- Seitenzahl < 3 + textbasiert (kein Scan) → `standard`
-- Seitenzahl 3-20 + Layout komplex (Tabellen, Plaene) → `granite-mlx`
-  oder DI je nach Zeitbudget
-- Seitenzahl > 20 oder Scan-PDF → **Azure DI** (lokal zu langsam,
-  Qualitaet bei Scans entscheidend)
-- Handzeichnungen / stark gescannte Plaene → DI + custom prompt
-
-Dafuer muss Disco pro Dokument erst **eine schnelle Inspektion**
-machen (Seitenzahl, Text-vs-Scan-Heuristik, Dateigroesse, ggf. Thumbnail
-der ersten Seite ueber VLM-Klassifikator) und dann die Engine routen.
-Das ist selbst ein kleiner Flow.
-
-**Offene Fragen:**
-- Wer entscheidet? Fester Router (Regeln) vs LLM-Router (GPT-5 guckt
-  1. Seite an und waehlt) — LLM-Router kostet Token, Regel-Router ist
-  schneller und billiger, aber brittle.
-- Kosten-Budget pro Run? z.B. „max 5 EUR DI-Kosten fuer den ganzen
-  Projekt-Sync", und Router faellt dann auf Standard/VLM zurueck
-- Qualitaets-Check nach der Extraktion — wenn das Markdown zu duenn
-  ist (z.B. < 200 Zeichen fuer ein 10-Seiten-PDF), automatisch Engine
-  hochstufen und neu versuchen (Retry-Ladder: standard → granite → DI)
-
-**Wann angehen:** erst nach Auswertung Granite-Run #15 + Smol-Run.
-Sobald wir belastbare Zahlen zu Qualitaet + Zeit pro Engine haben
-(am gleichen Dokument-Set), kann man den Router sinnvoll designen.
-
-Ursprung: UAT-Session 2026-04-20, nach Run #15 (Granite too slow).
+Ursprung: UAT-Session 2026-04-20 (Granite too slow) → Beschluss
+2026-04-22: VLM komplett raus, festes 3-Tier-Routing.
 
 ---
 
@@ -876,4 +786,77 @@ Offen sind:
 
 ---
 
-*Letzte Aktualisierung: 2026-04-20*
+## Technische Schuld + Setup-Probleme (aus Cleanup-Review 2026-04-22)
+
+Gesammelt direkt nach der PDF-Pipeline-Umstellung (Routing-Flow +
+pdf_to_markdown + agent_pdf_markdown). Geordnet nach Risiko, nicht
+nach Aufwand.
+
+### Setup-Fallstrick: Offline-Default vs. frischer HF-Cache (Priorität: hoch)
+
+Default in `.env.example` + `src/disco/config.py` ist
+`HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 / HF_DATASETS_OFFLINE=1`.
+Die `docling-standard`-Engine braucht aber beim ersten Gebrauch die
+Modelle (DocLayNet + TableFormer + EasyOCR) lokal im
+`~/.cache/huggingface/` — auf einer frischen Maschine laeuft der erste
+`pdf_to_markdown`-Run mit Offline-Flags ins Leere.
+
+Heute: Erst-Priming haendisch dokumentiert (config.py-Docstring,
+.env.example) — User muss einmalig `HF_HUB_OFFLINE=0 ...` fahren.
+
+Offen: sauberes `disco models prime`-Kommando (oder Check beim ersten
+Flow-Start: "Cache fehlt, soll ich die Modelle jetzt ziehen?"). Ohne
+das wird jeder neue Entwickler einmal stolpern.
+
+### Keine automatisierten Tests fuer die PDF-Pipeline (Priorität: hoch)
+
+`tests/` existiert nur als leeres Gerüst (`tests/uat/`), keine
+pytest-Suite, kein CI. Die neue Pipeline (`src/disco/pdf/markdown.py`,
+`pdf_markdown_read`, beide Library-Flows) ist nur via 30-Dok-Manuallauf
+validiert — Regressions-Schutz gleich null.
+
+Mindest-Ausstattung, die fuer Ruhe sorgen wuerde:
+- Unit-Tests fuer Engine-Dispatcher (Mock-DI + 1-Seiten-PDF-Fixture fuer
+  docling-standard).
+- Integrations-Test fuer `pdf_markdown_read` mit einer
+  vorgefuellten In-Memory-SQLite (agent_pdf_markdown).
+- Ein Smoke-Test fuer den Routing-Flow (3-PDF-Fixture, eine pro Engine-Bucket).
+
+Ohne Tests faellt jeder Umbau an der Pipeline erst im UAT auf. Das
+sollte vor weiteren groesseren Flow-Bauten adressiert werden.
+
+### Flow-Scaffold (`flow_create`) hinterlaesst TODOs im Runner-Template (Priorität: niedrig)
+
+`src/disco/agent/functions/flows.py:114,122` hat zwei `TODO`-Marker im
+Runner-Skelett. Ist Absicht — Disco soll die Stellen mit dem Nutzer
+zusammen fuellen. Aber: keine Fixme-Pruefung verhindert, dass ein
+halbfertiger Flow im Library-Verzeichnis landet.
+
+Vorschlag: bei `flow_create` den Template-Header explizit als
+"// SCAFFOLD: bitte process_item und Input-Query anpassen, dann
+Kommentare entfernen" markieren, damit ein halbfertiger Runner beim
+Code-Review auffaellt.
+
+### Portal-Agent-Rollout bei Tool-Aenderungen (Priorität: mittel)
+
+Wenn sich die Custom-Function-Signaturen aendern (wie jetzt bei der
+Pipeline-Umstellung: `pdf_extract_text` raus, `pdf_markdown_read`
+rein), muss `disco agent setup` fuer Prod + Dev laufen, sonst kennt
+der Portal-Agent die Tools nicht. Heute manuell.
+
+Vorschlag: Beim `disco agent setup` automatisch gegen
+`get_tool_schemas()` diffen und bei Aenderungen eine Versionsnummer
+hochzaehlen, damit man im Portal-Log sieht, welche Tool-Version
+gerade registriert ist.
+
+### `duration_ms`-Schema inkonsistent zwischen Engine-Dispatcher und DB (Priorität: niedrig)
+
+`src/disco/pdf/markdown.py` liefert `duration_ms` als `float` (gerundet
+auf 1 Nachkommastelle). `agent_pdf_markdown.duration_ms` ist `REAL`
+— kompatibel, aber der Runner persistiert den Wert ohne weitere
+Konversion, was in der UI zu `"7088.0"`-Anzeigen fuehren kann.
+Kosmetisch, nicht funktional.
+
+---
+
+*Letzte Aktualisierung: 2026-04-22*

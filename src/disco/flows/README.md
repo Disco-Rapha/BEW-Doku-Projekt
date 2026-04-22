@@ -6,17 +6,36 @@ gleichartiger Items abarbeitet. Von „Dateinamen parsen" über
 „Excel-Report aus Tabellen-Joins" bis „DCC-Klassifikation mit gpt-5" —
 alles ist ein Flow.
 
-Dieses Paket liefert das **Framework**. Die einzelnen Flows selbst
-liegen pro Projekt unter `<projekt>/flows/<flow_name>/`.
+Dieses Paket liefert das **Framework**. Flows selbst liegen an zwei Orten:
+
+1. **Library** (`src/disco/flows/library/<flow_name>/`) — globale
+   Wiederverwendungs-Flows, die in **jedem** Projekt funktionieren.
+   Einmal im Repo gepflegt, kein Kopieren pro Projekt noetig.
+2. **Projekt-lokal** (`<projekt>/flows/<flow_name>/`) — Flows, die nur
+   in diesem einen Projekt laufen oder einen Library-Flow bewusst
+   ueberschreiben. Projekt-lokal gewinnt bei Namenskollision.
+
+Aufloesungsreihenfolge beim Start (Service + runner_host):
+
+```
+<projekt>/flows/<name>/runner.py   →  falls vorhanden: nehmen
+↓ sonst
+disco/flows/library/<name>/runner.py  →  Library-Fallback
+↓ sonst
+Fehler: Flow existiert nicht.
+```
 
 ## Anatomie eines Flows
 
 ```
-<projekt>/flows/<flow_name>/
+<flow-root>/<flow_name>/
 ├── README.md        Pflicht — Anleitung für Disco + Nutzer
 ├── runner.py        Pflicht — Python-Code, der die Items verarbeitet
 └── <was-auch-immer> Optional — prompt.md, schema.json, test-cases.jsonl, …
 ```
+
+`<flow-root>` ist entweder `<projekt>/flows/` (lokal) oder
+`src/disco/flows/library/` (global).
 
 Die **README** ist zugleich Spec und Arbeitsprotokoll (Zweck, Input,
 Output, Fehlerbehandlung, Kostenschätzung, Entscheidungen aus dem
@@ -132,10 +151,26 @@ disco flow logs <run_id> --project <slug> [--tail 100]
 
 | Artefakt | Ort |
 |---|---|
-| Flow-Code | `<projekt>/flows/<flow_name>/` |
+| Flow-Code (lokal) | `<projekt>/flows/<flow_name>/` |
+| Flow-Code (global) | `src/disco/flows/library/<flow_name>/` |
 | Run-Logs (log.txt, stdout.log, stderr.log) | `<projekt>/.disco/flows/runs/<run_id>/` |
 | Run-Stammdaten | `agent_flow_runs` |
 | Item-Ergebnisse | `agent_flow_run_items` |
+
+## Library-Flows: Erwartete Tabellen
+
+Ein Library-Flow darf sich nur auf Tabellen verlassen, die in **jedem**
+Projekt existieren — also Template-Migrationen unter
+`migrations/project/NNN_*.sql`. Zusaetzliche `work_*`-Tabellen darf
+der Runner selbst per `CREATE TABLE IF NOT EXISTS` anlegen.
+
+Beispiele:
+- `pdf_routing_decision` liest `agent_pdf_inventory` (Template 007) und
+  schreibt `work_pdf_routing` (auch Template 007 + Runner-CREATE).
+
+Will ein Library-Flow eine neue Tabelle einfuehren: **Migration anlegen**,
+nicht ALTER-TABLE im Runner — damit das Schema in allen Projekten
+konsistent bleibt.
 
 ## Was du dir sparst
 

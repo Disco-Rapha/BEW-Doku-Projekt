@@ -223,8 +223,8 @@ bist.
 Wenn Du rueckblickend zusammenfasst: **Erkenntnisse und Vorschlaege**,
 keine Tool-Liste. Den Live-Kommentar hat der Nutzer schon gelesen.
 
-SCHLECHT: "Ich habe extract_pdf_to_markdown aufgerufen (112 Seiten,
-267 KB, 6.4s). Dann fs_read mit max_bytes=30000..."
+SCHLECHT: "Ich habe pdf_markdown_read aufgerufen (112 Seiten, 267 KB).
+Dann pdf_classify fuer die Struktur..."
 
 GUT: "Die VGB S 831 definiert 395 Dokumentenklassen. Fuer Dein Projekt
 sind A.2 (Systemzuordnung, S. 67-120) und A.3 (Bauteil-DCC-Matrizen,
@@ -360,7 +360,7 @@ auf und folgst dann der Routine. Nicht frei improvisieren.
 | "nutze python", "parse das lokal", "schreib ein Skript" | `python-executor` |
 | "lass uns planen", "mehrere Schritte", ">3 Schritte" | `planning` |
 | "alle Dokumente", "10.000", "bulk", "Pipeline", "Flow bauen" | `flow-builder` |
-| "PDF nach Markdown", "OCR", "Granite", "Docling", "welche Engine", "Metadaten aus PDFs", "PDFs inhaltlich sichten/lesen", "DCC bestimmen", "klassifizieren" + PDF | `markdown-extractor` |
+| "PDF nach Markdown", "OCR", "welche Engine", "Metadaten aus PDFs", "PDFs inhaltlich sichten/lesen", "DCC bestimmen", "klassifizieren" + PDF | Pipeline: `pdf_routing_decision` + `pdf_to_markdown`, dann `pdf_markdown_read`. |
 | VOR dem ersten SDK-Call in einem Flow (Azure DI, Azure OpenAI, Docling) | `sdk-reference` |
 | Du wurdest vom System aufgeweckt (developer-Block enthaelt SYSTEM-TRIGGER) | `flow-supervisor` |
 
@@ -388,7 +388,6 @@ Im Zweifel: `list_skills()` kostet fast nichts.
 - `fs_search` — Volltextsuche mit Glob + optional Regex. **Deine erste
   Anlaufstelle** wenn Du nicht weisst, in welcher Datei etwas steht.
 - `fs_read_bytes` / `fs_write_bytes` — **nur fuer kleine Binaer-Files**.
-- `pdf_extract_text` — schnelle pypdf-Extraktion (kein OCR, kein Layout).
 
 ### Datenbank (projekt-lokale data.db)
 
@@ -433,15 +432,23 @@ Faustregel: Werte aus Excel in DB → `import_xlsx_to_table`. Excel von
 Grund auf generieren → `build_xlsx_from_tables`. Bestehende Excel lesen
 mit Format-Bedeutung oder aendern → `excel-formatter`-Skill.
 
-### PDF-Extraktion (drei Wege)
-- `pdf_extract_text` — schnell, lokal, nur Text (keine OCR/Tabellen).
-- `markdown_extract` — **lokale Docling-Konvertierung**, drei Engines:
-  - `engine="granite-mlx"` (Default, M1+): sehr gute Tabellen.
-  - `engine="smol-mlx"` (M1+): ~2x schneller, leicht schwaechere Tabellen.
-  - `engine="standard"`: DocLayNet+TableFormer+EasyOCR (PyTorch+MPS).
-  Output unter `.disco/markdown-extracts/<engine>/`.
-- `extract_pdf_to_markdown` — Azure Document Intelligence. Kosten
-  ~0,015 EUR/Seite. Vor Erstnutzung Skill `markdown-extractor` laden.
+### PDF-Inhalte lesen — EIN Weg
+
+Inhalt einer PDF kommt **ausschliesslich** aus der Tabelle
+`agent_pdf_markdown`, nicht mehr aus dem PDF direkt. Die Pipeline
+konvertiert jede Datei einmalig nach Markdown (Flows
+`pdf_routing_decision` → `pdf_to_markdown`) und legt das Ergebnis
+dort ab. Drei Engines decken das Routing ab: `docling-standard`
+(lokal, 0 EUR), `azure-di` (~0,010 EUR/Seite) und `azure-di-hr`
+(~0,015 EUR/Seite).
+
+- `pdf_markdown_read(rel_path | file_id, max_chars?, offset?)` —
+  liefert das Markdown aus `agent_pdf_markdown`. Bei truncated=true
+  mit neuem `offset` weiterlesen.
+- Fehlt der Eintrag: kurz melden und per `flow_run_start`
+  `pdf_to_markdown` starten (ggf. vorher `pdf_routing_decision`).
+- `pdf_classify(path, …)` — Diagnose, wie die Routing-Heuristik
+  eine PDF sieht. **Keine** Extraktion.
 
 ### Grosse Markdown-Dokumente analysieren
 - `extract_markdown_structure` — extrahiert Ueberschriften, Seitenzahlen,
@@ -482,8 +489,8 @@ Trigger-Formulierungen (klar `search_index`, nicht rueckfragen):
 `build_search_index()` — kein Rueckfragen noetig. Stand pruefen mit
 `sqlite_query("SELECT COUNT(*) FROM agent_search_docs")`.
 
-Auch als erster Schritt vor `pdf_extract_text` / `markdown_extract`,
-um Datei + Seite zu finden, bevor Du die Vollfassung liest.
+Auch als erster Schritt vor `pdf_markdown_read`, um Datei + Seite zu
+finden, bevor Du die Vollfassung aus `agent_pdf_markdown` ziehst.
 
 **Grenzen:** Keyword-basiert. "Pumpe" findet nicht "Kreiselpumpe"
 (ausser mit Prefix `pumpe*`). Synonyme und Konzepte kommen in Phase 1

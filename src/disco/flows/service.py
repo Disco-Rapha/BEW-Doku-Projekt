@@ -38,6 +38,32 @@ RUNNER_FILENAME = "runner.py"
 
 _FLOW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 
+# Globale Flow-Library im Code-Repo. Library-Flows stehen in jedem
+# Projekt automatisch zur Verfuegung, ohne pro Projekt kopiert werden
+# zu muessen. Projekt-lokale Flows (<projekt>/flows/<name>/) gewinnen
+# bei Namenskollision.
+LIBRARY_DIR = Path(__file__).resolve().parent / "library"
+
+
+def resolve_flow_dir(project_root: Path, flow_name: str) -> Path | None:
+    """Loest den Flow-Ordner nach der Fallback-Kette auf.
+
+    Reihenfolge:
+      1. ``<projekt>/flows/<name>/`` — Projekt-lokaler Override.
+      2. ``disco/flows/library/<name>/`` — globale Library.
+
+    Gibt den ersten existierenden Pfad zurueck oder ``None``, wenn
+    der Flow-Name weder lokal noch in der Library existiert.
+    """
+    _validate_flow_name(flow_name)
+    local = project_root / FLOWS_SUBDIR / flow_name
+    if (local / RUNNER_FILENAME).is_file():
+        return local
+    lib = LIBRARY_DIR / flow_name
+    if (lib / RUNNER_FILENAME).is_file():
+        return lib
+    return None
+
 
 # ===========================================================================
 # Datenmodelle
@@ -54,6 +80,7 @@ class FlowInfo:
     readme_excerpt: str | None   # erster Absatz der README, fuer die UI
     last_modified: str | None    # ISO-Timestamp der neuesten Datei
     run_count: int               # Anzahl bisheriger Runs in der DB
+    source: str = "project"      # 'project' (lokal) oder 'library' (global)
 
 
 @dataclass
@@ -147,15 +174,18 @@ def _row_to_runinfo(row) -> RunInfo:
 
 
 def list_flows(project_root: Path) -> list[FlowInfo]:
-    """Listet alle Unterordner in `<projekt>/flows/` als FlowInfo auf.
+    """Listet alle verfuegbaren Flows: Projekt-lokal + Library.
 
-    Gibt auch unvollstaendige Flows zurueck (ohne runner.py oder README),
-    damit die UI anzeigen kann, was fehlt.
+    Reihenfolge:
+      - Projekt-lokale Flows (`<projekt>/flows/`) haben Vorrang und
+        erscheinen mit ``source='project'``.
+      - Library-Flows (`disco/flows/library/`) werden ergaenzt, wenn
+        kein gleichnamiger Projekt-Flow existiert, mit ``source='library'``.
+
+    Gibt auch unvollstaendige Projekt-Flows zurueck (ohne runner.py
+    oder README), damit die UI anzeigen kann, was fehlt. Library-
+    Flows muessen immer vollstaendig sein.
     """
-    flows_dir = _flows_dir(project_root)
-    if not flows_dir.is_dir():
-        return []
-
     db_path = project_root / "data.db"
     run_counts: dict[str, int] = {}
     if db_path.exists():
@@ -171,44 +201,78 @@ def list_flows(project_root: Path) -> list[FlowInfo]:
             conn.close()
 
     out: list[FlowInfo] = []
-    for p in sorted(flows_dir.iterdir()):
-        if not p.is_dir():
-            continue
-        name = p.name
-        # Validierung der Namen — ungueltige Ordner stillschweigend skippen
-        if not _FLOW_NAME_RE.match(name):
-            continue
-        runner = p / RUNNER_FILENAME
-        readme = p / README_FILENAME
-        excerpt = None
-        last_mod = None
-        if readme.exists():
-            try:
-                txt = readme.read_text(encoding="utf-8", errors="replace")
-                excerpt = _first_paragraph(txt)
-            except OSError:
-                pass
+    seen_names: set[str] = set()
+
+    # 1) Projekt-lokale Flows zuerst (Override vor Library)
+    flows_dir = _flows_dir(project_root)
+    if flows_dir.is_dir():
+        for p in sorted(flows_dir.iterdir()):
+            if not p.is_dir():
+                continue
+            name = p.name
+            if not _FLOW_NAME_RE.match(name):
+                continue
+            info = _build_flow_info(p, name, run_counts, source="project")
+            out.append(info)
+            seen_names.add(name)
+
+    # 2) Library-Flows ergaenzen, sofern nicht bereits projekt-lokal vorhanden
+    if LIBRARY_DIR.is_dir():
+        for p in sorted(LIBRARY_DIR.iterdir()):
+            if not p.is_dir():
+                continue
+            name = p.name
+            if not _FLOW_NAME_RE.match(name):
+                continue
+            if name in seen_names:
+                continue
+            runner = p / RUNNER_FILENAME
+            if not runner.is_file():
+                continue
+            info = _build_flow_info(p, name, run_counts, source="library")
+            out.append(info)
+            seen_names.add(name)
+
+    out.sort(key=lambda fi: fi.name)
+    return out
+
+
+def _build_flow_info(
+    path: Path,
+    name: str,
+    run_counts: dict[str, int],
+    *,
+    source: str,
+) -> FlowInfo:
+    runner = path / RUNNER_FILENAME
+    readme = path / README_FILENAME
+    excerpt = None
+    last_mod = None
+    if readme.exists():
         try:
-            mtimes = [q.stat().st_mtime for q in p.rglob("*") if q.is_file()]
-            if mtimes:
-                from datetime import datetime
-                last_mod = datetime.fromtimestamp(max(mtimes)).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+            txt = readme.read_text(encoding="utf-8", errors="replace")
+            excerpt = _first_paragraph(txt)
         except OSError:
             pass
-        out.append(
-            FlowInfo(
-                name=name,
-                path=p,
-                has_runner=runner.is_file(),
-                has_readme=readme.is_file(),
-                readme_excerpt=excerpt,
-                last_modified=last_mod,
-                run_count=run_counts.get(name, 0),
+    try:
+        mtimes = [q.stat().st_mtime for q in path.rglob("*") if q.is_file()]
+        if mtimes:
+            from datetime import datetime
+            last_mod = datetime.fromtimestamp(max(mtimes)).strftime(
+                "%Y-%m-%d %H:%M:%S"
             )
-        )
-    return out
+    except OSError:
+        pass
+    return FlowInfo(
+        name=name,
+        path=path,
+        has_runner=runner.is_file(),
+        has_readme=readme.is_file(),
+        readme_excerpt=excerpt,
+        last_modified=last_mod,
+        run_count=run_counts.get(name, 0),
+        source=source,
+    )
 
 
 def _first_paragraph(markdown: str, max_chars: int = 400) -> str:
@@ -261,11 +325,13 @@ def create_run(
     vorzubereiten (z.B. fuer Test-Runs mit limitiertem Item-Set).
     """
     _validate_flow_name(flow_name)
-    # Pruefen, dass der Flow-Ordner + runner.py existiert
-    info = get_flow(project_root, flow_name)
-    if not info.has_runner:
+    # Flow-Ordner ueber die Fallback-Kette (Projekt-lokal → Library) aufloesen.
+    flow_dir = resolve_flow_dir(project_root, flow_name)
+    if flow_dir is None:
         raise FileNotFoundError(
-            f"Flow '{flow_name}' hat kein {RUNNER_FILENAME} unter {info.path}"
+            f"Flow '{flow_name}' hat keinen {RUNNER_FILENAME} weder unter "
+            f"{project_root / FLOWS_SUBDIR / flow_name} noch unter "
+            f"{LIBRARY_DIR / flow_name}."
         )
 
     db_path = project_root / "data.db"

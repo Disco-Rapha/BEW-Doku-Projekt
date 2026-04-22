@@ -1,13 +1,12 @@
-"""PDF-Tools: Text-Extraktion (pypdf) + Seiten-Klassifikation (PyMuPDF).
+"""PDF-Tools: Seiten-Klassifikation (PyMuPDF).
 
-Design:
-  - Nur Dateien unter settings.data_dir.
-  - Seiten-Range ist 1-basiert (menschenfreundlich).
-  - Zeichen-Limit gegen Kontext-Explosion.
-  - pdf_extract_text: pypdf, nur eingebetteter Text, keine OCR.
+Nur Diagnose — keine Content-Extraktion. Content-Fragen laufen
+ausschliesslich ueber `pdf_markdown_read` (Tabelle `agent_pdf_markdown`).
+Das hier ist das Fenster, um zu verstehen WIE eine PDF vom
+`pdf_routing_decision`-Flow eingeordnet wird.
+
   - pdf_classify: PyMuPDF-Heuristik pro Seite (kind, chars, n_paths,
-    vector/text/image_coverage). Grundlage fuer die Router-Entscheidung
-    im Markdown-Extraktions-Flow. Keine Extraktion, nur Signale.
+    vector/text/image_coverage). Keine Extraktion, nur Signale.
 """
 
 from __future__ import annotations
@@ -20,133 +19,6 @@ from .fs import _resolve_under_data, _data_root
 
 
 logger = logging.getLogger(__name__)
-
-
-DEFAULT_MAX_CHARS = 50_000
-MAX_MAX_CHARS = 500_000
-
-
-@register(
-    name="pdf_extract_text",
-    description=(
-        "Extrahiert Text aus einem PDF unter data/. Seitenangaben 1-basiert. "
-        "Ohne page_start/end: das ganze Dokument. Der Text wird bei max_chars "
-        "abgeschnitten (truncated=true). Nur eingebetteter Text — Scan-PDFs "
-        "liefern leeren Text, dafuer braucht es Azure Document Intelligence."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Pfad zum PDF, relativ zu data/ (z.B. 'raw/dokumente/foo.pdf').",
-            },
-            "page_start": {
-                "type": "integer",
-                "description": "Erste zu extrahierende Seite (1-basiert). Default 1.",
-            },
-            "page_end": {
-                "type": "integer",
-                "description": "Letzte Seite, inklusive. Default: letzte Seite.",
-            },
-            "max_chars": {
-                "type": "integer",
-                "description": f"Maximale Zeichenzahl (Default {DEFAULT_MAX_CHARS}, Max {MAX_MAX_CHARS}).",
-            },
-        },
-        "required": ["path"],
-    },
-    returns=(
-        "{path, total_pages, page_start, page_end, pages_extracted, "
-        "text, char_count, truncated}"
-    ),
-)
-def _pdf_extract_text(
-    *,
-    path: str,
-    page_start: int = 1,
-    page_end: int | None = None,
-    max_chars: int = DEFAULT_MAX_CHARS,
-) -> dict[str, Any]:
-    if not path:
-        raise ValueError("path ist erforderlich.")
-
-    target = _resolve_under_data(path)
-    if not target.exists():
-        raise ValueError(f"PDF nicht gefunden: {path!r}")
-    if not target.is_file():
-        raise ValueError(f"Pfad ist keine Datei: {path!r}")
-    if target.suffix.lower() != ".pdf":
-        raise ValueError(f"Keine PDF-Datei: {target.suffix!r}")
-
-    try:
-        from pypdf import PdfReader
-    except ImportError as exc:
-        raise RuntimeError("pypdf fehlt — `uv sync` laufen lassen.") from exc
-
-    try:
-        reader = PdfReader(str(target))
-    except Exception as exc:
-        raise ValueError(f"PDF konnte nicht geoeffnet werden: {exc}") from exc
-
-    total = len(reader.pages)
-    if total == 0:
-        return {
-            "path": str(target.relative_to(_data_root())),
-            "total_pages": 0,
-            "page_start": 0,
-            "page_end": 0,
-            "pages_extracted": 0,
-            "text": "",
-            "char_count": 0,
-            "truncated": False,
-        }
-
-    start = max(1, int(page_start or 1))
-    end = int(page_end) if page_end else total
-    end = min(total, max(start, end))
-
-    effective_limit = max(1000, min(int(max_chars or DEFAULT_MAX_CHARS), MAX_MAX_CHARS))
-
-    parts: list[str] = []
-    total_chars = 0
-    truncated = False
-    pages_done = 0
-
-    for page_num in range(start, end + 1):
-        try:
-            page = reader.pages[page_num - 1]
-            page_text = page.extract_text() or ""
-        except Exception as exc:
-            logger.warning("PDF-Seite %d Extraktion fehlgeschlagen: %s", page_num, exc)
-            page_text = ""
-
-        header = f"\n\n--- Seite {page_num} ---\n"
-        chunk = header + page_text
-
-        if total_chars + len(chunk) > effective_limit:
-            remaining = effective_limit - total_chars
-            if remaining > 0:
-                parts.append(chunk[:remaining])
-                total_chars += remaining
-            truncated = True
-            pages_done += 1
-            break
-
-        parts.append(chunk)
-        total_chars += len(chunk)
-        pages_done += 1
-
-    return {
-        "path": str(target.relative_to(_data_root())),
-        "total_pages": total,
-        "page_start": start,
-        "page_end": end,
-        "pages_extracted": pages_done,
-        "text": "".join(parts).lstrip(),
-        "char_count": total_chars,
-        "truncated": truncated,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -185,9 +57,10 @@ _PAGE_LIMIT_MAX = 1000
         "Liefert pro Seite kind ∈ {text, mixed, vector-drawing, scan, empty} "
         "und eine Empfehlung fuer die passende Extraktions-Engine. Keine "
         "Extraktion selbst — nur Signale. Schnell (etwa 10-50 ms/Seite). "
-        "Grundlage fuer den Markdown-Extraktions-Flow, der danach pro Seite "
-        "entscheidet, welche Engine (pypdf / docling-smol / docling-granite "
-        "/ azure-di) laeuft."
+        "Diagnose-Tool, um eine einzelne PDF nachzuvollziehen; die "
+        "produktive Entscheidung pro Dokument trifft der Flow "
+        "`pdf_routing_decision` (engine ∈ {docling-standard, azure-di, "
+        "azure-di-hr})."
     ),
     parameters={
         "type": "object",
@@ -265,7 +138,7 @@ def _pdf_classify(
                 "summary": {
                     "kind_counts": {},
                     "dominant_kind": None,
-                    "recommended_engine": "pypdf",
+                    "recommended_engine": "docling-standard",
                 },
             }
 
@@ -457,22 +330,16 @@ def _decide_kind(
 def _recommend_engine(kind_counts: dict[str, int]) -> str:
     """Heuristische Engine-Empfehlung fuer ein ganzes Dokument.
 
-    Abgestufte Empfehlung nach Anteilen (nicht nach Existenz einzelner
-    Seiten). Bei gemischten Dokumenten ist Docling granite die sicherste
-    Wahl; pure Text-Dokumente laufen billig mit pypdf.
+    Spiegelt das 3-Tier-Routing aus `pdf_routing_decision`:
+      - vector-drawing-Seiten → azure-di-hr (KKS-Labels, Zeichnungskopf)
+      - scan-Seiten (ohne vdrawing) → azure-di
+      - sonst → docling-standard
     """
     total = sum(kind_counts.values())
     if total == 0:
-        return "pypdf"
-    vec_scan_share = (
-        kind_counts.get("vector-drawing", 0) + kind_counts.get("scan", 0)
-    ) / total
-    mixed_share = kind_counts.get("mixed", 0) / total
-
-    if vec_scan_share > 0.30:
+        return "docling-standard"
+    if kind_counts.get("vector-drawing", 0) > 0:
+        return "azure-di-hr"
+    if kind_counts.get("scan", 0) > 0:
         return "azure-di"
-    if mixed_share > 0.40:
-        return "docling-granite-mlx"
-    if mixed_share > 0 or vec_scan_share > 0:
-        return "docling-smol-mlx"
-    return "pypdf"
+    return "docling-standard"
