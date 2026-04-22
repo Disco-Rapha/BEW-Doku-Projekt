@@ -182,18 +182,23 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # -------------------------------------------------------------------
-    # 2) User-Runner-Pfad auflösen
+    # 2) User-Runner-Pfad aufloesen: Projekt-lokal gewinnt, Library als
+    #    Fallback. Dadurch sind Library-Flows in jedem Projekt verfuegbar,
+    #    ohne dass Projekt-Ordner existieren muessen.
     # -------------------------------------------------------------------
-    flow_dir = project_root / "flows" / flow_name
-    user_runner = flow_dir / "runner.py"
-    if not user_runner.exists():
+    from disco.flows.service import resolve_flow_dir
+
+    flow_dir = resolve_flow_dir(project_root, flow_name)
+    if flow_dir is None:
+        local = project_root / "flows" / flow_name
         msg = (
-            f"runner.py nicht gefunden: {user_runner}. "
-            f"Flow '{flow_name}' existiert im Filesystem nicht."
+            f"runner.py nicht gefunden: weder projekt-lokal ({local}) "
+            f"noch in der Flow-Library. Flow '{flow_name}' existiert nicht."
         )
         _set_status(db_path, run_id, STATUS_FAILED, error=msg)
         print(f"FEHLER: {msg}", file=sys.stderr)
         return 2
+    user_runner = flow_dir / "runner.py"
 
     # -------------------------------------------------------------------
     # 3) Umgebung fuer FlowRun.from_env() vorbereiten

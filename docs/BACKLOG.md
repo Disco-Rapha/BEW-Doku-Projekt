@@ -8,59 +8,6 @@ werden sollen.
 
 ## UI / Chat-Erlebnis
 
-### Chat als Haupt-Arbeitsfläche (Priorität: hoch)
-
-Disco steht in der Bildschirm-Mitte, weil sich hier das Wichtigste
-abspielt. Konsequenz: **Disco soll proaktiv visuelle Inhalte im Chat
-liefern** — nicht nur auf Nachfrage:
-
-- Tabellarische Quick-Analysen direkt im Chat (Markdown-Tabellen,
-  nicht nur Fließtext)
-- Bei Registrierung/Scan: sofort eine kompakte Übersichts-Tabelle
-  (Ordner × Dateizahl, Top-Extensions, Duplikat-Anteil)
-- Bei SQL-Ergebnissen: Tabelle statt "es sind 493 Dokumente"
-- Bei Excel-Export: kurze Vorschau der ersten 5 Zeilen inline
-
-→ System-Prompt anpassen: "Bevorzuge Markdown-Tabellen und kompakte
-  Visualisierungen im Chat, statt nur Text-Zusammenfassungen."
-
-### Beispiele zu Vorschlägen und Ergebnissen (Priorität: hoch)
-
-Disco soll dem Nutzer bei Vorschlägen und Ergebnissen **immer konkrete
-Beispiele** mitgeben — nicht abstrakt erklären, sondern zeigen:
-
-- Bei "Soll ich die Quellen registrieren?" → gleich 2-3 Beispiel-
-  Dateinamen aus dem aktuellen sources/ nennen
-- Bei Klassifikations-Vorschlägen → "z.B. `Schaltplan_A1.pdf` → DCC
-  FA010 (Übersichtsschaltplan), `Konformitaet_SMA.pdf` → QC010"
-- Bei SQL-Ergebnissen → nicht nur "322 Zeilen", sondern die ersten
-  3-5 Zeilen als Tabelle dazu
-- Bei Fehlern → konkretes Beispiel zeigen was schiefging und warum
-
-→ System-Prompt: "Gib bei Vorschlägen und Ergebnissen immer 2-3
-  konkrete Beispiele aus den aktuellen Daten. Nicht abstrakt, sondern
-  greifbar."
-
-### Projektbeschreibung / Projektziel im Onboarding (Priorität: hoch)
-
-Aktuell ist `README.md` im Projekt ein leeres Template. Der Agent
-hat dadurch keinen Kontext **wofür** das Projekt da ist — er weiss
-nicht ob er klassifizieren, abgleichen oder sortieren soll.
-
-Zwei Ansätze:
-- **a) Disco fragt beim ersten Onboarding aktiv nach:** "Ich sehe,
-  dass README.md noch leer ist. Was ist das Ziel dieses Projekts?
-  Ich trage es für Dich ein." → Dann füllt Disco das README mit
-  den Antworten des Nutzers.
-- **b) Guided Project Setup als eigener Skill:** `project-setup.md`
-  mit Fragen wie: Projektziel? Welche Quellen? Welche Standards?
-  Erwartetes Ergebnis? Frist? → Disco schreibt ein strukturiertes
-  README + setzt memory.md-Grundlagen.
-
-→ Umsetzung: Skill `project-setup` bauen + im Onboarding-Skill
-  prüfen ob README.md nur Template-Text enthält → wenn ja, Setup
-  vorschlagen.
-
 ### UI-Awareness für Disco (Priorität: mittel)
 
 Disco weiß aktuell nicht, wie das Frontend aussieht. Er soll:
@@ -169,400 +116,225 @@ Das Frontend reagiert: Viewer öffnet sich rechts, zeigt Sheet 3-IBL.
 
 ## Report-Format / Analyse-Ergebnisse
 
-### Excel = Input/Output, nicht Arbeitsformat (Priorität: hoch)
+### Excel mit openpyxl auf Cowork-Niveau verwenden (Priorität: hoch)
 
-Intern arbeitet Disco mit Datenbanken. Der Nutzer braucht aber
-**nachvollziehbare Analyse-Ergebnisse**: Tabellen, Graphen, Matching-
-Ergebnisse mit Agent-Kommentaren, alles verlinkt.
+Disco hat `run_python` + openpyxl an Bord und kann damit alles, was
+Claude Cowork mit Excel macht — Formatierung lesen, Farben/Fonts/
+Borders setzen, Merged Cells, Formeln, Hyperlinks, Bilder. Die
+Infrastruktur steht.
 
-**Anforderungen:**
-- Agent baut den Report selbständig auf und kann ihn bearbeiten
-- Tabellen mit Highlighting (z.B. Status-Farben)
-- Einfache Graphen (Balken, Torte) für Verteilungen
-- Agent-Kommentare pro Sektion ("bei 12 Dokumenten war...")
-- Links (auf andere Reports, Dateien, DB-Einträge)
-- Im Viewer direkt lesbar
+**Was fehlt:** Der Reflex. Disco greift heute zu `import_xlsx_to_table`
+(Tabelle in DB), weil das Tool bequem ist — und sieht dadurch keine
+Formatierung. Wir brauchen:
 
-**Empfohlener Weg (MVP):** Neues Tool `build_report` — Agent gibt
-eine Spec (Sektionen: Text/Tabelle/Chart mit SQL), Server baut ein
-HTML mit eingebettetem Chart.js. Liegt in `exports/` oder `work/`.
-Konsistent mit `build_xlsx_from_tables`-Pattern.
+- **Skill `excel-formatter.md`** mit den Patterns: `load_workbook`
+  ohne `read_only`/`data_only`, Fills/Fonts/Borders-Rezepte, Merged-
+  Cells-Handling, Formel-Preservation, `wb.save()`-Pflicht.
+- **Trigger-Tabelle im System-Prompt:** „Excel-Formatierung lesen oder
+  ändern, Farben, Formeln, Merges → Skill `excel-formatter` laden und
+  `run_python` verwenden. Tabellen-Import in die DB nur, wenn
+  Formatierung irrelevant ist."
+- Optional: `xlsx_inspect_full` — Read-Tool, das Styles/Merges/Formeln
+  strukturiert als JSON liefert, damit Disco fürs reine Anschauen
+  nicht jedes Mal 15 Zeilen Python schreiben muss.
 
-**Später:** Evidence.dev (Markdown+SQL→Reports, Open Source, Node.js)
-oder Live-Dashboard-View im Viewer (DB-gesteuert, interaktiv).
-
-### Disco stellt sich zu oft vor (Bug, Priorität: hoch)
-
-Disco sagt häufig "Ich bin Disco, Dein Dokumentations-Co-Pilot" —
-auch mitten in einer laufenden Session, nicht nur beim ersten Kontakt.
-Das nervt und wirkt unprofessionell.
-
-Ursache: Im System-Prompt steht "Wenn jemand fragt wer Du bist,
-sagst Du knapp: ..." — aber GPT-5 interpretiert das zu aggressiv
-und platziert die Vorstellung auch ungefragt.
-
-Fix im System-Prompt:
-- "Stell Dich NUR vor wenn der Benutzer EXPLIZIT fragt 'wer bist du?'
-  oder es die allererste Nachricht in einem Thread ist. In allen
-  anderen Faellen: einfach arbeiten, keine Vorstellung."
-
-### Inhalt statt Tool-Talk (Priorität: kritisch)
-
-Disco redet zu viel darüber welche Tools er aufgerufen hat und wie
-das technisch gelaufen ist. Der Nutzer interessiert sich nicht für
-"ich habe fs_read aufgerufen und 42 KB gelesen" — er will wissen:
-
-- **Was steht in den Dokumenten?** Was ist interessant, auffällig,
-  relevant für das Projektziel?
-- **Was schlägt Disco als nächstes vor?** Konkrete Handlungsoptionen
-  basierend auf dem was er gefunden hat.
-
-Beispiel SCHLECHT:
-> "Ich habe extract_pdf_to_markdown aufgerufen (112 Seiten, 267 KB,
-> 6.4s). Dann fs_read mit max_bytes=30000. Dann
-> extract_markdown_structure mit 189 Headings..."
-
-Beispiel GUT:
-> "Die VGB S 831 definiert 395 Dokumentenklassen (DCC). Für Dein
-> Projekt sind die Anhänge A.2 (Systemzuordnung, S. 67-120) und
-> A.3 (Bauteil-DCC-Matrizen, S. 121-200) am wichtigsten — daraus
-> leiten wir die SOLL-Liste ab. Auffällig: A.4 enthält 642
-> Sachmerkmale, die könnten wir für die Qualitätsprüfung nutzen.
-> Sollen wir mit dem SOLL-Gerüst aus A.2/A.3 anfangen?"
-
-→ System-Prompt: "Rede NICHT über Deine Tool-Calls. Rede über die
-  INHALTE die Du gefunden hast und was sie fuer das Projektziel
-  bedeuten. Tool-Details sieht der Nutzer im aufklappbaren Block —
-  Dein Text soll Erkenntnisse und Vorschlaege liefern."
-
-### Zusammenfassung am Ende jedes Turns (Priorität: hoch)
-
-Disco macht viele Tool-Calls pro Turn, aber am Ende fehlt dem Nutzer
-oft eine **klare Zusammenfassung**: Was ist jetzt passiert? Was ist
-das Ergebnis? Was muss ich wissen? Was kommt als Nächstes?
-
-Vorbild: Claude Code — nach einer Reihe von Aktionen gibt es immer
-einen kompakten Abschluss-Block mit den wichtigsten Punkten.
-
-Disco soll am Ende jedes größeren Turns:
-- **Was gemacht wurde** (2-3 Sätze)
-- **Ergebnis/Zahlen** (kompakt, ggf. Tabelle)
-- **Was jetzt wichtig ist** (Auffälligkeiten, Fehler, offene Fragen)
-- **Nächster Schritt** (konkreter Vorschlag)
-
-→ System-Prompt: "Beende jeden Turn mit einer kompakten Zusammenfassung
-  fuer den Nutzer — nicht die Tool-Call-Details wiederholen, sondern
-  das Ergebnis auf den Punkt bringen. Was muss der Nutzer wissen?"
-
-### Faktenbasiertes Arbeiten — kein Raten (Priorität: kritisch)
-
-Disco muss **strikt faktenbasiert** arbeiten. Keine Annahmen, kein
-Raten, keine "könnte sein"-Aussagen ohne Beleg. Alles muss
-nachvollziehbar auf Kontext und Dateiinhalten basieren.
-
-Konkret:
-- Wenn Disco eine Klassifikation vorschlägt → muss er sagen **woher**
-  er das hat (welche Datei, welche Seite, welcher Kontext-Eintrag)
-- Wenn Disco unsicher ist → offen sagen "das kann ich aus den
-  vorliegenden Daten nicht sicher ableiten" statt zu raten
-- Wenn Disco eine Zuordnung macht → Quelle zitieren
-  (z.B. "laut VGB A.3, Seite 134: Bauteiltyp VGBK_A1 → DCC-Set ...")
-- Wenn Disco Ergebnisse zusammenfasst → auf die Tool-Results
-  verweisen, nicht auf eigenes "Wissen"
-
-Das ist verwandt mit Anti-Halluzination, aber geht weiter: nicht nur
-"kein Fertig ohne Tool-Call", sondern "keine Aussage ohne Beleg".
-
-→ System-Prompt: "Du arbeitest ausschliesslich faktenbasiert. Jede
-  Aussage, Klassifikation oder Zuordnung muss auf konkreten Daten
-  beruhen (Tool-Result, Dateiinhalt, DB-Eintrag, Kontext-Dokument).
-  Wenn Du etwas nicht sicher weisst: sag es offen. Raten ist verboten."
+Ziel: Disco nutzt openpyxl routiniert wie Cowork — kein eigenes
+„Formatierungs-Tool", sondern freies Python mit einem guten Playbook.
 
 ---
 
 ## Chat-Funktionalität
 
-### Kontext-Komprimierung / Conversation-Compaction (Priorität: hoch)
+### Chat haengt nach Foundry `response.failed` (Bug, Priorität: hoch — aus UAT 2026-04-20)
 
-Bei langen Sessions wächst der Conversation-Kontext (alle bisherigen
-Messages + Tool-Results). Irgendwann stösst GPT-5 ans Context-Window
-(272k Tokens) oder die Antworten werden langsam/teuer.
+**Symptom:** Waehrend ein Flow mit demselben Modell-Deployment lief
+(`gpt-5.1_prod`, Flow #4 dcc_repredict_lagerhalle), brach ein Agent-
+Turn mit "FEHLER: Foundry meldet Fehler: unbekannt" ab. Danach blieb
+der Chat in "Disco denkt..." haengen — neue User-Nachrichten
+liefen ins Leere, auch nach Browser-Reload (Cmd-R). Einziger Ausweg
+war ein **Prozess-Neustart des Servers**.
 
-Claude Cowork macht regelmässig eine **Compaction**: fasst den
-bisherigen Verlauf zusammen, ersetzt alte Messages durch eine
-kompakte Zusammenfassung, behält die wichtigsten Fakten.
+**Vermutete Ursache:** Nach `response.failed` zeigt
+`previous_response_id` noch auf die vergiftete Response; Foundry
+kann die Chain nicht weiterbedienen, der Agent-Loop blockiert still
+im naechsten Stream-Aufruf (kein 400, kein Timeout sichtbar). Der
+Trigger-Fehler selbst war wahrscheinlich ein **429 / Quota-Limit**
+durch den parallel laufenden Flow (siehe Eintrag "Getrennte Modell-
+Deployments" unter Flows).
 
-Disco sollte das auch können:
-- **Automatisch** wenn der Kontext > X% des Windows erreicht
-- **Oder manuell** wenn der User sagt "fass zusammen"
-- Die Zusammenfassung geht in `.disco/sessions/<datum>.md`
-  (für spätere Referenz)
-- Im Chat bleibt nur die komprimierte Version + die letzten N Turns
+**Teil-Fix bereits in Dev:** Reichere Fehlermeldung in
+`src/disco/agent/core.py` — statt "unbekannt" werden `code`, `type`
+und `message` aus `event.response.error` extrahiert und geloggt.
+Hilft beim Diagnostizieren, heilt aber den Hang nicht.
 
-Technisch: Die Responses API hat `previous_response_id` — wir können
-einen neuen Response starten mit einer komprimierten Zusammenfassung
-als Input, statt der ganzen Conversation-Kette. Oder die API bietet
-selbst ein `compact`-Feature (prüfen: `client.responses.compact()`
-existiert im SDK).
+**Noch zu bauen:**
+1. Nach `response.failed` die `previous_response_id` sofort auf NULL
+   setzen (Chain abbrechen, frischer Start beim naechsten User-Input).
+2. Server-seitigen WebSocket-Keepalive haerten: wenn der Agent-
+   Turn-Generator haengt, nach Timeout (z. B. 5 min) abbrechen und
+   dem Client ein Error-Event schicken, statt stumm zu blockieren.
+3. Im UI: Wenn "Disco denkt..." laenger als z. B. 90 s, eine
+   Hinweisbox mit "Neuen Turn starten"/"Verbindung ruecksetzen"
+   anzeigen.
 
-→ Umsetzung: SDK-Feature prüfen, sonst selbst bauen (Zusammenfassungs-
-  Prompt → neuer Response-Anker → alte Chain verwerfen).
+Schwesternbug zu "No tool output found" oben — gleicher Mechanismus
+(verseuchte Chain), anderer Trigger (response.failed statt offener
+Tool-Call).
 
-### Memory-Funktion härten — Disco verliert alles bei Chat-Reset (Priorität: hoch — aus UAT 2026-04-20)
+---
 
-Beobachtung beim Chat-Reset in Prod (nach Modellwechsel gpt-5 →
-gpt-5.1_prod): sobald die Conversation-History leer ist, weiß Disco
-praktisch nichts mehr über das Projekt. Disco-alt (Agent-Version:29)
-hat über Monate Gespräche nichts in `.disco/memory/` hinterlassen —
-die einzigen dauerhaften Fakten sind in `README.md` / `NOTES.md`,
-und das auch nur wenn der User sie dort abgelegt hat.
+## Modell-Einstellungen (Reasoning, Verbosity, …)
 
-Folge: Chat-Reset = Amnesie. Das widerspricht der CLAUDE.md-Zusage,
-dass `.disco/` das „Hirn" des Projekts ist.
+### Reasoning- und Modell-Parameter bewusst steuern (offen, kein konkreter Plan — Beobachtung 2026-04-21)
 
-Ursachen (zu prüfen):
-- Skill `project-onboarding` ruft `memory_read` nur passiv ab, schreibt
-  aber nichts zurück, wenn Disco etwas Wichtiges dazulernt.
-- Es gibt kein implizites „merk Dir das" — Disco muss explizit
-  `memory_write`/`memory_append` aufrufen, und der System-Prompt
-  fordert das nicht genug ein.
-- Kein automatischer Snapshot am Session-Ende, der den Gesprächs-
-  Verlauf destilliert (ähnlich Conversation-Compaction oben, aber
-  mit Ziel „persistentes Projekt-Gedächtnis" statt „Kontext kürzen").
+**Beobachtung Nutzer:** Wir rufen heute sowohl den Agent-Chat als auch
+die Flows mit **Default-Modell-Parametern** auf. Das ist für einfache
+Anfragen ok, aber wir hebeln damit einen Hebel nicht, den GPT-5.1
+mitbringt.
 
-**Ist-Zustand — zu viele Gedächtnis-Orte, zu viele Tools:**
+- Bei **komplexen Chat-Anfragen** (Multi-Tool-Analyse, Cross-Source-
+  Reasoning, SOLL/IST-Vergleich) würde ein höheres Reasoning-Budget
+  (`reasoning.effort = "high"` statt Default) wahrscheinlich bessere
+  Ergebnisse bringen — zu Lasten von Latenz + Kosten.
+- Bei **Flow-Prompts** (DCC-Klassifikation pro Dokument, Metadaten-
+  Extraktion, Duplikat-Check) ist die Frage anders: der Flow läuft
+  N×1000 Mal, da zählt Kosten/Durchsatz pro Einzel-Call mehr als die
+  letzten paar Qualitätsprozente. Dort ist evtl. `effort = "minimal"`
+  oder `"low"` sinnvoll als Default.
 
-Disco betreibt heute **zwei parallele Memory-Systeme nebeneinander**:
+**Parameter, die heute nicht gesteuert werden (aber evtl. sollten):**
+- `reasoning.effort` (minimal / low / medium / high) — GPT-5/5.1
+- `reasoning.summary` (auto / concise / detailed) — für Reasoning-
+  Events im Live-Stream
+- `text.verbosity` (low / medium / high) — kürzere/längere Antworten
+- `max_output_tokens` — wir haben den Tool-Loop gedeckelt, aber nicht
+  die Token-Antwortlänge pro Turn
+- `temperature` / `top_p` — falls für deterministische Flows relevant
 
-- **System A — Cline-Style Memory Bank** (`.disco/memory/`):
-  `MEMORY.md`, `activeContext.md`, `progress.md`, `systemPatterns.md`,
-  `techContext.md`, `glossary.md`, `decisions/ADR-NNN-*.md`.
-  Tools: `memory_read`, `memory_write`, `memory_list`, `memory_append_adr`.
-- **System B — Project Notes** (`NOTES.md` im Projekt-Root):
-  Tools: `project_notes_read`, `project_notes_append`.
-- Plus **`README.md`** als dritte Quelle (heute User-Eigentum,
-  via `fs_read` gelesen).
+**Offene Designfragen:**
+- **Chat:** „Deep-Mode"-Toggle im UI („für diese Frage bitte mit
+  maximalem Reasoning"), oder soll Disco das selbst einschätzen?
+  Vorbild Claude Cowork: „Extended Thinking"-Button.
+- **Flow-SDK:** `FlowRun.model_params` pro Flow konfigurierbar machen
+  (im Flow-README oder `runner.py`), mit sinnvollen Defaults je Flow-
+  Typ (Klassifikation: low; komplexe Analyse: high).
+- **Kostenmodell:** Reasoning-Tokens werden von Azure gesondert
+  abgerechnet — bei `effort=high` können die Kosten pro Turn spürbar
+  steigen. In den Kosten-Tracker einbauen.
+- **Experimente:** Baseline vs. high-effort auf demselben Testset
+  (z.B. 20 DCC-Klassifikationen aus `bew-dcc-optimizer`) — lohnt sich
+  der Aufwand qualitativ?
 
-→ 9 mögliche Orte, 6 Tools. GPT-5.1 kann nicht zuverlässig
-entscheiden, wann „Tabelle X hat Spalten Y" nach `systemPatterns.md`,
-`techContext.md` oder `glossary.md` gehört — also landet es nirgends.
-Das Cline-Schema ist konzeptionell elegant, in der Praxis aber
-fragmentiert. Claude Code und Cowork kommen mit **einer** Projekt-
-Datei aus (`CLAUDE.md` bzw. Canvas). Unterschied: Claude hat gutes
-Judgement, GPT-5.1 braucht klarere Regeln — aber **bei weniger
-Dateien**, sonst wird die Regel-Liste zu lang.
+**Wann angehen:** kein akuter Trigger, aber spätestens wenn Disco bei
+komplexen Chat-Anfragen schwächelt oder Flow-Kosten höher sind als
+nötig. Ursprung: Nutzer-Beobachtung 2026-04-21 bei Backlog-Review.
 
-**Zielarchitektur: 3 Dateien, 3 Zwecke, klare Trigger**
+---
 
-| Datei | Eigentümer | Zweck | Schreib-Pattern |
-|---|---|---|---|
-| `README.md` | **User + Disco gemeinsam** | Projektziel, Leitplanken, Nutzer-Kontext | Disco schlägt Änderungen vor, User bestätigt; Disco darf eigenständig strukturelle Fortschreibungen (z. B. neuer Abschnitt "Datenquellen") machen |
-| `NOTES.md` | **Disco** | Chronologisches Logbuch | Append pro Arbeitspaket (Datum + Titel + 3–6 Zeilen) |
-| `MEMORY.md` | **Disco** | Destilliertes Wissen (nicht chronologisch) | Snapshot, kuratiert; Kapitel §Tabellen / §Konventionen / §Entscheidungen / §Lookup |
+## Projekt-Template / Wissens-Dateien
 
-**Weg kommen:**
-- `activeContext.md`, `progress.md`, `systemPatterns.md`,
-  `techContext.md`, `glossary.md` → konsolidiert als Abschnitte in
-  `MEMORY.md` (Überschriften-Struktur statt eigene Dateien).
-- `decisions/ADR-*.md` → ein Abschnitt „§Entscheidungen" in `MEMORY.md`.
-  Wenn das später wirklich wächst, kann man ADRs nachrüsten — heute
-  Disziplin-Overhead ohne Nutzen.
-- `project_notes_*`-Tools → ersetzt durch `memory_*` auf `NOTES.md`.
-- `memory_list`, `memory_append_adr` → weg.
+### Projekt-Template radikal entrümpeln — nur README/DISCO/NOTES (Beobachtung 2026-04-21, noch nicht entscheiden)
 
-**Neue Tool-Oberfläche (4 Tools):**
-- `memory_read(file)` — `README.md`, `NOTES.md`, `MEMORY.md`
-  (andere Dateien: Fehler; `fs_read` für Memory-Dateien gesperrt).
-- `memory_write(file, content)` — nur `MEMORY.md` und `README.md`
-  (Snapshot). `README.md` nur mit expliziter User-Freigabe in der
-  Session oder nach „Schreib das bitte in die README"-Signal.
-- `memory_append(file, heading, content)` — `NOTES.md` (neuer
-  Abschnitt mit Datum) oder `MEMORY.md` (neues Kapitel).
-- Read-API für README bleibt auch via `fs_read` möglich, zentrale
-  Schreibdisziplin läuft aber über `memory_*`.
+**Status:** Beobachtung aus Prod-Projekt `bew-dcc-classification-optimizer`
+(seit 20.04. aktiv). Noch **nicht umsetzen** — erst weiter beobachten,
+ob sich das Bild bei anderen Projekten bestätigt.
 
-**System-Prompt-Regeln (als SOP für GPT-5.1):**
+**Befund:** Von den 9 Wissens-Orten, die das Projekt-Template heute
+anlegt, werden **3 gelebt und 6 sind tot**:
 
-```
-SESSION-START (Skill project-onboarding):
-1. memory_read("README.md")  -> Projektziel erfassen
-2. memory_read("MEMORY.md")  -> destilliertes Wissen laden
-3. memory_read("NOTES.md")   -> letzten Abschnitt (Tail)
-   Wenn README fehlt ODER Projektziel unklar:
-     -> Disco fragt den User explizit: "Was ist das Ziel dieses
-        Projekts? Welche Daten, welcher Output?"
-     -> Antwort wird destilliert, als Vorschlag zur README
-        zurueckgegeben; bei User-OK via memory_write in README.md
-        geschrieben.
+| Datei / Ordner | Zustand | Schreibt rein |
+|---|---|---|
+| `DISCO.md` | **gut gepflegt** — Konventionen, 7-Schritt-Vorgehensmodell, aktueller Fokus | Disco |
+| `NOTES.md` | **gut gepflegt** — chronologisch, Datum + Titel + Details | Disco |
+| `README.md` | **tot** — Template-Platzhalter `*(Was soll am Ende...)*` stehen seit Anlage drin | Nutzer (theoretisch) |
+| `context/_manifest.md` | **tot** — „leer — Disco füllt beim nächsten…", trotz 6 echter Kontextdateien | Disco (theoretisch) |
+| `.disco/plans/` | **leer** | — |
+| `.disco/sessions/` | **leer** | — |
+| `.disco/context-extracts/` | **leer** (Extrakte landen in der DB, nicht im FS) | — |
+| `.disco/context-summaries/` | **leer** | — |
+| `.disco/local-skills/` | **leer** (Feature noch nicht gebaut) | — |
 
-WAEHREND DER ARBEIT — wenn Du Folgendes lernst, schreib es SOFORT:
-- Tabellen-Zweck                      -> MEMORY.md §Tabellen
-- User-Praeferenz oder Konvention     -> MEMORY.md §Konventionen
-- Entscheidung (Engine, Ordner-Layout)-> MEMORY.md §Entscheidungen
-- Hersteller-/Typen-Zuordnung         -> MEMORY.md §Lookup
+**Zwei strukturelle Fehler sichtbar:**
 
-TURN-ENDE (sichtbares Arbeitspaket fertig):
-  memory_append("NOTES.md",
-                heading="2026-04-20 12:15 — <titel>",
-                content=<3-6 Zeilen>)
+1. **Template-Skelette sehen zu „fertig" aus.** In DISCO.md stehen
+   BEIDE Konventionen-Abschnitte parallel: der leere Template-Block
+   UND der echte gefüllte Block, den Disco unten drangehängt hat.
+   GPT-5.1 überschreibt Template-Platzhalter nicht, er ignoriert sie
+   oder appended. Dasselbe Muster bei README und `_manifest.md`: das
+   Modell sieht ein Skelett, denkt „ist ja schon strukturiert",
+   schreibt nicht rein.
 
-VOR CHAT-RESET / COMPACTION:
-  Destilliere die Session -> memory_write("MEMORY.md", ...)
-```
+2. **Session-Start-Routine prüft Template-Füllstand nicht.** Die
+   README bleibt seit 20.04. im Template-Zustand — Disco hat nie
+   gefragt „Deine README ist leer, was ist das Projektziel?". Das war
+   Teil der angedachten Memory-SOP, greift aber im Verhalten nicht.
 
-**Projektziel-Abfrage am Session-Start (neuer Mechanismus):**
-Wenn `README.md` fehlt, leer ist oder kein klar erkennbares
-Projektziel enthält (erster Absatz nicht aussagekräftig), muss
-Disco den User proaktiv fragen — bevor er mit fachlicher Arbeit
-anfängt. Antwort wird als Zusammenfassung zurückgespielt, der
-User sagt „ja so" oder „ergänze X", dann schreibt Disco das
-als strukturierten README-Abschnitt ins Projekt. Analog für
-Daten-Quellen-Abschnitt, wenn `sources/` befüllt ist aber die
-README sie nicht nennt.
+**Richtung, wenn wir es irgendwann angehen:**
 
-**Migration der Bestands-Projekte:**
-Für bestehende Projekte mit `.disco/memory/`-Dateien:
-- Einmal-Skript konsolidiert `activeContext/progress/systemPatterns/
-  techContext/glossary/decisions/*` in `MEMORY.md` (mit Kapitel-
-  Überschriften, Datum-gestempelt).
-- Alte Dateien bleiben als Backup unter `.disco/memory/.legacy/`
-  liegen, bis User bestätigt dass nichts fehlt.
+| Datei | Eigentümer | Zweck |
+|---|---|---|
+| `README.md` | **Nutzer** | Projektziel, Auftraggeber, Frist. Klein, stabil. |
+| `DISCO.md` | **Disco** | Destilliertes Wissen: Konventionen, Vorgehen, Fokus, Lookup-Pfade, Glossar, Entscheidungen. Thematisch gegliedert, wachsend, überschreibbar. |
+| `NOTES.md` | **Disco** | Chronologisches Logbuch. Append-only. |
 
-**Abgrenzung zu Conversation-Compaction (oben):**
-Conversation-Compaction kürzt das Kontextfenster innerhalb einer
-Session. Memory persistiert Wissen **über Sessions hinweg**.
-Technisch ähnlich (Destillation via LLM), Zweck unterschiedlich.
-Die Session-Ende-Destillation (→ MEMORY.md) kann den
-Compaction-Mechanismus mitbenutzen.
+**Raus aus dem Template:**
+- `context/_manifest.md` — Inhalte als Abschnitt `§Kontext` in DISCO.md
+- `.disco/plans/` — Pläne in NOTES pro Arbeitspaket oder DISCO „Aktueller Fokus"
+- `.disco/sessions/` — erst anlegen, wenn Conversation-Compaction gebaut ist
+- `.disco/context-extracts/` + `.disco/context-summaries/` — Extrakte leben in der DB (`agent_md_extracts` etc.)
+- `.disco/local-skills/` — erst, wenn das Feature da ist
 
-### Iterativer, gesprächiger Tool-Loop wie Claude Code (Priorität: hoch)
+`.disco/` behielte nur `flows/` (Runtime-State für Flow-Worker). Alles
+andere: weg.
 
-**Beobachtung des Nutzers:** Disco macht viele Tool-Calls hintereinander
-stillschweigend und gibt erst am Ende einen großen Text-Block heraus.
-Was wir wollen: Frage → Tool → **Ergebnis analysieren** → nächstes
-Tool (mit sichtbaren Gedanken dazwischen), bis die Anfrage erledigt ist.
+**Template-Entscheidung (wenn wir ziehen):**
+- Entweder **leere Dateien** (nur H1 + 1 Zeile Hinweis), damit Disco
+  auf leerem Blatt anfängt zu schreiben statt Template-Lücken zu
+  ignorieren.
+- Oder **gar nicht initial anlegen** — DISCO.md / NOTES.md entstehen
+  beim ersten Schreibzugriff.
 
-**Stand heute:**
-- Das Framework ist iterativ: `core.py` hat `MAX_TOOL_ROUNDS = 48`,
-  pro Runde Response → Tools → Results → nächste Runde, bis das Modell
-  keine Tool-Calls mehr macht.
-- Das Modell-Verhalten ist das Problem: GPT-5 batcht gerne mehrere
-  Tool-Calls pro Runde (parallel) und schweigt zwischen den Runden
-  („reine Denk-Runden" ohne Text-Output).
-- Claude Code macht's anders: Claude schreibt aktiv Gedanken zwischen
-  Tool-Calls („Ich schaue mir X an, dann Y"). Das ist Modell-Verhalten,
-  nicht Infrastruktur.
+**Session-Start-Regel (neu):** wenn README-Platzhalter noch drin sind
+(`*(Was soll am Ende...)*`, `*(Welche Daten...)*`), muss Disco den
+Nutzer aktiv nach Projektziel + Kontext fragen und die Antwort als
+strukturierten Abschnitt in die README schreiben — **bevor** er mit
+fachlicher Arbeit anfängt.
 
-**Was fehlt, um Disco-Runs gesprächiger und länger zu machen:**
+**Warum nicht jetzt:** Das Bild stammt aus einem einzigen Projekt.
+Erst beobachten, ob
+- andere Projekte denselben Pattern zeigen,
+- ob `.disco/context-extracts/` bei einem Projekt mit aktiver
+  Context-Onboarding-Routine vielleicht doch genutzt wird,
+- ob die Template-Skelette in DISCO.md überschrieben werden, sobald
+  die Session-Start-SOP schärfer ist (ohne das Template zu ändern).
 
-1. **System-Prompt-Regel „Narrate-while-acting":** explizit fordern,
-   dass nach jedem wichtigen Tool-Result ein kurzer Satz kommt, was
-   das Ergebnis bedeutet und was als Nächstes getan wird. Nicht am
-   Ende alles auf einmal, sondern laufend.
+**Offene Fragen für später:**
+- Betrifft die Migration bestehende Projekte? → Auto-Migration beim
+  Projekt-Open („leere Template-Stubs entfernen, wenn unberührt seit
+  Projekt-Anlage")? Oder manuell-opt-in?
+- Was passiert mit dem `_manifest.md`-Konzept in Projekten, die es
+  doch gefüllt haben?
+- Sollen die Stubs lazy angelegt werden (on-first-write), oder
+  gar nicht?
 
-2. **Reasoning-Events streamen:** GPT-5 hat `reasoning` als
-   Response-Type (zwischen Tool-Calls passiert „inneres Denken").
-   Aktuell nicht live im UI sichtbar — wenn wir es als Text darstellen,
-   sieht der Nutzer, was Disco gerade überlegt.
-
-3. **Selbst-Überprüfung nach jedem Meilenstein:** Regel im
-   System-Prompt: „Nach N Tool-Calls: kurz innehalten und prüfen,
-   ob Du dem Ziel näher kommst. Falls nein: anderen Ansatz wählen
-   oder beim Nutzer rückfragen."
-
-4. **Adaptive Tool-Rundungen:** `MAX_TOOL_ROUNDS=48` ist generous
-   für normale Anfragen, aber für umfassende Analysen (10k Dokumente)
-   reicht es nicht. Diese Klasse an Aufgaben gehört ohnehin in einen
-   **Flow**, nicht in einen Chat-Turn. System-Prompt-Regel:
-   „Bei > N Items: Flow empfehlen, nicht selbst durchgehen."
-
-5. **UI-Feedback für lange Runs:** Progressbar oder Live-Zähler
-   „Runde 7/48, 3 Tool-Calls bisher". Damit der Nutzer sieht, dass
-   Disco arbeitet, nicht hängt.
-
-**Ziel:** Disco soll lange Agent-Runs fahren können (Datenanalysen über
-mehrere Minuten, mit 20+ Tool-Calls), und dabei die ganze Zeit sichtbar
-und nachvollziehbar arbeiten — wie Claude Code. Der Fallback für
-richtig große Läufe (10k Items, Stunden) ist der Flow.
-
-→ Umsetzung: System-Prompt-Regeln (Abschnitt "Arbeitsstil" erweitern),
-  Reasoning-Events im `core.py` streamen + im Frontend als dezente
-  „Gedanken"-Zeilen rendern, Tool-Call-Zähler in den Status-Bar.
-
-### "No tool output found" nach Crash/Stop (Bug, Priorität: hoch)
-
-Wenn ein Turn crasht oder per Stop-Button abgebrochen wird, bleibt
-die Foundry-Conversation mit einem offenen Function-Call hängen.
-Der nächste Turn im selben Thread scheitert dann mit:
-"No tool output found for function call call_xxx"
-
-**Aktueller Workaround:** foundry_thread_id auf NULL setzen (frische
-Chain). Das verliert den bisherigen Multi-Turn-Kontext.
-
-**Richtiger Fix:** Bei Stop/Crash:
-1. Prüfen ob offene Function-Calls in der letzten Response sind
-2. Synthetische "aborted"-Outputs senden (haben wir beim
-   MAX_TOOL_ROUNDS-Limit schon gebaut)
-3. Erst DANN foundry_thread_id auf die bereinigte Response setzen
-
-Alternative: Beim nächsten Turn automatisch erkennen dass die Chain
-kaputt ist (400-Fehler abfangen), dann selbst heilen (NULL setzen
-+ Retry).
-
-### Antwort unterbrechen / Stop-Button (Priorität: hoch — umgesetzt v20)
-
-Aktuell lässt sich eine laufende Disco-Antwort nicht abbrechen. Wenn
-Disco einen langen Turn fährt (viele Tool-Calls, falscher Ansatz),
-muss der User warten.
-
-Lösung: **Stop-Button** im Chat-Input-Bereich, der:
-- Den WebSocket schließt (oder ein Cancel-Signal sendet)
-- Den aktuellen AgentService-Turn abbricht
-- Die bisherige Teil-Antwort im Chat stehen lässt
-- Status auf "Abgebrochen" setzt
-
-Vorbild: Claude.ai, ChatGPT — alle haben einen Stop-Button während
-des Streamings.
+Ursprung: UAT-Review 2026-04-21, Nutzer-Beobachtung: „Disco nutzt
+einige Dateien nicht (manifest.md und pläne auch nicht). Ggs
+brauchen wir auch diese Dokumente nicht und wir lassen disco das
+ganze Wissen in einer Datei sammeln."
 
 ---
 
 ## UI / Layout
 
-### Explorer/Viewer zeigt veraltete Dateien (Bug, Priorität: hoch)
+### ~~PDF-Viewer funktioniert noch nicht (Bug)~~ — gefixt 2026-04-21
 
-Wenn Disco eine Datei ändert (z.B. README.md aktualisiert), zeigt
-der Explorer/Viewer noch den alten Stand. Der User sieht veralteten
-Inhalt und denkt, Disco hat nichts gemacht.
+Ursache war `pdfjs-dist@4.0.379`: ab 4.x ist pdf.js ESM-only.
+`<script src="…pdf.min.js">` ohne `type="module"` scheitert mit
+SyntaxError, `window.pdfjsLib` bleibt undefined → Viewer zeigt
+"pdf.js nicht geladen".
 
-Ursache: Explorer-Tree und Viewer werden nach Disco-Turns zwar
-refresht (loadExplorer + loadDbTables), aber der **Viewer-Inhalt
-selbst wird nicht neu geladen** wenn dieselbe Datei schon offen ist.
-
-Fix:
-- Nach jedem `done`-Event im Chat: wenn eine Datei im Viewer offen
-  ist, automatisch neu laden (fetch + re-render)
-- Oder: Viewer zeigt einen "Aktualisieren"-Button wenn die Datei
-  sich seit dem letzten Laden geändert hat
-
-### Splitter Chat ↔ Viewer frei verschiebbar (Bug/Feature)
-
-Der Trenner zwischen Chat (Mitte) und Viewer (rechts) soll **frei
-verschiebbar** sein — manchmal braucht man einen größeren Viewer
-(z.B. für breite Excel-Tabellen oder PDF-Seiten).
-
-Status: Splitter-Code ist da (`splitter-right`), aber möglicherweise
-funktioniert das Drag nicht sauber. Prüfen + fixen.
-
-### PDF-Viewer funktioniert noch nicht (Bug)
-
-pdf.js-Integration ist im Code vorhanden, aber beim User-Test
-funktioniert der PDF-Viewer nicht. Mögliche Ursachen:
-- pdf.js CDN-Bundle lädt nicht (CORS, Version)
-- Canvas-Rendering scheitert
-- Pfad-Problem beim Abruf der PDF über die File-API
-
-→ Debuggen: Dev-Tools → Console öffnen, PDF im Explorer klicken,
-  Fehlermeldung lesen.
+Fix: auf `pdfjs-dist@3.11.174` gepinnt (letzte UMD-Version), in Dev
+*und* Prod. Browser-Reload (Cmd+Shift+R), dann PDF erneut öffnen.
 
 ---
 
@@ -597,7 +369,9 @@ Kosten verursachen.
    - → Kosten-Schätzung VOR dem Run, Budget-Limit WÄHREND des Runs
 
 **Kurzfristig (jetzt):**
-- Im `extract_pdf_to_markdown`-Tool: Warnung wenn PDF > 200 Seiten
+- Im Flow `pdf_to_markdown`: Budget-Check vor dem Run
+  (Summe `estimated_cost_eur` aller gerouteten PDFs), bei > Limit
+  Rückfrage / Dry-Run-Mode
 - Im Context-Onboarding-Skill: nach > 5 PDFs oder > 300 Seiten
   kumuliert Rückfrage an den User
 - Token-Zähler im Chat-Status-Bar unten (haben wir schon teilweise)
@@ -619,9 +393,10 @@ einen Kostenfresser hineinrennt.
 1. **Agent-Loop-Deckel:** Disco in eine Schleife schicken
    (z.B. "rufe list_skills 40× hintereinander auf") — bricht er bei
    Round 24 ab? Was sieht der Nutzer?
-2. **DI-Page-Limit:** PDF mit > 200 Seiten durch `extract_pdf_to_markdown`
-   jagen — kommt die Warnung? Wird der Call trotzdem ausgeführt oder
-   blockiert (aktuell: nur Warnung, keine Blockade).
+2. **DI-Page-Limit:** PDF mit > 200 Seiten durch Flow `pdf_to_markdown`
+   (Engine `azure-di-hr`) jagen — kommt eine Warnung? Wird der Call
+   trotzdem ausgeführt oder blockiert? (aktuell: weder Warnung noch
+   Blockade — Policy muss erst definiert werden).
 3. **Flow-Budget:** Flow-SDK hat `budget_eur`-Feld (siehe flows/sdk.py).
    Mini-Flow schreiben, der bewusst das Budget überschreiten würde —
    stoppt der Worker wirklich, oder läuft er einfach weiter?
@@ -637,203 +412,52 @@ einen Kostenfresser hineinrennt.
 Status: Nutzer-Beobachtung — "Bei DI sind keine Kosten sichtbar.
 Müssen vielleicht vorher für bestimmte Parameter gesetzt werden."
 
-**Was der Code aktuell tut** (`functions/docint.py`):
+**Was der Code aktuell tut** (`src/disco/pdf/markdown.py`):
 
-- `extract_pdf_to_markdown` liefert `estimated_cost_eur` im Tool-Result
-  zurück (0.01 €/Seite für `prebuilt-layout`, 0.005 €/Seite sonst — hardcoded).
-- Berechnung: `n_pages * cost_per_page`.
+- Der Engine-Dispatcher liefert `estimated_cost_eur` im `meta`-Dict
+  (docling-standard = 0, azure-di = 0.01 €/Seite, azure-di-hr =
+  0.015 €/Seite — hardcoded).
+- Der Flow `pdf_to_markdown` ruft `run.add_cost(eur=cost)` fuer jede
+  Datei, damit das UI die akkumulierten Kosten anzeigt.
 
 **Mögliche Gründe, warum der Nutzer nichts sieht:**
 
-1. **UI rendert das Feld nicht prominent.** Tool-Result-Block zeigt JSON,
-   aber `estimated_cost_eur` geht in der Masse unter. → im Tool-Call-Block
-   (index.html) eigene Cost-Zeile / Badge, z.B. "≈ 0,12 € (12 Seiten)".
+1. **UI rendert das Feld nicht prominent.** Flow-Run-Kacheln zeigen
+   zwar die kumulierten Kosten, aber pro Dokument fehlt die Zahl.
+   → im Run-Items-Block eigene Cost-Spalte, z.B. "≈ 0,12 € (12 Seiten)".
 2. **Disco erwähnt Kosten nicht aktiv im Live-Kommentar.** System-Prompt
-   hat keine Regel dazu. → Ergänzung: "Nach jedem DI-Call eine Zeile
+   hat keine Regel dazu. → Ergänzung: "Nach jedem DI-Flow-Run eine Zeile
    `≈ 0,XX € für N Seiten` in die Assistant-Message."
-3. **Andere DI-Nutzungsstellen haben keine Kostenrückgabe.**
-   z.B. Context-Onboarding, Flow-Worker, wenn sie DI direkt aufrufen
-   statt über das Tool. → Einheitlicher Helper (`_di_cost(pages, model)`)
-   und konsequente Propagation.
-4. **Modell liefert `n_pages=0`.** Manche PDF-Varianten (gerenderte
+3. **Modell liefert `n_pages=0`.** Manche PDF-Varianten (gerenderte
    Bilder ohne Page-Metadaten) — dann ist Cost=0. → Fallback auf
-   tatsächliche Seitenanzahl des Input-PDFs (pypdf).
+   tatsächliche Seitenanzahl des Input-PDFs (PyMuPDF).
 
 **Test + Fix in einem Rutsch:**
 
-1. Bekanntes PDF (z.B. 20 Seiten) durch `extract_pdf_to_markdown` jagen
-2. Tool-Result prüfen — kommt `estimated_cost_eur` sauber an?
+1. Bekanntes PDF (z.B. 20 Seiten) durch Flow `pdf_to_markdown` jagen
+2. `agent_pdf_markdown` + Flow-Run-Kachel prüfen — kommt `estimated_cost_eur` sauber an?
 3. Assistant-Message prüfen — erwähnt Disco die Kosten?
 4. UI-Block prüfen — steht die Zahl irgendwo sichtbar?
 
 Danach die Lücken gezielt schließen.
 
-### Batch-Aufgaben GRUNDSÄTZLICH über Pipeline (Priorität: kritisch)
+### PDF-Extraktion: 3-Tier-Pipeline (DONE 2026-04-22)
 
-Aktuell läuft die DI-Extraktion von Context-PDFs als Tool-Call
-im Chat-Turn. Bei vielen/großen PDFs (16 PDFs, 1000+ Seiten) dauert
-das 10-20 Minuten — der Turn kann in ein Timeout laufen und der
-User sieht "Disco denkt..." ohne Fortschritt.
+**Status:** Umgesetzt. Pipeline `pdf_routing_decision` → `pdf_to_markdown`
+mit Engines `docling-standard` / `azure-di` / `azure-di-hr`. Agent liest
+nur noch ueber `pdf_markdown_read` aus `agent_pdf_markdown`. Altes
+`pdf_extract_text` (pypdf), `extract_pdf_to_markdown` (DI-Tool) und
+VLM-Varianten (granite-mlx / smol-mlx) sind entfernt.
 
-**Langzeit-Lösung:** DI-Extraktion als **Pipeline-Job** auslagern:
-- Disco triggert: `start_job(type="di-extract", target="context")`
-- Worker läuft im Hintergrund, extrahiert PDF für PDF
-- Fortschritt sichtbar (z.B. "7/16 PDFs fertig")
-- Bei Fehler: einzelne PDF als gescheitert markieren, Rest weiter
-- Am Ende: Disco wird benachrichtigt, schreibt Summaries
-
-**Grundsatz:** Alles was über mehr als ~5 Dateien iteriert oder
-mehr als 2 Minuten dauert, gehört in eine Pipeline — nicht in einen
-Chat-Turn. Das betrifft:
-- DI-Extraktion (16 PDFs = 10-20 Min)
-- Context-Summaries schreiben (16 Dateien = 48+ Tool-Calls)
-- Sources-Registrierung bei 1000+ Dateien
-- Jede Form von Bulk-LLM-Klassifikation
-
-Im Chat-Turn soll Disco nur: Pipeline **definieren**, **starten**,
-**Fortschritt abfragen**, **Ergebnis zusammenfassen**. Die eigentliche
-Arbeit läuft im Worker-Prozess.
-
-Das ist Teil des größeren Pipeline-Features (Phase 2c) und der
-wichtigste nächste Baustein für den MVP. Solange Pipelines nicht
-gebaut sind: MAX_TOOL_ROUNDS=48 + Timeout 30 Min als Quick-Fix.
-
-### PDF-Extraktion: User wählt Engine selbst (Priorität: mittel)
-
-Aktuell gibt es zwei Engines (`pdf_extract_text` = pypdf,
-`extract_pdf_to_markdown` = Azure DI). Der User soll selbst wählen
-können welche Engine pro Datei oder global genutzt wird.
-
-**Geplante Engines (3+1):**
-
-| Engine | Wo | Kosten | Qualität | Use-Case |
-|---|---|---|---|---|
-| **pypdf** | lokal | kostenlos | niedrig (kein OCR, keine Tabellen) | Quick-Check, Source-Bulk |
-| **Azure DI Standard** | Azure EU | ~0.01 €/Seite | hoch (OCR, Tabellen, Struktur) | Context-PDFs (Default) |
-| **Azure DI High-Res** | Azure EU | ~0.02+ €/Seite | sehr hoch (komplexe Layouts) | Schwierige Scans |
-| **Lokale OSS-Engine** | lokal (GPU) | kostenlos | hoch (mit GPU) | Datenschutz-sensitiv, offline |
-
-**Lokale OSS-Engine: MinerU** (https://opendatalab.github.io/MinerU/)
-- Apache 2.0 Lizenz (+ zusätzliche Bedingungen)
-- Unterstützt Apple Silicon GPU (MPS), CUDA, auch pure CPU
-- OCR mit 109 Sprachen, Tabellen → HTML, Formeln → LaTeX
-- Multi-Column, komplexe Layouts, Header/Footer-Entfernung
-- Output: Markdown + JSON
-- Lokal, offline, 0 €/Seite — ideal für Datenschutz + Bulk
-- Installation: Python-Paket (`magic-pdf`), Modelle ~einige GB Download
-- Qualitätsvergleich mit Azure DI: muss getestet werden
-  (insbesondere technische Normen mit komplexen Tabellen)
-
-**Benchmark-Ergebnis (10 diverse PDFs, 2026-04-17):**
-- docling und DI High-Res liefern vergleichbare Qualität
-- docling besser bei: Schaltplänen (+51%), Scans (+82%)
-- DI besser bei: Formularen, Datenblättern, handschriftlichen Teilen
-- Performance: docling 72s (10 PDFs, CPU-only), DI ~5-10s (Cloud)
-- Kosten: docling 0 €, DI ~1 € für 10 PDFs (102 Seiten)
-
-**Max-Quality-Durchlauf (images_scale=2.0, MPS, ACCURATE):**
-- Gesamt 89s für 10 PDFs auf Mac Silicon
-- **Schwäche bei technischen Zeichnungen:** Plankopf wird als
-  Fließtext extrahiert, nicht als Tabelle. DI baut den Plankopf
-  korrekt als Tabelle mit Nr/Blatt/Maßstab/Zeichner/Datum/Status.
-  Für SOLL/IST-Abgleiche über Planköpfe bleibt DI unverzichtbar.
-- docling ersetzt DI also NICHT, sondern ergänzt es für Bulk-Text
-  und Scans.
-
-**Architektur-Entscheidung:**
-- Default-Engine wird **docling** (kostenlos, lokal, MIT-Lizenz)
-- DI bleibt als Premium-Option (wenn User höchste Qualität bei
-  Formularen braucht oder Apple Silicon zu langsam ist)
-- pypdf bleibt für Quick-Checks (1 Seite, nur Text)
-
-**Umsetzung:**
-- `extract_pdf_to_markdown` bekommt einen Parameter `engine`:
-  `"docling"` (Default), `"di-standard"`, `"di-highres"`, `"pypdf"`
-- Im UI/CLI: Projekt-Setting für Default-Engine
-- Im Skill: Engine-Empfehlung je nach Dateityp
-- Kosten-Transparenz: pro Engine die geschätzten Kosten anzeigen
-- docling mit GPU/MPS testen für weitere Beschleunigung
-
-**ToDo — Docling produktiv verfuegbar machen** (aus UAT-Session 2026-04-19):
-- Dependency ist bereits in `pyproject.toml` (`docling>=2.90.0`), aber
-  **kein Produkt-Pfad nutzt sie aktuell** — nur ad-hoc Benchmark-Skripte
-  in einem Testprojekt.
-- **Option A (Tool):** neue Custom Function
-  `markdown_extract_docling(pdf_path, engine_options)` in
-  `src/bew/agent/functions/` — nutzt lokales docling, schreibt Markdown
-  zurueck oder in Tabelle.
-- **Option B (Skill/Flow):** Skill `markdown-extractor` mit Engine-Auswahl
-  + generischer Flow `markdown-extract` der pro Item die gewaehlte Engine
-  aufruft (docling/di-standard/di-highres/pypdf).
-- Im UAT-Projekt `uat-2026-04-19` hat der User Flow 1 mit DI-HighRes gewaehlt
-  (DI ist der erprobte Pfad), aber Docling soll als **gleichwertige Option**
-  zur Verfuegung stehen — bewusste Entscheidung pro Projekt/Lauf.
-- Nicht bloss installieren — auch **aufrufbar** vom Agent/Flow aus.
-
-### High-Resolution-Modus für DI (Teil der Engine-Auswahl oben)
-
-Azure Document Intelligence unterstützt verschiedene Qualitätsstufen.
-Aktuell nutzen wir `prebuilt-layout` im Standard-Modus. Für besonders
-komplexe PDFs (mehrspaltige technische Zeichnungen, kleine Schrift,
-komplexe Tabellen-Layouts) gibt es einen High-Resolution-Modus.
-
-Umsetzen: Parameter `high_resolution: bool = false` im Tool
-`extract_pdf_to_markdown` ergänzen. Wenn true: DI-API mit
-`features=["ocrHighResolution"]` aufrufen. Kostet mehr pro Seite,
-liefert aber bessere Ergebnisse bei schwierigen Scans.
-
-Aktuell: Standard-Qualität reicht für unsere Normen/Richtlinien.
-High-Res erst einbauen wenn wir auf Qualitätsprobleme stossen.
+Alter Text gekuerzt — Entscheidungshistorie: Benchmark-Ergebnis zeigte
+docling-standard ausreichend fuer Text + Tabellen, DI-HighRes (OCR-
+HighResolution) unverzichtbar fuer vector-drawing + Plankoepfe.
+VLM-Varianten waren zu langsam fuer Bulk-Runs und liefern keinen
+Qualitaetsvorteil gegenueber docling-standard.
 
 ---
 
 ## Sicherheit / Projekt-Isolation
-
-### Aktives Projekt eindeutig erkennen (Priorität: hoch)
-
-Disco fragt aktuell zu oft „In welchem Projekt arbeiten wir?",
-obwohl das Projekt über die UI bereits ausgewählt ist und die
-Sandbox (contextvars) es auch kennt. Der Agent sieht die Projekt-
-Info offenbar nicht deutlich genug.
-
-**Ursache (vermutet):**
-- Projekt-Slug + Projekt-Name + Projektziel stehen nicht oder nur
-  schwach im System-Prompt / im ersten Turn-Kontext
-- Disco greift auf `list_projects` zurück statt auf die
-  Sandbox-Info
-
-**Umsetzung:**
-- Beim WebSocket-Connect den aktiven Projekt-Kontext (slug, name,
-  Ziel aus README) als erste System-Message oder als stabile
-  Prompt-Ergänzung einspeisen
-- System-Prompt-Regel: „Das aktive Projekt ist Dir aus dem Kontext
-  bekannt. Frage den Nutzer NUR dann, wenn gar kein Projekt
-  ausgewählt ist."
-- Im `project-onboarding`-Skill: erste Zeile soll das aktive
-  Projekt bestätigen, nicht erfragen
-
-### Nicht ausgewählte Projekte dürfen unsichtbar sein (Priorität: hoch)
-
-Aktuell sieht Disco über `list_projects` ALLE Projekte im Workspace
-— auch die, in denen gerade nicht gearbeitet wird. Das verletzt
-die Mandantentrennungs-Idee, auf der Disco aufgebaut ist.
-
-**Ziel:** Wenn ein Projekt aktiv ist, existieren die anderen für
-Disco schlicht nicht. Kein `list_projects`-Leak, keine Möglichkeit
-per Umweg auf Fremd-Projekte zu joinen.
-
-**Umsetzung:**
-- `list_projects` in Sandbox-Modus: gibt nur das aktive Projekt
-  zurück (oder verschwindet ganz aus der Tool-Liste sobald ein
-  Projekt gesetzt ist)
-- `get_project_details` ebenfalls gescoped: nur aktives Projekt
-- Prüfen: haben andere Domain-Tools (search_documents, etc.) den
-  Scope sauber dicht, oder gibt es noch Lücken?
-- Projekt-Auswahl darf dann nur noch über die UI (Kommandozeile
-  oder Sidebar) passieren, nicht durch Disco selbst
-
-**Eröffnung eines Nachbar-Projekts:** nur mit expliziter User-
-Bestätigung in der UI — nie vom Agenten aus.
 
 ### Projekt-Lifecycle gehört dem Nutzer, nicht dem Agenten (Priorität: hoch — aus UAT 2026-04-20)
 
@@ -915,29 +539,6 @@ echten sensiblen Quellen notwendig.
 
 ## Flows / Worker-System
 
-### Flow-Stoppen-Button im Frontend — UMGESETZT 2026-04-19 (spaet) als Run-Streifen
-
-**Geloest** durch persistenten Run-Streifen unter dem Chat-Header
-(`#run-strip` in `index.html`, neuer Endpoint `/api/workspace/active-runs`):
-
-- Streifen zeigt projekt-uebergreifend alle Runs in Status `running`/`paused`,
-  Polling 3 s.
-- Pro Run eine Zeile: Status-Punkt, #ID, Flow-Name, Projekt-Tag, Progress-Bar,
-  done/total, ⏱ Laufzeit, 💶 Kosten (mit Budget-Anzeige + over-budget-Highlight),
-  `[⏸ Pause]` und `[✕ Cancel]`.
-- Cancel zeigt Bestaetigungs-Modal („Done-Items bleiben"). Force-Variante
-  bewusst NICHT im Streifen — nur ueber Run-Detail-Panel zugaenglich.
-- Bei Status-Wechsel zu `done`/`failed`/`cancelled` → Toast unten rechts
-  mit Final-Stats und Direkt-Link „Details oeffnen".
-- Klick auf #ID oder „Details oeffnen" wechselt Projekt (falls noetig)
-  und oeffnet den Run im Viewer.
-
-Optionaler Folge-Slot (sobald Bedarf):
-- WebSocket-Push statt Polling (heute 1 GET/3 s, fuer 1-3 parallele
-  Runs voellig unkritisch).
-- Resume-Button mit echter Funktion (heute zeigt der Button bei pause
-  einen Hinweis, manueller Resume ueber „Neuen Run starten" + Idempotenz).
-
 ### Parallele Flow-Runs (Priorität: mittel — aus UAT 2026-04-19)
 
 Aktuell faehrt Disco Flows strikt sequentiell: er startet einen Flow,
@@ -979,8 +580,9 @@ Muss vor Umsetzung einmal gemeinsam diskutiert werden:
 - **Welche Flows sind „Standard"?** Kandidaten:
   - `sources_scan_and_register` — Sources scannen, hashen, in `agent_sources`
     registrieren (heute Tool, koennte aber als Flow laufen fuer Audit-Trail)
-  - `md_extract_granite` / `md_extract_smol` / `md_extract_di` — die drei
-    Engines als fertige Flows
+  - `pdf_routing_decision` + `pdf_to_markdown` — bereits als Library-Flows
+    umgesetzt (liegen unter `src/disco/flows/library/`), koennten aber per
+    Default in jedem neu angelegten Projekt sichtbar sein
   - `dcc_classify_gpt5` — DCC-Klassifikation ueber Markdown-Extrakte
   - `duplicate_detect` — Duplikat-Analyse per Hash + Name + Inhalt
   - `context_manifest_refresh` — Kontext-Ordner neu indizieren
@@ -1004,15 +606,16 @@ Ziel: ein neues Projekt ist nach `disco project init` direkt
 DCC klassifizieren geht One-Click, ohne dass Disco fuer jedes neue
 Projekt denselben Flow nochmal baut.
 
-Ursprung: UAT-Session 2026-04-20, waehrend Run #15 (md_extract_granite
-auf uat-2026-04-19) lief und Disco parallel einen zweiten Flow
-`md_extract_smol` gebaut hat — wurde deutlich, dass solche Arbeit
-fuer jedes Projekt wiederholt wird, obwohl die Flows strukturell
-identisch sind.
+Ursprung: UAT-Session 2026-04-20, als waehrend eines laufenden
+Extraction-Runs parallel eine zweite Engine-Variante als eigener Flow
+nachgezogen wurde — dabei wurde klar, dass solche Arbeit fuer jedes
+Projekt wiederholt wird, obwohl die Flows strukturell identisch sind.
+Teil davon ist inzwischen ueber die Flow-Library (`src/disco/flows/library/`)
+geloest, der Gesamt-Bootstrap steht aber noch aus.
 
 ### Overnight-Betrieb + Resume nach Sleep/Restart (Priorität: hoch — aus UAT 2026-04-20)
 
-Bulk-Flows (md_extract_granite, DCC-Klassifikation, etc.) laufen
+Bulk-Flows (`pdf_to_markdown`, DCC-Klassifikation, etc.) laufen
 teils stundenlang. Der Nutzer moechte sie **ueber Nacht** laufen
 lassen, auch wenn der Rechner gesperrt ist — und einen laufenden
 Flow **nach Neustart** (Disco-Restart, Mac-Restart, Aufwachen aus
@@ -1067,94 +670,69 @@ Ursprung: UAT-Session 2026-04-20, Nutzer-Frage nach Run #15:
 > nachdem disco neu gestartet wird bzw während des flows der
 > computer ausgeschaltet (oder sleep) wurde"
 
+### Getrennte Modell-Deployments fuer Agent vs. Flow (Priorität: hoch — aus UAT 2026-04-20)
+
+**Beobachtung:** Solange der Agent-Chat (`gpt-5.1_prod`) und der
+Flow-Worker (ebenfalls `gpt-5.1_prod`) auf **demselben Azure-
+Deployment** laufen, teilen sie sich **dieselbe TPM/RPM-Quota**.
+Waehrend Flow #4 mit ~27.600 TPM In lief, konnte der Agent parallel
+keinen Chat-Turn mehr abschliessen — vermutlich weil Foundry
+intern auf 429 lief und die Response verunglueckte (siehe Bug-
+Eintrag "Chat haengt nach Foundry response.failed" oben).
+
+**Wichtig zur Einordnung:** Modell-Deployment und Conversation-
+History sind komplett unabhaengig — der Chat hat weiterhin seine
+eigene `foundry_thread_id` und sein eigenes Context-Window.
+**Das einzige**, was Agent und Flow sich teilen, wenn sie dasselbe
+Deployment nutzen, ist die **Azure-seitige Rate-Limit-Quota** (und
+die Abrechnung).
+
+**Ziel:** Zweites Modell-Deployment in Foundry anlegen, exklusiv
+fuer Flows. Damit der Agent-Chat reaktionsfaehig bleibt, waehrend
+ein Flow an der Quota frisst.
+
+**Vorschlag (Sweden Central):**
+
+| Zweck | Deployment-Name | Verwendet von |
+|---|---|---|
+| Dev-Agent + Dev-Flows | `gpt-5.1` (bereits da) | Dev-Umgebung |
+| Prod-Agent (interaktiv) | `gpt-5.1_prod` (bereits da) | `AgentService` |
+| Prod-Flows (bulk) | `gpt-5.1_prod_flow` (neu) | Flow-Runner |
+
+**Umsetzung:**
+- Neues Deployment `gpt-5.1_prod_flow` im Foundry-Portal anlegen
+  (Modell gpt-5.1, eigene TPM-Quota bekommen). Deployments kosten
+  nichts extra — nur die tatsaechlichen Tokens.
+- `config.py` um `foundry_flow_model_deployment: str | None` erweitern.
+  Fallback auf `foundry_model_deployment`, wenn nicht gesetzt.
+- Flow-SDK (`src/disco/flows/sdk.py`) liest neu dieses Feld.
+- `.env.example` dokumentieren.
+- Runner-Migration: bestehende `runner.py`-Dateien in Flow-Ordnern
+  ziehen den Deployment-Namen aus `FlowRun` — entweder Property oder
+  Env-Variable, die das SDK ihnen durchreicht.
+
+**Parallel-Nebeneffekt:** Wenn mehrere Flows gleichzeitig laufen
+(siehe "Parallele Flow-Runs" oben), teilen die sich weiterhin das
+Flow-Deployment — das ist ok, da Bulk-Jobs inhaerent parallelisierbar
+sind und die Quota gezielt auf Durchsatz auslegbar ist.
+
+**Dev bleibt einfach:** In Dev reicht ein einziges Deployment,
+weil Raphael dort selten Agent+Flow gleichzeitig fahren wird.
+
 ---
 
 ## Docling / MLX
 
-### SmolDocling-MLX HuggingFace-Cache-Erkennung (Priorität: mittel)
+### Hybride Markdown-Pipeline (DONE 2026-04-22)
 
-`markdown_extract(engine="smol-mlx")` schlägt fehl, weil das HF-Hub-SDK
-den **manuell** aufgebauten Cache-Ordner nicht erkennt:
+**Status:** Umgesetzt als `pdf_routing_decision` (PyMuPDF-Heuristik pro
+Seite → Engine pro Dokument, Strategie A: eine Engine je Datei) und
+`pdf_to_markdown` (Engine-Dispatcher `src/disco/pdf/markdown.py`).
+VLM-Varianten entfernt — docling-standard deckt Text + Tabellen,
+azure-di A4-Scans, azure-di-hr Vector-Drawings / Plankoepfe ab.
 
-```
-LocalEntryNotFoundError: Cannot find an appropriate cached snapshot folder
-for the specified revision on the local disk and outgoing traffic has
-been disabled.
-```
-
-Hintergrund: Die Modelle (Granite-MLX + Smol-MLX) wurden manuell per
-`curl --continue-at -` aus dem HF-Hub geladen, weil `huggingface_hub`
-und `hf_transfer` aus Python heraus auf diesem Mac TCP-Hänger zur HF-CDN
-haben (`curl` selbst funktioniert dort einwandfrei). Granite hat
-funktioniert, weil `huggingface_hub` initial den Cache schon halb
-angelegt hatte (refs/main + Symlinks), bevor es dann hängenblieb. Smol
-ist dagegen komplett von Hand aufgebaut — und dabei fehlt offenbar ein
-Marker, den HF-Hub für die Cache-Validierung erwartet.
-
-**Workaround heute:** Granite ist Default-Engine und läuft. Smol nicht
-verfügbar.
-
-**Saubere Lösung (TODO):** `_convert_vlm_mlx` in
-`src/bew/agent/functions/markdown.py` umbauen, sodass es:
-1. Erst prüft, ob unter `~/.cache/huggingface/hub/models--<repo>/snapshots/<sha>/`
-   die `model.safetensors` als gültiger Symlink liegt (Größe > 100 MB).
-2. Falls ja → `mlx_vlm.utils.load(snapshot_path)` direkt mit lokalem
-   Pfad aufrufen und HF-Hub komplett umgehen.
-3. Falls nein → wie bisher den `repo_id`-Pfad gehen
-   (mit der Wahrscheinlichkeit, dass der Download wieder hängt).
-
-Alternative: vor dem Granite-/Smol-Default-Cache-Aufruf einmalig
-`HF_HUB_DOWNLOAD_TIMEOUT=10` setzen + `try/except`, sodass HF-Hub
-nicht ewig hängt, sondern schnell auf den lokalen Cache zurückfällt.
-
-Ursprung: UAT-Session 2026-04-19, Docling-Integration. Granite-Smoke-Test
-hat funktioniert (16s/Seite), Smol-Test scheiterte am HF-Cache-Lookup.
-
-### Hybride Markdown-Pipeline — DI ↔ VLM ↔ Standard (Priorität: hoch)
-
-**Problem:** Granite-Docling-MLX läuft auf M1 zu langsam für produktive
-Bulk-Extraktion (Run #15: 20 Dokumente in ~55 min, grosse PDFs zogen
-einzeln 10-14 min). Selbst mit SmolDocling-MLX (schneller, weniger
-Parameter) ist das kein Ersatz fuer 1000+-Dokument-Läufe.
-
-Gleichzeitig sind die drei Engines **nicht austauschbar**:
-
-| Engine | Kosten | Qualitaet | Durchlaufzeit | Ideal fuer |
-|---|---|---|---|---|
-| `standard` (DocLayNet + TableFormer) | 0 EUR | gut bei Text-PDFs, schwach bei Scans/Layout | schnell (CPU) | einfache Text-PDFs |
-| `granite-mlx` / `smol-mlx` (VLM) | 0 EUR (lokal) | sehr gut bei komplexem Layout, Tabellen, schlechten Scans | sehr langsam (M1) | Einzelstuecke, wo Qualitaet zaehlt |
-| Azure Document Intelligence | ~0.015 EUR/Seite | Profi-Qualitaet, Spaltenerkennung, Formeln, OCR | schnell (Cloud, parallel) | grosse Scan-Volumen, mehrspaltige Plaene |
-
-**Idee: Hybrid-Router, der pro Dokument die passende Engine waehlt.**
-Entscheidungskriterien (erste Skizze, noch nicht final):
-
-- Seitenzahl < 3 + textbasiert (kein Scan) → `standard`
-- Seitenzahl 3-20 + Layout komplex (Tabellen, Plaene) → `granite-mlx`
-  oder DI je nach Zeitbudget
-- Seitenzahl > 20 oder Scan-PDF → **Azure DI** (lokal zu langsam,
-  Qualitaet bei Scans entscheidend)
-- Handzeichnungen / stark gescannte Plaene → DI + custom prompt
-
-Dafuer muss Disco pro Dokument erst **eine schnelle Inspektion**
-machen (Seitenzahl, Text-vs-Scan-Heuristik, Dateigroesse, ggf. Thumbnail
-der ersten Seite ueber VLM-Klassifikator) und dann die Engine routen.
-Das ist selbst ein kleiner Flow.
-
-**Offene Fragen:**
-- Wer entscheidet? Fester Router (Regeln) vs LLM-Router (GPT-5 guckt
-  1. Seite an und waehlt) — LLM-Router kostet Token, Regel-Router ist
-  schneller und billiger, aber brittle.
-- Kosten-Budget pro Run? z.B. „max 5 EUR DI-Kosten fuer den ganzen
-  Projekt-Sync", und Router faellt dann auf Standard/VLM zurueck
-- Qualitaets-Check nach der Extraktion — wenn das Markdown zu duenn
-  ist (z.B. < 200 Zeichen fuer ein 10-Seiten-PDF), automatisch Engine
-  hochstufen und neu versuchen (Retry-Ladder: standard → granite → DI)
-
-**Wann angehen:** erst nach Auswertung Granite-Run #15 + Smol-Run.
-Sobald wir belastbare Zahlen zu Qualitaet + Zeit pro Engine haben
-(am gleichen Dokument-Set), kann man den Router sinnvoll designen.
-
-Ursprung: UAT-Session 2026-04-20, nach Run #15 (Granite too slow).
+Ursprung: UAT-Session 2026-04-20 (Granite too slow) → Beschluss
+2026-04-22: VLM komplett raus, festes 3-Tier-Routing.
 
 ---
 
@@ -1186,85 +764,99 @@ Ursprung: UAT-Session 2026-04-20, Wunsch des Nutzers.
 
 ## Release / DevOps
 
-### Dev- und Prod-Umgebung parallel betreiben (Priorität: hoch — aus UAT 2026-04-20)
+### Dev/Prod — Folgefragen (Priorität: mittel)
 
-Aktueller Zustand: Raphael und Claude arbeiten **direkt gegen `main`**.
-Jede Aenderung (Code, Skills, System-Prompt, Migrationen) wirkt sofort
-auf genau die Disco-Instanz, mit der Raphael produktiv arbeiten will.
-Das bremst sowohl das Entwickeln (nichts traut sich, kaputt zu gehen)
-als auch das echte Nutzen (bei Dev-Aktivitaet ist die Instanz instabil).
+Minimal Viable Split laeuft seit 2026-04-20: dev-Branch + zwei
+Checkouts, Workspaces `~/Disco/` + `~/Disco-dev/`, Ports 8765/8766,
+eigener Foundry-Agent pro Env (`disco-prod-agent` / `disco-dev-agent`).
+Offen sind:
 
-**Ziel:** Parallel-Betrieb einer stabilen Prod- und einer volatilen
-Dev-Umgebung auf demselben Rechner — Raphael kann produktiv arbeiten,
-waehrend Claude am Code schraubt.
-
-Muss vor Umsetzung gemeinsam diskutiert werden. Baustellen:
-
-- **Git-Flow:**
-  - `main` = Prod, `dev` = laufende Entwicklung
-  - PR von `dev` nach `main` nach Verifikation (manueller Release-Cut)
-  - Keine direkten Pushes auf `main` mehr (Branch Protection Rule?)
-- **Zwei Installations-Pfade:**
-  - Dev-Checkout (wo wir jetzt arbeiten)
-  - Prod-Checkout (neuer Checkout auf `main`)
-  - Jeweils eigenes `.venv/`, eigene `.env`
-- **Zwei Workspaces:**
-  - `~/Disco-dev/` (bestehender `~/Disco/` wird umbenannt)
-  - `~/Disco/` (Prod — neue Daten, die Raphael ernsthaft pflegt)
-  - `.env`-Variable `DISCO_WORKSPACE` pro Installation anders gesetzt
-- **Zwei Ports:**
-  - Dev: `127.0.0.1:8765` (wie heute, Claude Preview)
-  - Prod: `127.0.0.1:8000` (Standard-Port aus CLAUDE.md)
-  - Beide gleichzeitig an, Raphael arbeitet in Prod, schaut bei Bedarf
-    in Dev
-- **Foundry-Agent:**
-  - Option A: eine Agent-Version fuer beides (Prod faehrt die
-    gleiche Version, Dev-Pushes ueberschreiben sie = nicht gut)
-  - Option B: zwei Agent-Deployments (`disco-prod-agent` = Prod,
-    `disco-dev-agent` = Dev) mit eigenem `FOUNDRY_AGENT_ID`
-  - Option C: `disco agent setup` pusht nur in Dev; Release-Cut auf
-    Prod braucht `disco agent release` (Agent neu erstellen / Version
-    bumpen)
-  - **Vermutlich B** — klare Trennung, keine Ueberraschungen in Prod
-- **Migrationen:**
-  - Dev wendet neue Migrationen sofort an — Prod-DB bekommt sie erst
-    beim Release-Cut. Schema-Drift-Risiko.
-  - Pruefschritt beim Release: „gibt es Migrationen in dev, die in
-    prod noch nicht angewandt sind? Dann erst migrate, dann switch."
-- **Logs / Observability:**
-  - Getrennte Log-Verzeichnisse pro Workspace (DISCO_LOGS_DIR)
-  - UAT-Watcher heute zeigt nur eine Workspace-DB — muss entweder
-    parametrisierbar werden oder es braucht zwei parallele Watcher
-- **Model-Cache:**
-  - `~/.cache/huggingface/` ist systemweit geteilt, unkritisch
-  - `~/.cache/docling/`, `~/.cache/EasyOCR/` dito
-  - Keine Parallelisierung noetig, beide Instanzen lesen denselben Cache
-- **Daten-Migration Prod ← Dev:**
-  - Wenn ein Projekt in Dev „gereift" ist (z. B. UAT-Tests bestanden),
-    sollte es nach Prod wanderbar sein. Manuell per `rsync` oder
-    Disco-Kommando?
-
-**Minimal Viable Split:**
-1. `git checkout -b dev` und ab jetzt nur noch dort pushen
-2. Zweiter Clone auf `main` unter neuem Pfad
-3. Zweiter Workspace `~/Disco-prod/` oder analog
-4. `.env` pro Installation, `DISCO_WORKSPACE` trennen
-5. Zwei Uvicorn-Instanzen gleichzeitig auf unterschiedlichen Ports
-6. Foundry-Agent zunaechst geteilt, spaeter Split
-
-**Offene Fragen:**
-- Single-Machine-Setup reicht, oder braucht es eine zweite Hardware
-  fuer „echte" Prod-Trennung (DSGVO, Datenabschottung)?
-- Sind Skills und system_prompt.md Teil von „Code" (also per Git
-  versioniert) oder sollen sie zwischen dev und prod kopierbar sein
-  ohne Branch-Merge?
-- Ab wann lohnt CI/CD (Tests auf dev-PR, deploy auf Merge nach main)?
-
-Ursprung: UAT-Session 2026-04-20, direkter Wunsch des Nutzers — heute
-ist der Schmerz das erste Mal konkret geworden, weil waehrend eines
-laufenden 20-Dokument-Flows parallel ein zweiter Flow gebaut wurde
-und der System-Prompt zweimal geaendert wurde.
+- **Release-Cut-Kommando:** `disco agent release` — Dev-Agent-Version
+  nach Prod pushen. Heute: manueller Git-Merge + `disco agent setup`
+  in Prod-Checkout.
+- **Migrations-Check beim Release:** automatisch warnen, wenn Dev
+  Migrationen hat, die in der Prod-DB noch nicht angewandt sind.
+- **Skill / system\_prompt-Versionierung:** heute Git-versioniert wie
+  Code. Bedarf evaluieren, ob Skills zwischen Env ohne Branch-Merge
+  kopierbar sein sollen.
+- **Daten-Migration Prod ← Dev:** UAT-gereiftes Projekt von Dev nach
+  Prod uebernehmen — heute manuell per `rsync`, ggf. Disco-Kommando.
+- **CI/CD:** Tests auf dev-PR, Deploy auf Merge nach main — lohnt erst
+  bei mehreren Entwicklern.
 
 ---
 
-*Letzte Aktualisierung: 2026-04-20*
+## Technische Schuld + Setup-Probleme (aus Cleanup-Review 2026-04-22)
+
+Gesammelt direkt nach der PDF-Pipeline-Umstellung (Routing-Flow +
+pdf_to_markdown + agent_pdf_markdown). Geordnet nach Risiko, nicht
+nach Aufwand.
+
+### Setup-Fallstrick: Offline-Default vs. frischer HF-Cache (Priorität: hoch)
+
+Default in `.env.example` + `src/disco/config.py` ist
+`HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 / HF_DATASETS_OFFLINE=1`.
+Die `docling-standard`-Engine braucht aber beim ersten Gebrauch die
+Modelle (DocLayNet + TableFormer + EasyOCR) lokal im
+`~/.cache/huggingface/` — auf einer frischen Maschine laeuft der erste
+`pdf_to_markdown`-Run mit Offline-Flags ins Leere.
+
+Heute: Erst-Priming haendisch dokumentiert (config.py-Docstring,
+.env.example) — User muss einmalig `HF_HUB_OFFLINE=0 ...` fahren.
+
+Offen: sauberes `disco models prime`-Kommando (oder Check beim ersten
+Flow-Start: "Cache fehlt, soll ich die Modelle jetzt ziehen?"). Ohne
+das wird jeder neue Entwickler einmal stolpern.
+
+### Keine automatisierten Tests fuer die PDF-Pipeline (Priorität: hoch)
+
+`tests/` existiert nur als leeres Gerüst (`tests/uat/`), keine
+pytest-Suite, kein CI. Die neue Pipeline (`src/disco/pdf/markdown.py`,
+`pdf_markdown_read`, beide Library-Flows) ist nur via 30-Dok-Manuallauf
+validiert — Regressions-Schutz gleich null.
+
+Mindest-Ausstattung, die fuer Ruhe sorgen wuerde:
+- Unit-Tests fuer Engine-Dispatcher (Mock-DI + 1-Seiten-PDF-Fixture fuer
+  docling-standard).
+- Integrations-Test fuer `pdf_markdown_read` mit einer
+  vorgefuellten In-Memory-SQLite (agent_pdf_markdown).
+- Ein Smoke-Test fuer den Routing-Flow (3-PDF-Fixture, eine pro Engine-Bucket).
+
+Ohne Tests faellt jeder Umbau an der Pipeline erst im UAT auf. Das
+sollte vor weiteren groesseren Flow-Bauten adressiert werden.
+
+### Flow-Scaffold (`flow_create`) hinterlaesst TODOs im Runner-Template (Priorität: niedrig)
+
+`src/disco/agent/functions/flows.py:114,122` hat zwei `TODO`-Marker im
+Runner-Skelett. Ist Absicht — Disco soll die Stellen mit dem Nutzer
+zusammen fuellen. Aber: keine Fixme-Pruefung verhindert, dass ein
+halbfertiger Flow im Library-Verzeichnis landet.
+
+Vorschlag: bei `flow_create` den Template-Header explizit als
+"// SCAFFOLD: bitte process_item und Input-Query anpassen, dann
+Kommentare entfernen" markieren, damit ein halbfertiger Runner beim
+Code-Review auffaellt.
+
+### Portal-Agent-Rollout bei Tool-Aenderungen (Priorität: mittel)
+
+Wenn sich die Custom-Function-Signaturen aendern (wie jetzt bei der
+Pipeline-Umstellung: `pdf_extract_text` raus, `pdf_markdown_read`
+rein), muss `disco agent setup` fuer Prod + Dev laufen, sonst kennt
+der Portal-Agent die Tools nicht. Heute manuell.
+
+Vorschlag: Beim `disco agent setup` automatisch gegen
+`get_tool_schemas()` diffen und bei Aenderungen eine Versionsnummer
+hochzaehlen, damit man im Portal-Log sieht, welche Tool-Version
+gerade registriert ist.
+
+### `duration_ms`-Schema inkonsistent zwischen Engine-Dispatcher und DB (Priorität: niedrig)
+
+`src/disco/pdf/markdown.py` liefert `duration_ms` als `float` (gerundet
+auf 1 Nachkommastelle). `agent_pdf_markdown.duration_ms` ist `REAL`
+— kompatibel, aber der Runner persistiert den Wert ohne weitere
+Konversion, was in der UI zu `"7088.0"`-Anzeigen fuehren kann.
+Kosmetisch, nicht funktional.
+
+---
+
+*Letzte Aktualisierung: 2026-04-22*

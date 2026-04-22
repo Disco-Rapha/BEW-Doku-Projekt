@@ -205,7 +205,7 @@ Siehe `src/bew/flows/README.md` für das Entwickler-Howto.
 - [x] **Sources-Registry**: sources_register (Hash-basierte Delta-Detection),
       sources_attach_metadata (Begleit-Excel, Option-C-Matching),
       sources_detect_duplicates (sha256-Gruppen → duplicate-of-Relations)
-- [x] **PDF**: pdf_extract_text (pypdf, Seiten-Range)
+- [x] **PDF**: pdf_classify (PyMuPDF-Diagnose), pdf_markdown_read (liest `agent_pdf_markdown`, gefuellt vom Flow `pdf_to_markdown` mit Engines docling-standard / azure-di / azure-di-hr)
 - [x] **Lokale Python-Ausführung**: run_python (file-basiert + inline, Audit-Trail,
       Env-Filtering, Timeout). Disco schreibt Skripte, führt sie lokal aus, debuggt.
 - [x] **Skills**: list_skills/load_skill (lazy-loaded Playbooks)
@@ -318,7 +318,6 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
 
 ```bash
 uv sync                                        # Dependencies
-uv run python scripts/download_models.py       # Docling-MLX-Modelle (einmalig, ~1.1 GB, idempotent)
 disco project list                             # Alle Projekte
 disco project init <slug> --name "..." [--sample]  # Neues Projekt
 disco project show <slug>                      # Details

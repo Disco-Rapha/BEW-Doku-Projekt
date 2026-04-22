@@ -651,21 +651,86 @@ class AgentService:
 
                     # --- Fehler / Abbruch ---
                     elif etype == "response.failed":
+                        # Foundry liefert bei 429 / Rate-Limit / Server-Fehlern
+                        # oft nur ein Teil-Feld. Wir ziehen alles raus, was da
+                        # ist, loggen den Rohzustand fuer Post-Mortem und
+                        # bauen dem User eine reichere Meldung zusammen.
                         err = getattr(event, "response", None)
-                        msg = getattr(getattr(err, "error", None), "message", "unbekannt")
-                        yield ErrorEvent(message=f"Foundry meldet Fehler: {msg}")
+                        err_obj = getattr(err, "error", None)
+                        msg = getattr(err_obj, "message", None)
+                        code = getattr(err_obj, "code", None)
+                        type_ = getattr(err_obj, "type", None)
+                        status = getattr(err, "status", None)
+                        logger.error(
+                            "Foundry response.failed — code=%r type=%r status=%r msg=%r event=%r",
+                            code, type_, status, msg, event,
+                        )
+                        parts = [str(p) for p in (code, type_, msg) if p]
+                        ui_msg = " — ".join(parts) if parts else "keine Details von Foundry"
+                        yield ErrorEvent(message=f"Foundry meldet Fehler: {ui_msg}")
                         return
                     elif etype == "error":
-                        msg = getattr(event, "message", "") or str(event)
-                        yield ErrorEvent(message=f"Stream-Fehler: {msg}")
+                        msg = getattr(event, "message", "") or ""
+                        code = getattr(event, "code", None) or getattr(event, "type", None)
+                        logger.error(
+                            "Stream-Error-Event — code=%r msg=%r event=%r",
+                            code, msg, event,
+                        )
+                        parts = [str(p) for p in (code, msg) if p]
+                        ui_msg = " — ".join(parts) if parts else repr(event)
+                        yield ErrorEvent(message=f"Stream-Fehler: {ui_msg}")
                         return
 
                     # andere Events (refusal, reasoning, mcp, image_gen, ...)
                     # ignorieren wir still — bei Bedarf spaeter ergaenzen.
 
             except Exception as exc:
-                logger.exception("Fehler im Event-Stream")
-                yield ErrorEvent(message=f"Stream-Fehler: {exc}")
+                # openai.APIError traegt body/code/status mit. Ohne explizites
+                # Ausziehen geht die eigentliche Ursache (z. B. 429 Rate-Limit)
+                # im Log verloren und die UI sieht nur "Too Many Requests".
+                detail_parts: list[str] = []
+                status_code: int | None = None
+                code: str | None = None
+                body: Any = None
+                try:
+                    from openai import APIError, APIStatusError  # lazy
+                    if isinstance(exc, APIError):
+                        code = getattr(exc, "code", None)
+                        body = getattr(exc, "body", None)
+                        if isinstance(exc, APIStatusError):
+                            status_code = getattr(exc, "status_code", None)
+                except Exception:
+                    pass
+
+                # Azure-429 erkennen auch dann, wenn status_code fehlt
+                # (SSE-Stream-Error liefert oft nur message "Too Many Requests")
+                msg_text = str(exc) or ""
+                is_rate_limit = (
+                    status_code == 429
+                    or "429" in msg_text
+                    or "too many requests" in msg_text.lower()
+                    or (isinstance(code, str) and "rate" in code.lower())
+                )
+
+                if status_code is not None:
+                    detail_parts.append(f"status={status_code}")
+                if code:
+                    detail_parts.append(f"code={code}")
+                if body is not None:
+                    detail_parts.append(f"body={body!r}")
+                detail = " [" + " ".join(detail_parts) + "]" if detail_parts else ""
+
+                logger.exception("Fehler im Event-Stream%s", detail)
+
+                if is_rate_limit:
+                    ui_msg = (
+                        f"Azure OpenAI Rate-Limit (429): {msg_text or 'Too Many Requests'}. "
+                        "Moeglicherweise laeuft parallel ein Flow auf demselben Deployment — "
+                        "kurz warten und erneut versuchen."
+                    )
+                else:
+                    ui_msg = f"Stream-Fehler: {msg_text}{detail}"
+                yield ErrorEvent(message=ui_msg)
                 return
 
             # Nach der Runde: previous_response_id fuer die naechste Runde merken

@@ -6,6 +6,10 @@ when_to_use: Benutzer will eine Excel, einen Report oder Export — egal ob Doku
 
 # Skill: excel-reporter
 
+**Für neu generierte Standard-Reports.** Wenn Du eine bestehende Excel
+lesen oder ändern sollst (Strike-Fonts erkennen, Formatierung anpassen,
+Kunden-Template befüllen) → Skill `excel-formatter` laden, nicht dieser.
+
 **Kein eigener Python-Code im Code Interpreter, keine base64-Bridges.**
 
 Stattdessen: Du baust eine **Spec** und uebergibst sie an

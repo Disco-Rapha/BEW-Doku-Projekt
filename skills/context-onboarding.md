@@ -47,57 +47,66 @@ Neue Dateien = in context/ aber NICHT im Manifest.
 Jede Datei muss INHALTLICH verstanden werden — nicht nur katalogisiert.
 Ueberspringe KEINEN der folgenden Schritte.**
 
-#### PDF-Dateien — IMMER mit Azure Document Intelligence
+#### PDF-Dateien — IMMER ueber die Markdown-Pipeline
 
-`pdf_extract_text` (pypdf) ist fuer Context-PDFs VERBOTEN. Es liefert
-keinen Struktur-Kontext, keine Tabellen, kein OCR. Verwende IMMER:
+Fuer Context-PDFs gilt derselbe Weg wie fuer alle PDFs in Disco:
+einmalige Konvertierung nach Markdown, dann ausschliesslich aus
+`agent_pdf_markdown` lesen. Niemals pypdf / DI / Docling direkt.
 
+**Schritt 1 — Routing + Extraktion (einmalig):**
 ```text
-extract_pdf_to_markdown({"path": "context/<datei>.pdf"})
+flow_run({"flow": "pdf_routing_decision"})
+flow_run({"flow": "pdf_to_markdown"})
+```
+Das fuellt `agent_pdf_markdown` fuer alle Inventory-Eintraege —
+Context-PDFs inklusive, sobald sie unter `context/` liegen und vom
+Inventory-Flow erfasst sind.
+
+Kosten: Context-PDFs laufen typisch auf `docling-standard` (0 EUR)
+oder `azure-di` (~0.01 EUR/Seite) — Keine Rueckfrage beim Nutzer
+noetig, das ist Standard-Workflow.
+
+**Schritt 2 — Markdown lesen:**
+```text
+pdf_markdown_read({"rel_path": "context/<datei>.pdf"})
 ```
 
-Das Tool:
-- Nutzt Azure DI (prebuilt-layout) fuer OCR + Tabellen + Struktur
-- Speichert Markdown unter `.disco/context-extracts/<datei>.md`
-- Liefert: Seitenzahl, Tabellenzahl, Kosten-Schaetzung
-- Kosten: ~0.01 EUR/Seite. Fuer Context-PDFs (wenige, wichtig) akzeptabel.
+Zwei Faelle:
 
-**Keine Rueckfrage beim Nutzer zu den Kosten noetig** — DI fuer
-Context ist Standard-Workflow, der Nutzer hat das so festgelegt.
+**Kleines Dokument (< 50 KB Markdown):** komplett lesen, default-
+`max_chars` reicht. Der Call liefert `{markdown, char_count,
+truncated: false}`.
 
-Danach den Markdown **tatsaechlich lesen**. Zwei Faelle:
+**Grosses Dokument (> 50 KB Markdown):** Volltext passt NICHT in
+den Kontext. Kombinierte Strategie — **beide Schritte PFLICHT:**
 
-**Kleines Extrakt (< 50 KB):** direkt komplett lesen:
+**Schritt A — Erste ~30 KB lesen (fuer die Summary):**
 ```text
-fs_read({"path": ".disco/context-extracts/<datei>.md", "max_bytes": 50000})
+pdf_markdown_read({"rel_path": "context/<datei>.pdf", "max_chars": 30000})
 ```
-
-**Grosses Extrakt (> 50 KB):** Volltext passt NICHT in den Kontext.
-Kombinierte Strategie — **beide Schritte PFLICHT:**
-
-**Schritt A — Erste ~20 Seiten lesen (fuer die Summary):**
-```text
-fs_read({"path": ".disco/context-extracts/<datei>.md", "max_bytes": 30000})
-```
-Die ersten 20-30 Seiten enthalten bei Normen/Richtlinien typisch:
+Die ersten Seiten enthalten bei Normen/Richtlinien typisch:
 Titelseite, Inhaltsverzeichnis, Einleitung, Begriffe, Scope. Das
 reicht fuer eine fundierte Summary.
 
 **Schritt B — Struktur-Extraktion (als Nachschlage-Referenz):**
+Erst Markdown in eine Datei spiegeln, dann Struktur ziehen:
 ```text
+pdf_markdown_read({"rel_path": "context/<datei>.pdf", "max_chars": 500000})
+fs_write({"path": ".disco/context-extracts/<datei>.md", "text": "<markdown>"})
 extract_markdown_structure({"path": ".disco/context-extracts/<datei>.md"})
 ```
-Das liefert ein kompaktes Skelett (~5-15 KB) mit allen Ueberschriften,
-Seitenzahlen, Tabellen-Headern und Kontext-Saetzen. Dieses Skelett
-wird am Ende der Summary-Datei als **Kapitelverzeichnis** angehaengt,
-damit Disco in spaeteren Sessions gezielt in Kapitel springen kann.
+Das Skelett (~5-15 KB) enthaelt alle Ueberschriften, Seitenzahlen,
+Tabellen-Headern und Kontext-Saetze und wird am Ende der Summary-
+Datei als **Kapitelverzeichnis** angehaengt.
 
 Die Summary entsteht also aus:
-1. Inhalt der ersten 20 Seiten (Schritt A) → Zusammenfassung + Typ
+1. Inhalt der ersten ~30 KB (Schritt A) → Zusammenfassung + Typ
 2. Struktur-Skelett (Schritt B) → Kapitelverzeichnis + Seitenzahlen
 
 **NIEMALS versuchen den Volltext komplett zu laden** — das sprengt
-das Token-Limit und der Turn crasht.
+das Token-Limit und der Turn crasht. `pdf_markdown_read` nutzt
+standardmaessig eine 50-KB-Kappung und setzt `truncated=true`, um
+das zu verhindern.
 
 #### Excel/CSV — Struktur + IMMER DB-Import bei Lookup-Tabellen
 

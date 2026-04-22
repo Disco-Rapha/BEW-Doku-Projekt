@@ -119,7 +119,7 @@ Vorlage 1:1 und fülle die Felder aus dem Phase-1-Gespräch:
 |------------------|-------------------------------------------------------------------|
 | **Was**          | _Ein Satz: was macht dieser Flow._                                |
 | **Eingabe**      | _Tabelle + Filter / Ordner + Glob (z. B. `agent_sources WHERE mime='application/pdf'`)._ |
-| **Verarbeitung** | _Pro-Item-Schritt in einem Satz (z. B. `markdown_extract(engine='granite-mlx')`)._ |
+| **Verarbeitung** | _Pro-Item-Schritt in einem Satz (z. B. `extract_markdown(abs_path, engine='docling-standard')`)._ |
 | **Ausgabe**      | _Dateipfad UND/ODER Tabelle (z. B. `.disco/markdown-extracts/*.md` + `agent_md_extracts`)._ |
 | **Extern**       | _Azure DI / Azure OpenAI / lokal / 0 EUR._                        |
 | **Budget**       | _Pro-Item-Kosten × Item-Zahl — oder „gratis (lokal)"._            |
@@ -131,24 +131,24 @@ weitere_infos      runner-kern     weitere_infos
 ```
 ````
 
-Beispiel (Granite-Markdown-Extract):
+Beispiel (PDF → Markdown ueber den Engine-Dispatcher):
 
 ````markdown
 ## Flow auf einen Blick
 
 | Aspekt           | Wert                                                               |
 |------------------|--------------------------------------------------------------------|
-| **Was**          | PDFs → Markdown lokal mit Granite-Docling-MLX konvertieren.        |
-| **Eingabe**      | `agent_sources` WHERE `mime='application/pdf'` AND `status='active'`. |
-| **Verarbeitung** | Pro PDF: `markdown_extract(engine='granite-mlx')`, sequenziell.    |
-| **Ausgabe**      | `.disco/markdown-extracts/granite-mlx/<name>.md` + `agent_md_extracts`. |
-| **Extern**       | Nur lokal (MLX auf M1-GPU), kein Cloud-Call.                       |
-| **Budget**       | Gratis. ~15–25 s/Seite auf M1.                                     |
-| **Laufzeit**     | 20 PDFs à ~4 Seiten ≈ 20 min.                                      |
+| **Was**          | PDFs aus `work_pdf_routing` → Markdown, Engine wird pro Datei vom Router gesetzt. |
+| **Eingabe**      | `work_pdf_routing` JOIN `agent_pdf_inventory`, `engine IS NOT NULL`. |
+| **Verarbeitung** | Pro PDF: `extract_markdown(abs_path, engine)` aus `disco.pdf`.     |
+| **Ausgabe**      | `agent_pdf_markdown` (Tabelle, Markdown + source_hash).            |
+| **Extern**       | docling-standard lokal (0 EUR) / azure-di + azure-di-hr Cloud.     |
+| **Budget**       | 0–0.015 EUR/Seite je nach Engine.                                  |
+| **Laufzeit**     | docling-standard ~1–3 s/Seite auf M1, DI 1–3 s/Seite.              |
 
 ```
-sources/*.pdf  ──▶  runner.py     ──▶  .disco/markdown-extracts/*.md
-agent_sources      granite-mlx          agent_md_extracts (DB)
+work_pdf_routing ──▶ runner.py ──▶ agent_pdf_markdown
+(engine pro Datei)   extract_markdown  (md, source_hash)
 ```
 ````
 

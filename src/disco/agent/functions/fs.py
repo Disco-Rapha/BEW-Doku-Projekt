@@ -8,8 +8,8 @@ Sicherheits-Design:
   - Symlinks werden aufgeloest; zielt der Symlink aus `data_dir` heraus,
     wird er abgelehnt.
   - `fs_read` liefert NUR Text. Binaerdateien (PDFs, Bilder, Excel) werden
-    erkannt und mit einem klaren Hinweis abgelehnt — dafuer gibt es
-    `pdf_extract_text` und spaeter weitere Extraktoren.
+    erkannt und mit einem klaren Hinweis abgelehnt — PDF-Inhalte laufen
+    ausschliesslich ueber `pdf_markdown_read` (siehe Pipeline `pdf_to_markdown`).
   - Hardlimits: Verzeichnisse max. 500 Eintraege, Dateien max. 200 KB
     (beide ueberschreibbar per Parameter, aber mit Obergrenzen).
 """
@@ -46,7 +46,8 @@ MAX_WRITE_BYTES = 10_000_000      # 10 MB
 FORBIDDEN_WRITE_SUFFIXES = {".db", ".db-wal", ".db-shm", ".sqlite", ".env"}
 
 # Heuristik: diese Suffixe sind fuer fs_read verboten, weil binaer.
-# Fuer PDFs existiert pdf_extract_text; fuer Excel/Images gibt es
+# Fuer PDFs existiert pdf_markdown_read (liest aus agent_pdf_markdown,
+# wird vom Flow `pdf_to_markdown` gefuellt); fuer Excel/Images gibt es
 # spezielle Tools in spaeteren Phasen.
 BINARY_SUFFIXES = {
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx",
@@ -168,9 +169,10 @@ def _fs_list(
 @register(
     name="fs_read",
     description=(
-        "Liest eine Textdatei unter data/. Fuer PDFs bitte pdf_extract_text "
-        "verwenden. Bei zu grossen Dateien wird der Inhalt auf max_bytes "
-        "gekuerzt (truncated=true). Kein Zugriff ausserhalb von data/."
+        "Liest eine Textdatei unter data/. Fuer PDFs bitte pdf_markdown_read "
+        "verwenden (ueber Flow `pdf_to_markdown` vorher befuellt). Bei zu "
+        "grossen Dateien wird der Inhalt auf max_bytes gekuerzt "
+        "(truncated=true). Kein Zugriff ausserhalb von data/."
     ),
     parameters={
         "type": "object",
@@ -211,7 +213,7 @@ def _fs_read(
     if target.suffix.lower() in BINARY_SUFFIXES:
         raise ValueError(
             f"Binaere Datei '{target.suffix}' nicht lesbar via fs_read. "
-            f"Fuer PDFs pdf_extract_text verwenden."
+            f"Fuer PDFs pdf_markdown_read verwenden."
         )
 
     effective_max = max(1, min(int(max_bytes or DEFAULT_READ_BYTES), MAX_READ_BYTES))
@@ -283,7 +285,7 @@ _SEARCH_LINE_MAX = 400
         "Sucht einen Text/Regex in allen Text-Dateien unter data/ (bzw. im "
         "aktiven Projekt). Aehnelt 'grep -rn'. Binaerdateien (PDF, Excel, "
         "Bilder, ...) werden uebersprungen — fuer PDF-Inhalt ist "
-        "pdf_extract_text bzw. extract_pdf_to_markdown zustaendig. "
+        "pdf_markdown_read zustaendig (gefuellt vom Flow `pdf_to_markdown`). "
         "Liefert pro Treffer Dateiname, Zeilennummer, Zeile und optional "
         "Kontext-Zeilen vorher/nachher. Standardmaessig case-insensitive "
         "literale Suche; mit regex=true ist das Pattern ein Python-Regex."
