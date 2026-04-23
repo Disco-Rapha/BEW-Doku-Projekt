@@ -244,6 +244,14 @@ def _check_read_only(sql: str) -> None:
     # Erstes Wort muss SELECT oder WITH sein
     first_word = _first_keyword(stripped)
     if first_word not in {"SELECT", "WITH"}:
+        if first_word == "PRAGMA":
+            raise ValueError(
+                "PRAGMA ist in sqlite_query nicht zulaessig. "
+                "Fuer Schema-Infos als Table-Valued-Function nutzen, z.B. "
+                "SELECT name, type FROM pragma_table_info('meine_tabelle'), "
+                "oder via SELECT * FROM sqlite_master WHERE name='meine_tabelle' "
+                "die CREATE-DDL abfragen."
+            )
         raise ValueError(
             f"sqlite_query akzeptiert nur SELECT/WITH — gefunden: {first_word}. "
             f"Fuer Schreibzugriffe bitte sqlite_write verwenden."

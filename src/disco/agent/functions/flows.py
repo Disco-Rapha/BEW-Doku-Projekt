@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -188,10 +189,22 @@ def _run_to_dict(run: flow_service.RunInfo) -> dict[str, Any]:
     }
 
 
+def _flow_path_str(info: flow_service.FlowInfo, project_root: Path) -> str:
+    """Formatiert info.path fuer den Agent. Library-Flows liegen ausserhalb
+    des Projekts (im Code-Repo), deshalb klappt dort relative_to nicht."""
+    if info.source == "library":
+        return f"library:{info.name}"
+    try:
+        return str(info.path.relative_to(project_root))
+    except ValueError:
+        return str(info.path)
+
+
 def _flow_to_dict(info: flow_service.FlowInfo, project_root: Path) -> dict[str, Any]:
     return {
         "name": info.name,
-        "path": str(info.path.relative_to(project_root)),
+        "path": _flow_path_str(info, project_root),
+        "source": info.source,
         "has_runner": info.has_runner,
         "has_readme": info.has_readme,
         "readme_excerpt": info.readme_excerpt,
@@ -292,7 +305,8 @@ def _flow_show(*, flow_name: str) -> dict[str, Any]:
     recent = flow_service.list_runs(project_root, flow_name=flow_name, limit=10)
     return {
         "name": info.name,
-        "path": str(info.path.relative_to(project_root)),
+        "path": _flow_path_str(info, project_root),
+        "source": info.source,
         "has_runner": info.has_runner,
         "has_readme": info.has_readme,
         "readme_content": readme_content,
@@ -348,8 +362,26 @@ def _flow_create(*, flow_name: str) -> dict[str, Any]:
     project_root = _active_project_root()
     # Validierung wird in service-Funktionen gemacht; hier nur Ordner anlegen.
     flows_dir = project_root / "flows"
-    flows_dir.mkdir(parents=True, exist_ok=True)
+
+    # Schutz: Wenn der Name mit einem Library-Flow kollidiert und noch
+    # kein Projekt-Override existiert, weisen wir den Nutzer auf flow_fork
+    # hin — sonst wuerde get_flow weiter unten den Library-Flow zurueckliefern
+    # und relative_to(project_root) crashen.
     target_dir = flows_dir / flow_name
+    if not target_dir.exists():
+        try:
+            existing = flow_service.get_flow(project_root, flow_name)
+        except (KeyError, ValueError):
+            existing = None
+        if existing is not None and existing.source == "library":
+            raise ValueError(
+                f"Ein Library-Flow namens '{flow_name}' existiert bereits. "
+                f"Zum Anpassen ins Projekt nutze flow_fork(source_name="
+                f"'{flow_name}', target_name='...'). Fuer einen komplett "
+                f"neuen Flow bitte einen anderen Namen waehlen."
+            )
+
+    flows_dir.mkdir(parents=True, exist_ok=True)
     was_new = not target_dir.exists()
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -393,6 +425,149 @@ def _flow_create(*, flow_name: str) -> dict[str, Any]:
             "dann per fs_write die finalen Versionen schreiben. "
             "Zum Starten: flow_run(flow_name='{name}')."
         ).replace("{name}", flow_name),
+    }
+
+
+# ---------------------------------------------------------------------------
+# flow_fork — Library-Flow ins Projekt kopieren, dann anpassbar
+# ---------------------------------------------------------------------------
+
+
+_FORK_SKIP_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".DS_Store"}
+
+
+@register(
+    name="flow_fork",
+    description=(
+        "Kopiert einen bestehenden Flow (typisch: Library-Flow wie "
+        "'pdf_routing_decision' oder 'pdf_to_markdown') in das aktive "
+        "Projekt unter 'flows/<new_name>/'. Danach ist es ein normaler "
+        "Projekt-Flow — Du kannst README und runner.py per fs_read/fs_write "
+        "individualisieren und per flow_run starten. Projekt-lokal gewinnt "
+        "automatisch bei Namensgleichheit, der Original-Library-Flow bleibt "
+        "unveraendert. Nutze das, wenn Du einen Library-Flow fuer ein "
+        "Projekt massschneidern willst."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "flow_name": {
+                "type": "string",
+                "description": (
+                    "Name des Quell-Flows (Library oder Projekt). "
+                    "Siehe flow_list — z.B. 'pdf_routing_decision'."
+                ),
+            },
+            "new_name": {
+                "type": "string",
+                "description": (
+                    "Optional: Ziel-Name im Projekt. Default: flow_name. "
+                    "Slug-artig: a-z/0-9/_-, max 63 Zeichen."
+                ),
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": (
+                    "Wenn true: bestehenden Projekt-Flow gleichen Namens "
+                    "ueberschreiben. Default false — schuetzt vor Unfall."
+                ),
+            },
+        },
+        "required": ["flow_name"],
+    },
+    returns=(
+        "{name, source_flow_name, source_source, path, readme_path, "
+        "runner_path, files_copied, hint}"
+    ),
+)
+def _flow_fork(
+    *,
+    flow_name: str,
+    new_name: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    project_root = _active_project_root()
+
+    # Quell-Flow holen (loest auch Library ueber die Fallback-Kette auf)
+    try:
+        src_info = flow_service.get_flow(project_root, flow_name)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"Quell-Flow '{flow_name}' nicht gefunden: {exc}") from exc
+
+    target_name = (new_name or flow_name).strip()
+    # Flow-Service hat eine Namens-Validierung — die Nutzen wir indirekt,
+    # indem wir versuchen, den Ziel-Flow aufzuloesen. Hier nur grobe Pruefung.
+    if not target_name:
+        raise ValueError("new_name darf nicht leer sein.")
+
+    flows_dir = project_root / "flows"
+    flows_dir.mkdir(parents=True, exist_ok=True)
+    target_dir = flows_dir / target_name
+
+    # Schutz vor Unfall: nicht ueber existierenden Projekt-Flow ruebertrampeln.
+    if target_dir.exists() and any(target_dir.iterdir()):
+        if not overwrite:
+            raise ValueError(
+                f"Projekt-Flow '{target_name}' existiert bereits unter "
+                f"flows/{target_name}/. Mit overwrite=true ersetzen oder "
+                f"new_name angeben (z.B. '{target_name}_v2')."
+            )
+        # overwrite: bestehenden Inhalt loeschen, dann neu kopieren
+        shutil.rmtree(target_dir)
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    copied: list[str] = []
+    skipped: list[str] = []
+    for entry in sorted(src_info.path.iterdir()):
+        if entry.name in _FORK_SKIP_NAMES or entry.name.startswith("."):
+            skipped.append(entry.name)
+            continue
+        dst = target_dir / entry.name
+        if entry.is_file():
+            shutil.copy2(entry, dst)
+            copied.append(entry.name)
+        elif entry.is_dir():
+            shutil.copytree(
+                entry, dst,
+                ignore=shutil.ignore_patterns(*_FORK_SKIP_NAMES),
+            )
+            copied.append(entry.name + "/")
+
+    # Verifizieren: Projekt-Flow muss jetzt sichtbar sein (und Projekt-lokal
+    # gewinnen bei Namensgleichheit).
+    try:
+        new_info = flow_service.get_flow(project_root, target_name)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"Fork-Verifikation fehlgeschlagen: {exc}") from exc
+
+    readme_rel = None
+    runner_rel = None
+    if (target_dir / "README.md").is_file():
+        readme_rel = f"flows/{target_name}/README.md"
+    if (target_dir / "runner.py").is_file():
+        runner_rel = f"flows/{target_name}/runner.py"
+
+    return {
+        "name": target_name,
+        "source_flow_name": flow_name,
+        "source_source": src_info.source,  # 'library' oder 'project'
+        "path": f"flows/{target_name}",
+        "source": new_info.source,  # sollte 'project' sein
+        "readme_path": readme_rel,
+        "runner_path": runner_rel,
+        "files_copied": copied,
+        "files_skipped": skipped,
+        "hint": (
+            f"Flow '{target_name}' liegt jetzt projekt-lokal unter "
+            f"flows/{target_name}/. Weitere Schritte: "
+            f"(1) fs_read pfad='flows/{target_name}/README.md' "
+            f"und fs_read pfad='flows/{target_name}/runner.py' lesen, "
+            f"(2) per fs_write anpassen, (3) Mini-Lauf mit "
+            f"flow_run(flow_name='{target_name}', config={{'limit': 2}}) testen. "
+            f"Der Library-Flow '{flow_name}' bleibt unveraendert und wird "
+            f"bei Namensgleichheit durch Deinen Projekt-Fork ueberdeckt."
+        ),
     }
 
 
