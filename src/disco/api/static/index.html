@@ -1718,6 +1718,20 @@ function handleEvent(ev) {
       setSystemMessage('FEHLER: ' + (ev.message || ev.text || 'unbekannt'));
       setStatus('Fehler', 'err');
       break;
+    case 'system_notice':
+      // Server-seitige Info vor dem Turn (z. B. Auto-Compact). Als
+      // system-Bubble anzeigen und laufenden Text-Stream zuruecksetzen,
+      // damit der anschliessende Assistent-Turn in eine neue Bubble geht.
+      currentBubble = null; currentText = '';
+      if (ev.kind === 'auto_compact') {
+        setSystemMessage('🗜️ ' + escHtml(ev.message || 'Auto-Compact laeuft …'));
+        // Nach Kompression den Chat-State frisch ziehen, damit der
+        // Token-Counter sofort den neuen (niedrigeren) Fuellstand zeigt.
+        if (state.activeProjectSlug) loadChatState(state.activeProjectSlug);
+      } else {
+        setSystemMessage(escHtml(ev.message || ''));
+      }
+      break;
     case 'done':
       currentBubble = null; currentText = '';
       state._isStreaming = false;

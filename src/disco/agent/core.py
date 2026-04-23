@@ -90,6 +90,14 @@ PORTAL_AGENT_OVERHEAD_TOKENS = 50_000
 # mit einer klaren Fehlermeldung (-> /compact-Vorschlag).
 CONTEXT_LIMIT_TOKENS = 260_000
 
+# Auto-Compact-Schwelle: ueber diesem Fuellstand wird der Chat VOR dem
+# naechsten Turn automatisch komprimiert (run_compaction_with_handover).
+# 70 % vom Budget (= 140k Tokens bei 200k Budget) ist der Punkt, ab dem
+# es mit naechster Antwort + Reasoning-Trace knapp werden wuerde. Lieber
+# einmal proaktiv komprimieren als in context_length_exceeded rennen.
+AUTO_COMPACT_THRESHOLD_PERCENT = 0.70
+AUTO_COMPACT_TRIGGER_TOKENS = int(CHAT_TOKEN_BUDGET * AUTO_COMPACT_THRESHOLD_PERCENT)
+
 
 def _effective_context_tokens(state: dict[str, Any] | None) -> int:
     """Liefert den effektiven Kontext-Fuellstand fuer Pre-Check und UI.
@@ -244,6 +252,20 @@ class DoneEvent(AgentEvent):
     tokens_output: int | None = None
     total_token_estimate: int | None = None  # aktueller Chat-Fill nach diesem Turn
     type: str = "done"
+
+
+@dataclass
+class SystemNoticeEvent(AgentEvent):
+    """Server-seitige Info, die vor dem eigentlichen Turn ausgeliefert wird.
+
+    Aktuell genutzt vom Auto-Compact (Phase 5): die UI soll anzeigen, dass
+    der Chat wegen hohem Fuellstand automatisch komprimiert wurde. `kind`
+    markiert die Kategorie fuer das Frontend (auto_compact | info).
+    """
+
+    message: str = ""
+    kind: str = "info"
+    type: str = "system_notice"
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +506,68 @@ class AgentService:
             state.get("token_estimate") or 0,
             " [SYSTEM-TRIGGER]" if _system_trigger else "",
         )
+
+        # Phase 5: Auto-Compact-Trigger.
+        # Wenn der Fuellstand (bevorzugt Azure-Ground-Truth aus dem letzten
+        # Turn) >= 70 % des Budgets ist, komprimieren wir VOR dem naechsten
+        # responses.create-Call. So rennt Disco nicht in das harte
+        # CONTEXT_LIMIT_TOKENS-Abbruchfenster. Die frisch persistierte
+        # User-Message bleibt erhalten — run_compaction_with_handover
+        # behaelt die letzten 3 User/Assistant-Paare.
+        _pre_turn_tokens = _effective_context_tokens(state)
+        if _pre_turn_tokens >= AUTO_COMPACT_TRIGGER_TOKENS:
+            logger.info(
+                "Auto-Compact getriggert: %d >= %d (%.1f%% von %d). "
+                "Starte Compaction-v2 vor dem Turn.",
+                _pre_turn_tokens, AUTO_COMPACT_TRIGGER_TOKENS,
+                100 * _pre_turn_tokens / CHAT_TOKEN_BUDGET,
+                CHAT_TOKEN_BUDGET,
+            )
+            yield SystemNoticeEvent(
+                kind="auto_compact",
+                message=(
+                    f"Kontext bei {_pre_turn_tokens:,} Tokens "
+                    f"({100 * _pre_turn_tokens / CHAT_TOKEN_BUDGET:.0f} % "
+                    f"vom Budget). Chat wird automatisch komprimiert "
+                    "(Handover-Brief wird erzeugt) …"
+                ),
+            )
+            try:
+                from ..chat.compaction import run_compaction_with_handover
+                result = run_compaction_with_handover(project_slug)
+                if result.get("skipped"):
+                    logger.info(
+                        "Auto-Compact uebersprungen: %s",
+                        result.get("reason"),
+                    )
+                else:
+                    logger.info(
+                        "Auto-Compact fertig: marked=%d kept=%d "
+                        "new_estimate=%d brief_chars=%d",
+                        result.get("marked_compacted", 0),
+                        len(result.get("kept_ids") or []),
+                        result.get("new_token_estimate", 0),
+                        result.get("handover_brief_chars", 0),
+                    )
+                # State neu laden — foundry_response_id ist jetzt None,
+                # measured_context_tokens geloescht, token_estimate neu
+                # berechnet (deutlich niedriger).
+                state = chat_repo.get_or_create_state(project_slug)
+            except Exception as exc:
+                # Compaction darf niemals den Turn verhindern. Wenn sie
+                # fehlschlaegt, bleibt der harte Pre-Check unten als Netz.
+                logger.warning(
+                    "Auto-Compact fehlgeschlagen (%s) — Turn laeuft mit "
+                    "altem Kontext weiter. Der CONTEXT_LIMIT_TOKENS-"
+                    "Pre-Check greift ggf. als Fallback.", exc,
+                )
+                yield SystemNoticeEvent(
+                    kind="info",
+                    message=(
+                        "Auto-Compact fehlgeschlagen, Turn laeuft trotzdem: "
+                        f"{exc}"
+                    ),
+                )
 
         # Projekt-Kontext aktivieren — gilt fuer alle Tool-Aufrufe in
         # diesem Turn (fs_*, sqlite_*, memory_*). Reset im finally am Ende.
