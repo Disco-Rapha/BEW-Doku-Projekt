@@ -439,8 +439,8 @@ Inhalt einer PDF kommt **ausschliesslich** aus der Tabelle
 konvertiert jede Datei einmalig nach Markdown (Flows
 `pdf_routing_decision` → `pdf_to_markdown`) und legt das Ergebnis
 dort ab. Drei Engines decken das Routing ab: `docling-standard`
-(lokal, 0 EUR), `azure-di` (~0,010 EUR/Seite) und `azure-di-hr`
-(~0,015 EUR/Seite).
+(lokal, 0 EUR), `azure-di` (0,00130 EUR/Seite) und `azure-di-hr`
+(0,00651 EUR/Seite).
 
 - `pdf_markdown_read(rel_path | file_id, max_chars?, offset?)` —
   liefert das Markdown aus `agent_pdf_markdown`. Bei truncated=true

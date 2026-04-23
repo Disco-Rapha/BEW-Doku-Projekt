@@ -8,8 +8,8 @@ Drei Engines (muessen mit `work_pdf_routing.engine` und dem Routing-Flow
 uebereinstimmen):
 
   docling-standard  — Lokal, 0 EUR, ~10-30s/Seite auf M1/M2/M3 (MPS).
-  azure-di          — Cloud, ~0.01 EUR/Seite, ~1-3s/Seite.
-  azure-di-hr       — Cloud, ~0.015 EUR/Seite, ~1-3s/Seite.
+  azure-di          — Cloud, 0.00130 EUR/Seite (1.30 EUR / 1000), ~1-3s/Seite.
+  azure-di-hr       — Cloud, 0.00651 EUR/Seite (6.51 EUR / 1000), ~1-3s/Seite.
 
 meta enthaelt immer:
   engine          : gewaehlter Engine-Name
@@ -70,10 +70,10 @@ def extract_markdown(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
         cost = 0.0
     elif engine == "azure-di":
         md, n_pages = _extract_azure_di(source, high_resolution=False)
-        cost = round(n_pages * 0.01, 4)
+        cost = round(n_pages * (1.30 / 1000), 5)
     else:  # azure-di-hr
         md, n_pages = _extract_azure_di(source, high_resolution=True)
-        cost = round(n_pages * 0.015, 4)
+        cost = round(n_pages * (6.51 / 1000), 5)
 
     duration_ms = (time.monotonic() - t_start) * 1000.0
 

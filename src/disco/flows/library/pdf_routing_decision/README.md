@@ -23,8 +23,8 @@ Der Flow trifft fuer **jedes PDF** eine Routing-Entscheidung zwischen drei Engin
 | Engine              | Kosten         | Einsatzgebiet                                                             |
 |---------------------|----------------|---------------------------------------------------------------------------|
 | `docling-standard`  | 0 EUR          | Reine Text-/Vektor-Dokumente (Produktblaetter, Formulare, Konformitaeten). |
-| `azure-di`          | ~0,010 EUR/Seite | Scans auf A4-Normalformat ohne feine Schriften; DI-Standard-OCR reicht.   |
-| `azure-di-hr`       | ~0,015 EUR/Seite | Vektor-Zeichnungen (KKS-Labels, Zeichnungskopf), Plan-Format (A3+), Grossbild-Seiten — 4x DPI noetig. |
+| `azure-di`          | 0,00130 EUR/Seite | Scans auf A4-Normalformat ohne feine Schriften; DI-Standard-OCR reicht.   |
+| `azure-di-hr`       | 0,00651 EUR/Seite | Vektor-Zeichnungen (KKS-Labels, Zeichnungskopf), Plan-Format (A3+), Grossbild-Seiten — 4x DPI noetig. |
 
 Die Entscheidung basiert auf der kalibrierten pdf_classify-Heuristik plus drei neuen Signalen:
 `n_vdrawing_pages`, `max_page_width_pt`, `n_large_image_pages`.

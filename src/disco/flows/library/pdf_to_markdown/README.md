@@ -9,7 +9,7 @@
 | **Verarbeitung** | Pro PDF: Dispatcher ruft `docling-standard` / `azure-di` / `azure-di-hr` auf.                   |
 | **Ausgabe**      | `agent_pdf_markdown` (md_content + char_count + source_hash + duration_ms + cost).              |
 | **Extern**       | Nur fuer `azure-di*` → Azure Document Intelligence. `docling-standard` ist lokal.               |
-| **Budget**       | docling-standard = 0 EUR; azure-di ~0,01 EUR/Seite; azure-di-hr ~0,015 EUR/Seite.               |
+| **Budget**       | docling-standard = 0 EUR; azure-di 0,00130 EUR/Seite (1,30 EUR/1000); azure-di-hr 0,00651 EUR/Seite (6,51 EUR/1000). |
 
 ```
 agent_pdf_inventory  +  work_pdf_routing   ─▶  pdf_to_markdown  ─▶  agent_pdf_markdown
