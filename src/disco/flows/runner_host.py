@@ -51,6 +51,7 @@ from dotenv import load_dotenv
 
 from disco.config import REPO_ROOT
 from disco.flows.sdk import (
+    ENV_DATASTORE_DB,
     ENV_FLOW_DIR,
     ENV_PROJECT_DB,
     ENV_PROJECT_ROOT,
@@ -155,13 +156,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    db_path = project_root / "data.db"
+    db_path = project_root / "workspace.db"
     if not db_path.exists():
         print(
-            f"FEHLER: Projekt-DB fehlt: {db_path}",
+            f"FEHLER: Projekt-Workspace-DB fehlt: {db_path}",
             file=sys.stderr,
         )
         return 2
+
+    # datastore.db ist Ebene 1+2 (Provenance + Content). Optional — manche
+    # Flows arbeiten nur mit workspace.db. Wenn vorhanden, wird der Pfad
+    # per Env an FlowRun.from_env() durchgereicht, das sie als `ds` attached.
+    datastore_path = project_root / "datastore.db"
 
     run_id = args.run_id
 
@@ -206,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     os.environ[ENV_RUN_ID] = str(run_id)
     os.environ[ENV_PROJECT_ROOT] = str(project_root)
     os.environ[ENV_PROJECT_DB] = str(db_path)
+    if datastore_path.exists():
+        os.environ[ENV_DATASTORE_DB] = str(datastore_path)
     os.environ[ENV_FLOW_DIR] = str(flow_dir)
 
     # Working Directory auf Projekt-Root (wie bei run_python)

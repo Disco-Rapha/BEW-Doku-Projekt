@@ -2295,29 +2295,49 @@ async function loadDbTables(slug) {
       return;
     }
     c.innerHTML = '';
+    // Gruppiert nach DB: Datastore zuerst (Ebene 1+2), dann Workspace (Ebene 3)
+    const groups = {datastore: [], workspace: []};
     for (const t of tables) {
-      const row = document.createElement('div');
-      row.className = 'tree-row file';
-      row.innerHTML = `
-        <span class="tree-icon">▤</span>
-        <span class="tree-name" title="${escAttr(t.columns.join(', '))}">${escHtml(t.name)}</span>
-        <span class="tree-size">${t.row_count}</span>
-      `;
-      row.onclick = () => openTableInViewer(t.name);
-      c.appendChild(row);
+      (groups[t.db] || groups.workspace).push(t);
+    }
+    for (const branch of ['datastore', 'workspace']) {
+      const list = groups[branch];
+      if (!list.length) continue;
+      const header = document.createElement('div');
+      header.className = 'tree-row muted';
+      header.style.fontSize = '11px';
+      header.style.padding = '4px 6px 2px';
+      header.textContent = branch === 'datastore'
+        ? 'datastore.db (Ebene 1+2, read-only)'
+        : 'workspace.db (Ebene 3, read/write)';
+      c.appendChild(header);
+      for (const t of list) {
+        const row = document.createElement('div');
+        row.className = 'tree-row file';
+        row.innerHTML = `
+          <span class="tree-icon">▤</span>
+          <span class="tree-name" title="${escAttr(t.columns.join(', '))}">${escHtml(t.name)}</span>
+          <span class="tree-size">${t.row_count}</span>
+        `;
+        row.onclick = () => openTableInViewer(t.name, t.db);
+        c.appendChild(row);
+      }
     }
   } catch (e) {
     c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
   }
 }
 
-async function openTableInViewer(table) {
+async function openTableInViewer(table, db) {
   if (!state.activeProjectSlug) return;
+  const branch = db === 'datastore' ? 'datastore' : 'workspace';
   state._viewerOpenTable = table;
   state._viewerOpenFile = null;
-  setViewerTitle('▤ ' + table, 'Projekt-DB');
+  const label = branch === 'datastore' ? 'datastore.db' : 'workspace.db';
+  setViewerTitle('▤ ' + table, label);
   ensureViewerOpen();
   state._dbTable = table;
+  state._dbBranch = branch;
   state._dbOffset = 0;
   state._dbLimit = 100;
   state._dbOrderBy = null;
@@ -2328,7 +2348,9 @@ async function openTableInViewer(table) {
 async function loadDbRows() {
   const slug = state.activeProjectSlug;
   const t = state._dbTable;
+  const db = state._dbBranch || 'workspace';
   let url = `/api/workspace/projects/${encodeURIComponent(slug)}/db/rows?table=${encodeURIComponent(t)}`
+          + `&db=${encodeURIComponent(db)}`
           + `&limit=${state._dbLimit}&offset=${state._dbOffset}`;
   if (state._dbOrderBy) url += `&order_by=${encodeURIComponent(state._dbOrderBy)}&order_dir=${state._dbOrderDir}`;
   setViewerHtml('<div class="viewer-body muted">lade …</div>');

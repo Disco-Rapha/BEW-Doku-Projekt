@@ -1,8 +1,8 @@
--- Projekt-DB-Template Migration 001: agent_sources Registry
+-- Projekt-DB-Template Migration datastore/001: agent_sources Registry
 --
--- Diese Migrationen laufen auf JEDER Projekt-data.db (nicht auf der
--- zentralen system.db). Sie sind idempotent und werden bei jedem
--- `disco project init` angewendet.
+-- Ziel-DB: <projekt>/datastore.db (Ebene 1 = Provenance).
+-- Laeuft idempotent auf jedem Projekt und wird bei `disco project init`
+-- bzw. beim Oeffnen eines bestehenden Projekts angewendet.
 --
 -- Zweck:
 --   agent_sources         — Registry aller Dateien in sources/, mit Hash + Status

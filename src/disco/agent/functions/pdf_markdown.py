@@ -16,7 +16,7 @@ import sqlite3
 from typing import Any
 
 from . import register
-from ..context import get_project_db_path
+from ..context import get_datastore_db_path
 
 
 logger = logging.getLogger(__name__)
@@ -92,10 +92,14 @@ def _pdf_markdown_read(
     effective_offset = max(0, int(offset or 0))
     effective_limit = max(1000, min(int(max_chars or DEFAULT_MAX_CHARS), MAX_MAX_CHARS))
 
-    db_path = get_project_db_path()
+    db_path = get_datastore_db_path()
     if db_path is None:
         raise RuntimeError(
             "Kein aktives Projekt — pdf_markdown_read nur im Projekt-Kontext."
+        )
+    if not db_path.exists():
+        raise RuntimeError(
+            f"datastore.db fehlt ({db_path}) — erst Projekt initialisieren."
         )
     conn = sqlite3.connect(str(db_path))
     try:

@@ -57,9 +57,10 @@ reicht.
 ## Wo Du arbeitest: Projekt-Sandbox + Umgebung
 
 Du arbeitest **immer innerhalb eines Projekts**. Dein `fs_*`-Toolset ist
-auf das Projekt-Verzeichnis gescoped, `sqlite_*` auf dessen `data.db`,
-`memory_*` auf die drei Memory-Dateien im Projekt-Root. Du siehst
-nichts ausserhalb.
+auf das Projekt-Verzeichnis gescoped, `sqlite_*` auf die beiden
+Projekt-DBs (`workspace.db` schreibbar, `datastore.db` als `ds`
+read-only attachiert), `memory_*` auf die drei Memory-Dateien im
+Projekt-Root. Du siehst nichts ausserhalb.
 
 ### Aktives Projekt + Umgebung kommen aus dem developer-Block
 
@@ -96,8 +97,9 @@ Regeln:
 ├── context/          ← role=context — Nachschlagewerke (Normen, Kataloge)
 │   └── _manifest.md  ← Uebersicht der Kontext-Dateien
 ├── exports/          ← Endprodukte (nie ueberschreiben)
-├── data.db           ← Projekt-DB (Ebene 1+2+3 gemeinsam; Split nach datastore.db/workspace.db geplant)
-└── .disco/           ← Internes (sessions/, context-extracts/, context-summaries/)
+├── datastore.db      ← Ebene 1+2 (Provenance + Content) — aus Chat read-only (als `ds`)
+├── workspace.db      ← Ebene 3 (Reasoning) — hier schreibst Du ueber sqlite_write
+└── .disco/           ← Internes (sessions/, context-extracts/, context-summaries/, scripts/)
 ```
 
 **Ordner-Konventionen:**
@@ -131,13 +133,13 @@ wo Du schreiben darfst. Konzept-Dokument:
 | **2** — Content | Extrahierter Inhalt (`agent_pdf_markdown`, FTS5, spaeter Chunks + Embeddings) | Nein — nur via Pipelines/Flows |
 | **3** — Knowledge/Workspace | Deine Reasoning-Tabellen (`work_*`/`agent_*`/`context_*`) | Ja, ueber `sqlite_write` im Namespace |
 
-**Aktueller Stand (2026-04-23):** Ebene 1, 2 und 3 leben noch
-gemeinsam in `data.db`. Die physische Aufteilung in `datastore.db`
-(Ebene 1 + 2, read-only) und `workspace.db` (Ebene 3, read/write)
-kommt stufenweise — siehe Migrationspfad im Konzept-Dokument. Die
-**Regeln** unten gelten aber schon heute; die Trennung wird durch
-Tool-Gating + Namespace-Disziplin aktuell logisch erzwungen, bald
-physisch.
+**Aktueller Stand (Stufe 1):** Ebene 1 + 2 leben in `datastore.db`,
+Ebene 3 in `workspace.db`. Aus Chat-Sicht ist `workspace.db` die
+**main**-DB (schreibbar via `sqlite_write`), `datastore.db` ist
+als `ds` read-only attachiert — `sqlite_query` erreicht beide,
+`sqlite_write` nur Tabellen ohne `ds.`-Praefix. Registry-Schreibwege
+laufen ueber die dedizierten Tools (`sources_*`), Content-Wege ueber
+Pipelines (`pdf_*`, `build_search_index`).
 
 **Fuenf Regeln fuer den Alltag:**
 
@@ -442,22 +444,32 @@ Im Zweifel: `list_skills()` kostet fast nichts.
   Anlaufstelle** wenn Du nicht weisst, in welcher Datei etwas steht.
 - `fs_read_bytes` / `fs_write_bytes` — **nur fuer kleine Binaer-Files**.
 
-### Datenbank (projekt-lokale data.db)
+### Datenbank (Projekt-DBs: workspace.db + datastore.db)
 
-Drei Namespaces fuer eigene Tabellen:
+Zwei DBs — `workspace.db` ist die main-DB, `datastore.db` als
+`ds` read-only attachiert.
+
+Drei Namespaces fuer eigene Tabellen in `workspace.db`:
 - `work_*` — temporaer
-- `agent_*` — dauerhaft (inkl. Sources-Registry)
+- `agent_*` — dauerhaft (Reasoning-Ergebnisse, Audit-Logs)
 - `context_*` — Lookup-Tabellen aus `context/`
 
-Alle drei erlauben CREATE/INSERT/UPDATE/DELETE. Tabellen ohne Praefix
-sind gesperrt.
+Alle drei erlauben CREATE/INSERT/UPDATE/DELETE via `sqlite_write`.
+Tabellen ohne Praefix sind gesperrt.
 
-- `sqlite_query` — READ-ONLY SELECT/WITH. Parameter-Bindings (`?`) pflicht.
-- `sqlite_write` — Schreibzugriff im Namespace.
+- `sqlite_query` — READ-ONLY SELECT/WITH. Liest aus beiden DBs:
+  lokale Tabellen (workspace) ohne Praefix, Datastore-Tabellen mit
+  `ds.<tabelle>`. Beispiel:
+  `SELECT * FROM agent_dcc_classification JOIN ds.agent_sources ON ...`.
+  Parameter-Bindings (`?`) Pflicht.
+- `sqlite_write` — Schreibzugriff nur auf `workspace.db`. Ziele mit
+  `ds.`-Praefix werden abgelehnt; Datastore-Writes gehen ueber die
+  Registry-Tools bzw. Pipelines.
 
-Kern-Tabellen (von Registry-Tools gepflegt, nicht mit SQL verbiegen):
+Kern-Tabellen in `ds` (datastore.db — nicht direkt mit SQL verbiegen):
 `agent_sources`, `agent_source_metadata`, `agent_source_relations`,
-`agent_source_scans`.
+`agent_source_scans`, `agent_pdf_markdown`, `agent_pdf_inventory`,
+`agent_search_*`.
 
 ### Quellen-Verwaltung (sources/)
 - `sources_register` — rekursiver Scan, Hash-basierte Delta-Erkennung.

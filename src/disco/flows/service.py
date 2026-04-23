@@ -186,7 +186,7 @@ def list_flows(project_root: Path) -> list[FlowInfo]:
     oder README), damit die UI anzeigen kann, was fehlt. Library-
     Flows muessen immer vollstaendig sein.
     """
-    db_path = project_root / "data.db"
+    db_path = project_root / "workspace.db"
     run_counts: dict[str, int] = {}
     if db_path.exists():
         conn = _connect(db_path)
@@ -334,7 +334,7 @@ def create_run(
             f"{LIBRARY_DIR / flow_name}."
         )
 
-    db_path = project_root / "data.db"
+    db_path = project_root / "workspace.db"
     # Sicherheitsnetz: Template-Migrationen anwenden, falls neue dazu-
     # gekommen sind (z.B. 005_flow_notifications). Der Server-Lifespan
     # macht das beim Start auch — aber CLI-Aufrufe laufen ohne Lifespan,
@@ -343,11 +343,11 @@ def create_run(
     try:
         from ..workspace import apply_project_db_migrations
 
-        apply_project_db_migrations(db_path)
+        apply_project_db_migrations(project_root)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Projekt-Migrationen fuer %s konnten nicht angewendet werden: %s",
-            db_path,
+            project_root,
             exc,
         )
     conn = _connect(db_path)
@@ -392,7 +392,7 @@ def start_run(project_root: Path, run_id: int) -> RunInfo:
     # Reset-Fall: failed oder paused → wir duerfen nochmal.
     # Wir setzen Kontroll-Signale zurueck, aber LASSEN die Items —
     # resume ueberspringt 'done' automatisch.
-    db_path = project_root / "data.db"
+    db_path = project_root / "workspace.db"
     conn = _connect(db_path)
     try:
         conn.execute(
@@ -468,7 +468,7 @@ def start_run(project_root: Path, run_id: int) -> RunInfo:
 
 
 def get_run(project_root: Path, run_id: int) -> RunInfo:
-    db_path = project_root / "data.db"
+    db_path = project_root / "workspace.db"
     conn = _connect(db_path)
     try:
         row = conn.execute(
@@ -499,12 +499,12 @@ def list_runs(
 ) -> list[RunInfo]:
     """Listet Runs in einem Projekt (neueste zuerst).
 
-    Gibt eine leere Liste zurueck, wenn das Projekt keine data.db hat
-    oder die Flow-Migration (004) noch nicht angewendet wurde.
+    Gibt eine leere Liste zurueck, wenn das Projekt keine workspace.db hat
+    oder die Flow-Migration (002) noch nicht angewendet wurde.
     """
     import sqlite3
 
-    db_path = project_root / "data.db"
+    db_path = project_root / "workspace.db"
     if not db_path.exists():
         return []
     conn = _connect(db_path)
@@ -568,7 +568,7 @@ def request_cancel(project_root: Path, run_id: int) -> RunInfo:
     active_status = run.status in ("running", "paused", "pending")
     worker_dead = (not run.worker_pid) or (not _pid_alive(run.worker_pid))
     if active_status and worker_dead:
-        db_path = project_root / "data.db"
+        db_path = project_root / "workspace.db"
         conn = _connect(db_path)
         try:
             conn.execute(
@@ -592,7 +592,7 @@ def request_cancel(project_root: Path, run_id: int) -> RunInfo:
 def _set_control(project_root: Path, run_id: int, col: str, value: int) -> None:
     if col not in ("pause_requested", "cancel_requested"):
         raise ValueError(f"Unbekannte Control-Spalte: {col}")
-    db_path = project_root / "data.db"
+    db_path = project_root / "workspace.db"
     conn = _connect(db_path)
     try:
         cur = conn.execute(
@@ -613,7 +613,7 @@ def list_run_items(
     status: str | None = None,
     limit: int = 500,
 ) -> list[dict[str, Any]]:
-    db_path = project_root / "data.db"
+    db_path = project_root / "workspace.db"
     conn = _connect(db_path)
     try:
         sql = """
@@ -677,7 +677,7 @@ def kill_run(project_root: Path, run_id: int) -> bool:
     if not run.worker_pid or not _pid_alive(run.worker_pid):
         _set_control(project_root, run_id, "cancel_requested", 1)
         # Status aufraeumen
-        db_path = project_root / "data.db"
+        db_path = project_root / "workspace.db"
         conn = _connect(db_path)
         try:
             conn.execute(
@@ -731,7 +731,7 @@ def kill_run(project_root: Path, run_id: int) -> bool:
     # mehr aktualisiert wurde (z. B. weil der Worker im Sleep stand),
     # ziehen wir hier auf 'cancelled' nach.
     if terminated:
-        db_path = project_root / "data.db"
+        db_path = project_root / "workspace.db"
         conn = _connect(db_path)
         try:
             conn.execute(

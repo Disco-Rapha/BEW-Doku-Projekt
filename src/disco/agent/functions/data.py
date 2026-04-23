@@ -31,21 +31,42 @@ from . import register
 
 
 def _connect():
-    """Verbindung zur aktiven DB:
-    - Projekt-Kontext aktiv -> Projekt-data.db
-    - Sonst -> system.db (alte Semantik)
+    """Verbindung zur aktiven Projekt-DB-Welt.
+
+    Architektur (siehe `docs/architektur-ebenen.md`):
+      - ``workspace.db`` (Ebene 3, Reasoning) wird als **main** geoeffnet.
+        Der Agent schreibt hier via sqlite_write (work_/agent_/context_-
+        Namespace).
+      - ``datastore.db`` (Ebene 1+2, Provenance + Content) wird als
+        ``ATTACH ... AS ds`` angehaengt — lesbar ueber ``ds.<tabelle>``,
+        aber fuer den Chat-Pfad read-only (ATTACH via interner Verbindung,
+        nicht via User-SQL).
+
+    Ohne Projekt-Kontext -> system.db (alte Semantik, z.B. CLI-Befehle
+    auf der zentralen DB).
     """
     import sqlite3
-    from ..context import get_project_db_path
+    from ..context import get_datastore_db_path, get_workspace_db_path
 
-    proj_db = get_project_db_path()
-    if proj_db is not None:
-        proj_db.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(proj_db))
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.row_factory = sqlite3.Row
-        return conn
-    return system_connect()
+    ws_db = get_workspace_db_path()
+    if ws_db is None:
+        return system_connect()
+
+    ws_db.parent.mkdir(parents=True, exist_ok=True)
+    # URI-Mode auf der main-Connection aktivieren, damit der ATTACH-Call
+    # darunter den Query-String `?mode=ro` auswerten kann. Fuer die
+    # main-DB (workspace.db) bleibt die Connection voll schreibbar.
+    conn = sqlite3.connect(f"file:{ws_db}", uri=True)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.row_factory = sqlite3.Row
+
+    ds_db = get_datastore_db_path()
+    if ds_db is not None and ds_db.exists():
+        # Read-only Attach — SQLite verhindert Schreibversuche physisch.
+        # Zusaetzlich lehnt sqlite_write `ds.*`-Ziele schon in der Parser-
+        # Schicht ab (siehe _check_write_allowed).
+        conn.execute("ATTACH DATABASE ? AS ds", (f"file:{ds_db}?mode=ro",))
+    return conn
 
 
 logger = logging.getLogger(__name__)
@@ -102,12 +123,18 @@ _WORD_RE = re.compile(r"\b([A-Za-z_]+)\b")
 @register(
     name="sqlite_query",
     description=(
-        "Fuehrt eine READ-ONLY SQL-Abfrage (SELECT/WITH) gegen die Projekt-DB "
-        "(data.db) aus und gibt das Ergebnis als JSON-Array von Objekten zurueck. "
+        "Fuehrt eine READ-ONLY SQL-Abfrage (SELECT/WITH) gegen die Projekt-DBs "
+        "aus und gibt das Ergebnis als JSON-Array von Objekten zurueck. "
+        "Die Abfrage laeuft gegen die workspace.db (Ebene 3 — Reasoning) als main-DB; "
+        "die datastore.db (Ebene 1+2 — Provenance+Content) ist als ATTACH-DB ds angehaengt "
+        "und ueber den Praefix `ds.<tabelle>` lesbar. Beispiel: "
+        "`SELECT * FROM ds.agent_sources WHERE extension='pdf'`, "
+        "`SELECT * FROM agent_dcc_classification JOIN ds.agent_sources ON ...`. "
         "Nutze Parameter-Bindings (?) statt String-Konkatenation. "
-        "Kern-Tabellen im Projekt: agent_sources (Registry), "
+        "Zentrale Tabellen in ds (datastore.db): agent_sources (Registry), "
         "agent_source_metadata, agent_source_relations, agent_source_scans, "
-        "agent_script_runs. Freie Namespaces fuer eigene Tabellen: "
+        "agent_pdf_markdown, agent_pdf_inventory, agent_search_*. "
+        "In workspace.db schreibt der Agent selbst: "
         "work_* (temporaer), agent_* (dauerhaft), context_* (Lookup). "
         "Verwende PRAGMA NICHT — nur reine SELECT-Statements."
     ),
@@ -287,6 +314,18 @@ def _check_write_allowed(sql: str) -> tuple[str, str | None]:
     if verb not in ALLOWED_WRITE_VERBS:
         raise ValueError(
             f"sqlite_write erlaubt nur {sorted(ALLOWED_WRITE_VERBS)} — gefunden: {verb}."
+        )
+
+    # datastore.db ist aus Chat-Sicht read-only — Schreibziele mit
+    # `ds.<tabelle>`-Praefix explizit ablehnen. (Zusaetzlich ist die
+    # ATTACH-Verbindung physikalisch read-only, aber eine klare Fehler-
+    # meldung ist besser als ein SQLite-Fehler.)
+    if re.search(r"\bds\.", stripped, re.IGNORECASE):
+        raise ValueError(
+            "sqlite_write darf nicht auf die datastore.db (Ebene 1+2) schreiben. "
+            "Registry/Content liegt dort read-only — Schreibzugriffe gehen nur ueber "
+            "Registry-Tools (sources_*) und Pipelines (pdf_*, build_search_index). "
+            "Fuer eigene Tabellen bitte work_*/agent_*/context_* in der workspace.db."
         )
 
     # Zieltabelle ermitteln (verb-spezifisch)

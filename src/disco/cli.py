@@ -68,7 +68,8 @@ def project_group() -> None:
     """Projekte im Disco-Workspace verwalten.
 
     Ein Projekt = ein Verzeichnis unter ~/Disco/projects/<slug>/ mit
-    sources/, work/, exports/, .disco/ und einer eigenen data.db.
+    sources/, context/, exports/, .disco/ und zwei DBs:
+    datastore.db (Ebene 1+2) + workspace.db (Ebene 3).
     """
 
 
@@ -111,10 +112,11 @@ def project_init(
 
     status = "neu angelegt" if info["created"] else "bereits vorhanden — aktualisiert"
     click.echo(f"OK Projekt '{info['name']}' ({status}):")
-    click.echo(f"   Slug:       {info['slug']}")
-    click.echo(f"   Pfad:       {info['path']}")
-    click.echo(f"   Projekt-DB: {info['db_path']}")
-    click.echo(f"   System-ID:  {info['project_id']}")
+    click.echo(f"   Slug:          {info['slug']}")
+    click.echo(f"   Pfad:          {info['path']}")
+    click.echo(f"   datastore.db:  {info['datastore_db_path']}")
+    click.echo(f"   workspace.db:  {info['workspace_db_path']}")
+    click.echo(f"   System-ID:     {info['project_id']}")
 
     if sample:
         sample_info = seed_sample_sources(_Path(info["path"]))
@@ -143,12 +145,12 @@ def project_list() -> None:
     if not items:
         click.echo("Keine Projekte. Mit 'disco project init <slug>' anlegen.")
         return
-    click.echo(f"{'Slug':<25} {'Name':<28} {'Status':<14} {'Quellen':>8} {'Work':>6} {'Export':>7}")
+    click.echo(f"{'Slug':<25} {'Name':<28} {'Status':<14} {'Quellen':>8} {'Kontext':>8} {'Export':>7}")
     click.echo("-" * 95)
     for p in items:
         click.echo(
             f"{p['slug']:<25} {p['name'][:28]:<28} {p['status']:<14} "
-            f"{p['files_in_sources']:>8} {p['files_in_work']:>6} {p['files_in_exports']:>7}"
+            f"{p['files_in_sources']:>8} {p['files_in_context']:>8} {p['files_in_exports']:>7}"
         )
 
 
@@ -171,14 +173,23 @@ def project_show(slug: str) -> None:
     click.echo(f"  System-ID    : {info['db_id']}")
     click.echo(f"  Erstellt     : {info['created_at']}")
     click.echo(f"")
-    click.echo(f"  Projekt-DB   : {info['db_path']}  ({info['db_size']:,} B)")
-    if info["db_tables"]:
-        click.echo(f"  Tabellen     : {', '.join(info['db_tables'])}")
+    click.echo(
+        f"  Datastore-DB : {info['datastore_db_path']}  ({info['datastore_db_size']:,} B)"
+    )
+    if info["datastore_tables"]:
+        click.echo(f"      Tabellen : {', '.join(info['datastore_tables'])}")
     else:
-        click.echo(f"  Tabellen     : (noch keine work_*/agent_*-Tabellen)")
+        click.echo(f"      Tabellen : (noch keine agent_*-Tabellen)")
+    click.echo(
+        f"  Workspace-DB : {info['workspace_db_path']}  ({info['workspace_db_size']:,} B)"
+    )
+    if info["workspace_tables"]:
+        click.echo(f"      Tabellen : {', '.join(info['workspace_tables'])}")
+    else:
+        click.echo(f"      Tabellen : (noch keine work_*/agent_*-Tabellen)")
     click.echo("")
     click.echo(f"  Dateien in sources : {info['files_in_sources']}")
-    click.echo(f"  Dateien in work    : {info['files_in_work']}")
+    click.echo(f"  Dateien in context : {info['files_in_context']}")
     click.echo(f"  Dateien in exports : {info['files_in_exports']}")
 
 

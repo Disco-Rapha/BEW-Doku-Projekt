@@ -9,14 +9,14 @@ Ein Projekt im Disco-Workspace ist ein Verzeichnis unter
     ├── NOTES.md           ← Disco fuehrt chronologisch fort (append-only)
     ├── DISCO.md           ← Discos destilliertes Arbeitsgedaechtnis
     │                        (Konventionen, Tabellen, Lookups, Entscheidungen)
-    ├── sources/           ← Arbeitsdokumente (zu bearbeitendes Material)
-    ├── context/           ← Arbeitsgrundlagen (Normen, Kataloge, Richtlinien)
+    ├── sources/           ← Arbeitsdokumente, Rolle `source`
+    ├── context/           ← Arbeitsgrundlagen, Rolle `context`
     │   └── _manifest.md   ← Agent-gepflegte Uebersicht aller Kontext-Dateien
-    ├── work/              ← Discos Arbeitsraum (Skripte, Zwischenstaende)
     ├── exports/           ← Endprodukte (nicht ueberschreiben)
-    ├── data.db            ← Projekt-DB (work_*/agent_*/context_*-Tabellen)
-    └── .disco/            ← Internes (Plaene, Sessions, Extrakte, Summaries)
-        ├── plans/
+    ├── datastore.db       ← Ebene 1+2: Provenance + Content (read-only aus Chat)
+    ├── workspace.db       ← Ebene 3: Reasoning (read/write aus Chat)
+    └── .disco/            ← Internes (Sessions, Extrakte, Summaries, Skripte)
+        ├── scripts/
         ├── sessions/
         ├── context-extracts/
         ├── context-summaries/
@@ -24,6 +24,14 @@ Ein Projekt im Disco-Workspace ist ein Verzeichnis unter
 
 Parallel wird ein Eintrag in der zentralen `projects`-Tabelle der
 system.db angelegt, damit das Projekt im UI/CLI auftaucht.
+
+DB-Architektur (siehe `docs/architektur-ebenen.md`):
+  - `datastore.db` haelt Ebene 1 (Provenance) + Ebene 2 (Content).
+    Schreibzugriff nur durch Registry-Tools und Pipelines.
+  - `workspace.db` haelt Ebene 3 (Knowledge). Agent schreibt dort
+    ueber sqlite_write frei (work_*/agent_*/context_*-Namespace).
+  - Migrationen liegen getrennt unter `migrations/project/datastore/`
+    und `migrations/project/workspace/`.
 """
 
 from __future__ import annotations
@@ -80,11 +88,9 @@ PROJECT_SUBDIRS: tuple[str, ...] = (
     "sources",
     "sources/_meta",
     "context",
-    "work",
-    "work/scripts",
     "exports",
     ".disco",
-    ".disco/plans",
+    ".disco/scripts",
     ".disco/sessions",
     ".disco/local-skills",
     ".disco/context-extracts",
@@ -223,7 +229,7 @@ Tabellen in die DB zu importieren (`context_*`-Praefix).
 
 **Was gehoert NICHT hierher?**
 - IST-Dokumente (die gehoeren nach `sources/`)
-- Zwischenstaende (nach `work/`)
+- Zwischenstaende (bleiben in der `workspace.db` oder in `.disco/`)
 - Endprodukte (nach `exports/`)
 
 ---
@@ -238,26 +244,37 @@ Tabellen in die DB zu importieren (`context_*`-Praefix).
 # Projekt-DB-Initialisierung
 # ---------------------------------------------------------------------------
 
-PROJECT_DB_MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "migrations" / "project"
+_MIGRATIONS_ROOT = (
+    Path(__file__).resolve().parent.parent.parent / "migrations" / "project"
+)
+PROJECT_DATASTORE_MIGRATIONS_DIR = _MIGRATIONS_ROOT / "datastore"
+PROJECT_WORKSPACE_MIGRATIONS_DIR = _MIGRATIONS_ROOT / "workspace"
 
 
-def _init_project_db(db_path: Path) -> None:
-    """Legt eine Projekt-DB an und wendet alle Template-Migrationen an.
+def _init_project_db(db_path: Path, migrations_dir: Path) -> list[str]:
+    """Legt eine Projekt-DB an und wendet die passenden Template-Migrationen an.
 
     Konvention:
-      - work_*   — temporaere Session-Tabellen
-      - agent_*  — dauerhafte Agent-Arbeitsdaten (inkl. Sources-Registry)
+      - work_*   — temporaere Session-Tabellen (nur workspace.db)
+      - agent_*  — dauerhafte Agent-Arbeitsdaten (datastore.db fuer Registry/
+                   Content, workspace.db fuer Reasoning-Ergebnisse)
       - context_* — Lookup-Tabellen aus context/
-      - _disco_* — interne Meta-Tabellen (Schema-Version, Scan-Historie)
+      - _disco_* — interne Meta-Tabellen (Schema-Version, Migration-Historie)
 
-    Template-Migrationen liegen unter `migrations/project/NNN_*.sql`,
-    werden idempotent per CREATE IF NOT EXISTS angelegt.
+    Template-Migrationen liegen unter `migrations/project/<zweig>/NNN_*.sql`
+    (Zweig = datastore oder workspace), werden idempotent per
+    CREATE IF NOT EXISTS angelegt.
+
+    Returns:
+        Liste der neu angewendeten Migrations-Dateinamen (leer wenn die DB
+        bereits auf dem aktuellen Stand war).
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    newly_applied: list[str] = []
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("PRAGMA foreign_keys = ON;")
-        # Meta-Tabelle fuer Schema-Tracking
+        # Meta-Tabellen fuer Schema-Tracking
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS _disco_meta (
@@ -276,14 +293,13 @@ def _init_project_db(db_path: Path) -> None:
         )
         conn.commit()
 
-        # Template-Migrationen anwenden (idempotent)
-        if PROJECT_DB_MIGRATIONS_DIR.exists():
+        if migrations_dir.exists():
             applied = {
                 r[0] for r in conn.execute(
                     "SELECT filename FROM _disco_project_migrations"
                 ).fetchall()
             }
-            for mig in sorted(PROJECT_DB_MIGRATIONS_DIR.glob("*.sql")):
+            for mig in sorted(migrations_dir.glob("*.sql")):
                 if mig.name in applied:
                     continue
                 sql = mig.read_text(encoding="utf-8")
@@ -293,8 +309,20 @@ def _init_project_db(db_path: Path) -> None:
                     (mig.name,),
                 )
                 conn.commit()
+                newly_applied.append(mig.name)
     finally:
         conn.close()
+    return newly_applied
+
+
+def datastore_db_path(project_path: Path) -> Path:
+    """Pfad zur datastore.db (Ebene 1+2) eines Projekts."""
+    return project_path / "datastore.db"
+
+
+def workspace_db_path(project_path: Path) -> Path:
+    """Pfad zur workspace.db (Ebene 3) eines Projekts."""
+    return project_path / "workspace.db"
 
 
 def seed_sample_sources(project_path: Path) -> dict[str, Any]:
@@ -374,77 +402,56 @@ def seed_sample_sources(project_path: Path) -> dict[str, Any]:
     }
 
 
-def bootstrap_all_project_migrations() -> dict[str, list[str]]:
+def bootstrap_all_project_migrations() -> dict[str, dict[str, list[str]]]:
     """Wendet Template-Migrationen auf ALLE bestehenden Projekt-DBs an.
 
     Wird beim Server-Startup aufgerufen — sorgt dafuer, dass Bestands-
     Projekte beim Deployment einer neuen Migration automatisch
     aktualisiert werden, ohne dass der Nutzer pro Projekt etwas tun muss.
 
+    Beide DBs (`datastore.db` und `workspace.db`) werden separat aktualisiert.
+    Legacy-Projekte ohne die beiden Dateien werden uebersprungen (der
+    Harte Cutover verlangt ohnehin frische Projekte).
+
     Returns:
-        Mapping slug → Liste der neu angewendeten Migrations-Dateinamen.
-        Projekte ohne data.db (orphans) werden uebersprungen.
+        Mapping slug → {"datastore": [...], "workspace": [...]} mit den
+        neu angewendeten Migrations-Dateinamen pro Zweig. Projekte ohne
+        Treffer tauchen nicht im Ergebnis auf.
     """
-    result: dict[str, list[str]] = {}
+    result: dict[str, dict[str, list[str]]] = {}
     if not settings.projects_dir.exists():
         return result
     for project_path in sorted(settings.projects_dir.iterdir()):
         if not project_path.is_dir():
             continue
-        db_path = project_path / "data.db"
-        if not db_path.exists():
+        ds_path = datastore_db_path(project_path)
+        ws_path = workspace_db_path(project_path)
+        if not ds_path.exists() and not ws_path.exists():
             continue
         try:
-            applied = apply_project_db_migrations(db_path)
+            applied = apply_project_db_migrations(project_path)
         except Exception:  # noqa: BLE001
             # Einzelner Migrations-Fehler darf den Server-Start nicht
             # blockieren — Logging via Aufrufer.
-            applied = []
-        if applied:
+            applied = {"datastore": [], "workspace": []}
+        if applied["datastore"] or applied["workspace"]:
             result[project_path.name] = applied
     return result
 
 
-def apply_project_db_migrations(db_path: Path) -> list[str]:
-    """Wendet Template-Migrationen auf eine bestehende Projekt-DB an.
+def apply_project_db_migrations(project_path: Path) -> dict[str, list[str]]:
+    """Wendet Template-Migrationen auf beide Projekt-DBs an.
 
     Nuetzlich fuer Bestands-Projekte nach Update der Template-Scripts.
-    Gibt die Liste der neu angewendeten Dateinamen zurueck.
+    Legt fehlende DBs an (idempotent), wendet ausstehende Migrationen an
+    und gibt fuer jeden Zweig die Liste der neu angewendeten Dateinamen zurueck.
     """
-    if not db_path.exists():
-        raise FileNotFoundError(f"Projekt-DB nicht gefunden: {db_path}")
-    newly_applied: list[str] = []
-    conn = sqlite3.connect(str(db_path))
-    try:
-        # Falls die Meta-Tabelle noch nicht existiert (alte Projekte)
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS _disco_project_migrations (
-                filename   TEXT PRIMARY KEY,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            """
-        )
-        conn.commit()
-        applied = {
-            r[0] for r in conn.execute(
-                "SELECT filename FROM _disco_project_migrations"
-            ).fetchall()
-        }
-        if PROJECT_DB_MIGRATIONS_DIR.exists():
-            for mig in sorted(PROJECT_DB_MIGRATIONS_DIR.glob("*.sql")):
-                if mig.name in applied:
-                    continue
-                conn.executescript(mig.read_text(encoding="utf-8"))
-                conn.execute(
-                    "INSERT INTO _disco_project_migrations (filename) VALUES (?)",
-                    (mig.name,),
-                )
-                conn.commit()
-                newly_applied.append(mig.name)
-    finally:
-        conn.close()
-    return newly_applied
+    ds_path = datastore_db_path(project_path)
+    ws_path = workspace_db_path(project_path)
+    return {
+        "datastore": _init_project_db(ds_path, PROJECT_DATASTORE_MIGRATIONS_DIR),
+        "workspace": _init_project_db(ws_path, PROJECT_WORKSPACE_MIGRATIONS_DIR),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -470,8 +477,8 @@ def init_project(
         overwrite_files: True = README/NOTES/DISCO.md ueberschreiben.
 
     Returns:
-        Dict mit slug, name, path, db_path, project_id (system.db),
-        created (bool — true wenn neu).
+        Dict mit slug, name, path, datastore_db_path, workspace_db_path,
+        project_id (system.db), created (bool — true wenn neu).
     """
     slug = validate_slug(slug)
     if not name:
@@ -499,10 +506,11 @@ def init_project(
         if not target.exists() or overwrite_files:
             target.write_text(content, encoding="utf-8")
 
-    # 3) Projekt-DB + Template-Migrationen (idempotent)
-    db_path = project_path / "data.db"
-    _init_project_db(db_path)
-    apply_project_db_migrations(db_path)
+    # 3) Projekt-DBs + Template-Migrationen (idempotent)
+    ds_path = datastore_db_path(project_path)
+    ws_path = workspace_db_path(project_path)
+    _init_project_db(ds_path, PROJECT_DATASTORE_MIGRATIONS_DIR)
+    _init_project_db(ws_path, PROJECT_WORKSPACE_MIGRATIONS_DIR)
 
     # 4) Eintrag in system.db (projects-Tabelle) — slug ist Schluessel
     sysconn = connect()
@@ -534,7 +542,8 @@ def init_project(
         "slug": slug,
         "name": name,
         "path": str(project_path),
-        "db_path": str(db_path),
+        "datastore_db_path": str(ds_path),
+        "workspace_db_path": str(ws_path),
         "project_id": project_id,
         "created": is_new,
     }
@@ -571,6 +580,8 @@ def list_workspace_projects() -> list[dict[str, Any]]:
         seen_slugs.add(slug)
         db_entry = by_slug.get(slug)
         meta = _read_project_meta(d)
+        has_ds = datastore_db_path(d).exists()
+        has_ws = workspace_db_path(d).exists()
         out.append({
             "slug": slug,
             "name": db_entry["name"] if db_entry else slug.title(),
@@ -578,11 +589,11 @@ def list_workspace_projects() -> list[dict[str, Any]]:
             "db_id": db_entry["id"] if db_entry else None,
             "status": db_entry["status"] if db_entry else "orphan-fs-only",
             "description": db_entry["description"] if db_entry else None,
-            "has_data_db": (d / "data.db").exists(),
+            "has_datastore_db": has_ds,
+            "has_workspace_db": has_ws,
             "files_in_sources": meta["files_in_sources"],
             "files_in_context": meta["files_in_context"],
             "files_in_exports": meta["files_in_exports"],
-            "files_in_work": meta["files_in_work"],
             "created_at": db_entry["created_at"] if db_entry else None,
         })
 
@@ -600,11 +611,11 @@ def list_workspace_projects() -> list[dict[str, Any]]:
             "db_id": db_entry["id"],
             "status": "orphan-db-only",
             "description": db_entry["description"],
-            "has_data_db": False,
+            "has_datastore_db": False,
+            "has_workspace_db": False,
             "files_in_sources": 0,
             "files_in_context": 0,
             "files_in_exports": 0,
-            "files_in_work": 0,
             "created_at": db_entry["created_at"],
         })
 
@@ -623,7 +634,6 @@ def _read_project_meta(project_path: Path) -> dict[str, int]:
         "files_in_sources": _count("sources"),
         "files_in_context": _count("context"),
         "files_in_exports": _count("exports"),
-        "files_in_work": _count("work"),
     }
 
 
@@ -652,13 +662,15 @@ def show_project(slug: str) -> dict[str, Any]:
         sysconn.close()
 
     meta = _read_project_meta(project_path)
-    db_path = project_path / "data.db"
-    db_size = db_path.stat().st_size if db_path.exists() else 0
-    db_tables: list[str] = []
-    if db_path.exists():
-        c = sqlite3.connect(str(db_path))
+    ds_path = datastore_db_path(project_path)
+    ws_path = workspace_db_path(project_path)
+
+    def _list_tables(db: Path) -> list[str]:
+        if not db.exists():
+            return []
+        c = sqlite3.connect(str(db))
         try:
-            db_tables = [
+            return [
                 r[0]
                 for r in c.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' "
@@ -678,9 +690,12 @@ def show_project(slug: str) -> dict[str, Any]:
         "description": row["description"] if row else None,
         "created_at": row["created_at"] if row else None,
         "updated_at": row["updated_at"] if row else None,
-        "db_path": str(db_path),
-        "db_size": db_size,
-        "db_tables": db_tables,
+        "datastore_db_path": str(ds_path),
+        "workspace_db_path": str(ws_path),
+        "datastore_db_size": ds_path.stat().st_size if ds_path.exists() else 0,
+        "workspace_db_size": ws_path.stat().st_size if ws_path.exists() else 0,
+        "datastore_tables": _list_tables(ds_path),
+        "workspace_tables": _list_tables(ws_path),
         **meta,
     }
 

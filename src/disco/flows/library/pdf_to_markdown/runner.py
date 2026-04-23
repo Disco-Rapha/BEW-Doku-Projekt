@@ -1,7 +1,13 @@
 """Flow: pdf_to_markdown.
 
-Liest work_pdf_routing, ruft den Engine-Dispatcher und schreibt das
-Markdown-Ergebnis nach agent_pdf_markdown.
+Liest work_pdf_routing (workspace.db), ruft den Engine-Dispatcher und
+schreibt das Markdown-Ergebnis nach ds.agent_pdf_markdown (datastore.db).
+JOIN gegen ds.agent_pdf_inventory fuer den Quell-Hash.
+
+Ebenen-Hinweis (Stufe 1 Architektur):
+  - work_pdf_routing   → Ebene 3, in workspace.db als `main` → ohne Praefix.
+  - agent_pdf_inventory → Ebene 2, in datastore.db (ATTACH `ds`) → `ds.`-Praefix.
+  - agent_pdf_markdown  → Ebene 2, in datastore.db → `ds.`-Praefix.
 """
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ def load_items(
     if not force_rerun:
         where.append(
             "NOT EXISTS ("
-            "  SELECT 1 FROM agent_pdf_markdown m "
+            "  SELECT 1 FROM ds.agent_pdf_markdown m "
             "  WHERE m.file_id = w.file_id "
             "    AND m.source_hash IS NOT NULL "
             "    AND m.source_hash = a.sha256"
@@ -55,7 +61,7 @@ def load_items(
         "SELECT w.file_id AS file_id, w.rel_path AS rel_path, "
         "       w.engine AS engine, a.sha256 AS source_hash "
         "FROM work_pdf_routing w "
-        "JOIN agent_pdf_inventory a ON a.id = w.file_id "
+        "JOIN ds.agent_pdf_inventory a ON a.id = w.file_id "
         f"WHERE {' AND '.join(where)} "
         "ORDER BY w.file_id"
     )
@@ -92,7 +98,7 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
     md, meta = extract_markdown(abs_path, engine)
 
     run.db.insert_row(
-        "agent_pdf_markdown",
+        "ds.agent_pdf_markdown",
         {
             "file_id": file_id,
             "rel_path": rel_path,

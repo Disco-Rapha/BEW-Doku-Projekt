@@ -125,7 +125,7 @@ _checkpoint_idx: dict[int, int] = {}
 async def process_pending_notifications() -> None:
     """Eine Iteration des Watcher-Loops.
 
-    Iteriert alle Projekte mit data.db, verarbeitet bis zu
+    Iteriert alle Projekte mit workspace.db, verarbeitet bis zu
     _MAX_NOTIFICATIONS_PER_TICK offene Notifications pro Projekt.
     """
     projects_dir = settings.projects_dir
@@ -135,7 +135,7 @@ async def process_pending_notifications() -> None:
     for project_path in sorted(projects_dir.iterdir()):
         if not project_path.is_dir():
             continue
-        db_path = project_path / "data.db"
+        db_path = project_path / "workspace.db"
         if not db_path.exists():
             continue
         try:

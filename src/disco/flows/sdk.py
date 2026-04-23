@@ -13,8 +13,10 @@ Datei `flows/<name>/runner.py` mit ungefaehr diesem Aufbau:
         run = FlowRun.from_env()
         run.log("Flow gestartet")
 
+        # agent_sources liegt in der datastore.db (Ebene 1) und wird
+        # per ATTACH als `ds` eingeblendet — daher `ds.`-Praefix.
         items = run.db.query(
-            "SELECT id, rel_path FROM agent_sources WHERE status='active'"
+            "SELECT id, rel_path FROM ds.agent_sources WHERE status='active'"
         )
         run.set_total(len(items))
 
@@ -66,7 +68,15 @@ logger = logging.getLogger(__name__)
 # Environment-Variablen, die der runner_host beim Start setzt
 ENV_RUN_ID = "DISCO_FLOW_RUN_ID"
 ENV_PROJECT_ROOT = "DISCO_FLOW_PROJECT_ROOT"
+# ENV_PROJECT_DB zeigt seit Stufe 1 der Ebenen-Architektur auf die
+# workspace.db (Ebene 3 — Knowledge/Reasoning). Flows arbeiten hier als
+# `main`-DB: `agent_flow_runs`, `agent_flow_run_items`, `work_*` etc.
 ENV_PROJECT_DB = "DISCO_FLOW_PROJECT_DB"
+# ENV_DATASTORE_DB zeigt auf die datastore.db (Ebene 1+2 — Provenance +
+# Content). Flows, die Ebene-2-Tabellen schreiben (z.B. pdf_to_markdown
+# -> agent_pdf_markdown), attachen sie als `ds` dazu. Darf fehlen —
+# dann laeuft der Flow nur gegen die workspace.db.
+ENV_DATASTORE_DB = "DISCO_FLOW_DATASTORE_DB"
 ENV_FLOW_DIR = "DISCO_FLOW_DIR"
 
 
@@ -204,19 +214,65 @@ class FlowDB:
     damit parallel-laufender Worker-Code keine Lock-Konflikte bekommt.
     Der Autor muss nicht manuell `close()` rufen — FlowRun schliesst am
     Ende automatisch.
+
+    Architektur (Stufe 1 Ebenen-Split):
+      - `main`-DB = workspace.db (Ebene 3 — Knowledge/Reasoning,
+        inkl. agent_flow_runs/agent_flow_run_items/work_*-Tabellen).
+      - Optional ATTACH als `ds` = datastore.db (Ebene 1+2 — Provenance
+        + Content, inkl. agent_sources/agent_pdf_*-Tabellen). Flows sind
+        **privilegierte Schreiber** auf ds (anders als der Chat-Agent,
+        der ds nur lesen darf).
+
+    Zugriff aus runner.py:
+      - `SELECT ... FROM work_pdf_routing` → workspace.db
+      - `SELECT ... FROM ds.agent_pdf_inventory` → datastore.db
+      - `run.db.insert_row("ds.agent_pdf_markdown", {...})` → datastore.db
+      - `run.db.insert_row("agent_flow_run_items", {...})` → workspace.db
     """
 
-    def __init__(self, db_path: Path) -> None:
-        self._db_path = db_path
-        conn = sqlite3.connect(str(db_path), timeout=30.0)
+    def __init__(
+        self,
+        workspace_db_path: Path,
+        datastore_db_path: Path | None = None,
+    ) -> None:
+        self._workspace_db_path = workspace_db_path
+        self._datastore_db_path = datastore_db_path
+        # URI-Mode auf der main-Connection einschalten, damit wir ATTACH
+        # mit `file:...`-Syntax machen koennen (noetig fuer konsistente
+        # URI-Behandlung, auch wenn datastore hier r/w attached wird).
+        conn = sqlite3.connect(
+            f"file:{workspace_db_path}", uri=True, timeout=30.0
+        )
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA journal_mode = WAL;")  # parallele Reader/Writer
         conn.row_factory = sqlite3.Row
+        if datastore_db_path is not None and datastore_db_path.exists():
+            # ATTACH datastore.db als `ds`, read/write (Flows sind
+            # privilegierte Schreiber fuer Ebene 1+2). Der Chat-Agent
+            # attached dieselbe Datei stattdessen mit ?mode=ro.
+            conn.execute(
+                "ATTACH DATABASE ? AS ds", (f"file:{datastore_db_path}",)
+            )
+            # Journal-Mode auch auf ds sicherstellen (idempotent: wenn
+            # schon WAL, passiert nichts).
+            try:
+                conn.execute("PRAGMA ds.journal_mode = WAL;")
+            except sqlite3.Error:
+                pass
         self._conn = conn
 
     @property
     def path(self) -> Path:
-        return self._db_path
+        """Pfad zur workspace.db (historisches `path`-Alias)."""
+        return self._workspace_db_path
+
+    @property
+    def workspace_db_path(self) -> Path:
+        return self._workspace_db_path
+
+    @property
+    def datastore_db_path(self) -> Path | None:
+        return self._datastore_db_path
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -268,7 +324,9 @@ class FlowDB:
         Parameter
         ---------
         table : str
-            Name der Ziel-Tabelle. Muss existieren.
+            Name der Ziel-Tabelle. Muss existieren. Fuer cross-DB-Inserts
+            kann `"ds.<tabelle>"` genutzt werden — schreibt dann in die
+            attached datastore.db (z.B. `"ds.agent_pdf_markdown"`).
         data : dict
             Keys = Spaltennamen (genau wie in der DDL, inkl. Umlaute/
             Sonderzeichen). Keys die nicht zur Tabelle gehoeren → ValueError
@@ -289,10 +347,29 @@ class FlowDB:
         if not data:
             raise ValueError("insert_row: data-dict ist leer.")
 
+        # Optional: schema.table (z.B. "ds.agent_pdf_markdown").
+        # Wir akzeptieren genau ein Schema-Praefix; sonst wie bisher.
+        if "." in table:
+            schema_name, table_name = table.split(".", 1)
+            if "." in table_name:
+                raise ValueError(
+                    f"insert_row: Ungueltiger Tabellenname {table!r} — "
+                    "maximal ein Schema-Praefix erlaubt (z.B. 'ds.table')."
+                )
+            pragma_sql = f'PRAGMA "{schema_name}".table_info("{table_name}")'
+            fq_table = f'"{schema_name}"."{table_name}"'
+        else:
+            schema_name = None
+            table_name = table
+            pragma_sql = f'PRAGMA table_info("{table_name}")'
+            fq_table = f'"{table_name}"'
+
         # Schema einlesen (gecached waere schoener, aber PRAGMA ist billig)
-        cols_rows = self.query(f'PRAGMA table_info("{table}")')
+        cols_rows = self.query(pragma_sql)
         if not cols_rows:
-            raise ValueError(f"insert_row: Tabelle {table!r} existiert nicht.")
+            raise ValueError(
+                f"insert_row: Tabelle {table!r} existiert nicht."
+            )
         schema_cols = {r["name"] for r in cols_rows}
 
         # Validieren: alle Keys muessen in der Tabelle existieren
@@ -310,11 +387,11 @@ class FlowDB:
         values = [data[k] for k in keys]
 
         if on_conflict is None:
-            sql = f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders})'
+            sql = f'INSERT INTO {fq_table} ({col_list}) VALUES ({placeholders})'
         elif on_conflict == "replace":
-            sql = f'INSERT OR REPLACE INTO "{table}" ({col_list}) VALUES ({placeholders})'
+            sql = f'INSERT OR REPLACE INTO {fq_table} ({col_list}) VALUES ({placeholders})'
         elif on_conflict == "ignore":
-            sql = f'INSERT OR IGNORE INTO "{table}" ({col_list}) VALUES ({placeholders})'
+            sql = f'INSERT OR IGNORE INTO {fq_table} ({col_list}) VALUES ({placeholders})'
         elif on_conflict.startswith("update:"):
             conflict_cols = [c.strip() for c in on_conflict[len("update:"):].split(",") if c.strip()]
             if not conflict_cols:
@@ -331,7 +408,7 @@ class FlowDB:
             set_clause = ", ".join(f'"{k}" = excluded."{k}"' for k in update_keys)
             conflict_list = ", ".join(f'"{c}"' for c in conflict_cols)
             sql = (
-                f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders}) '
+                f'INSERT INTO {fq_table} ({col_list}) VALUES ({placeholders}) '
                 f'ON CONFLICT({conflict_list}) DO UPDATE SET {set_clause}'
             )
         else:
@@ -407,14 +484,23 @@ class FlowRun:
         run_id: int,
         project_root: Path,
         db_path: Path,
+        datastore_db_path: Path | None = None,
         flow_dir: Path | None = None,
     ) -> None:
         self._run_id = int(run_id)
         self._project_root = Path(project_root).resolve()
+        # db_path heisst aus historischen Gruenden weiterhin `db_path`
+        # (== workspace.db, also die Ebene-3-DB). Der runner_host setzt
+        # beide Pfade; `datastore_db_path` ist optional, damit Flows, die
+        # Ebene 2 gar nicht anfassen (z.B. reine work_*-Transformationen),
+        # ohne ATTACH laufen koennen.
         self._db_path = Path(db_path).resolve()
+        self._datastore_db_path = (
+            Path(datastore_db_path).resolve() if datastore_db_path else None
+        )
         self._flow_dir = Path(flow_dir).resolve() if flow_dir else None
 
-        self._db = FlowDB(self._db_path)
+        self._db = FlowDB(self._db_path, self._datastore_db_path)
         self._meta = self._load_meta()
         self._last_refresh = time.monotonic()
 
@@ -440,6 +526,9 @@ class FlowRun:
         """Baut einen FlowRun aus den DISCO_FLOW_*-Environment-Variablen.
 
         Wird vom `runner_host` gesetzt. Wirft RuntimeError wenn unvollstaendig.
+
+        Pflicht:   ENV_RUN_ID, ENV_PROJECT_ROOT, ENV_PROJECT_DB (workspace.db)
+        Optional:  ENV_DATASTORE_DB (datastore.db), ENV_FLOW_DIR
         """
         try:
             run_id = int(os.environ[ENV_RUN_ID])
@@ -452,10 +541,12 @@ class FlowRun:
                 f"Flows werden normalerweise ueber `disco flow run` gestartet."
             ) from exc
         flow_dir = os.environ.get(ENV_FLOW_DIR)
+        datastore_db = os.environ.get(ENV_DATASTORE_DB)
         return cls(
             run_id=run_id,
             project_root=Path(project_root),
             db_path=Path(db_path),
+            datastore_db_path=Path(datastore_db) if datastore_db else None,
             flow_dir=Path(flow_dir) if flow_dir else None,
         )
 

@@ -161,15 +161,15 @@ def _log_run(
         "Fuehrt ein Python-Skript LOKAL auf dem Host-Rechner aus. Zwei Modi:\n"
         "\n"
         "File-basiert (empfohlen, persistent, debugbar):\n"
-        "  1) Schreibe das Skript per fs_write nach work/scripts/<name>.py\n"
-        "  2) run_python(path='work/scripts/<name>.py')\n"
+        "  1) Schreibe das Skript per fs_write nach .disco/scripts/<name>.py\n"
+        "  2) run_python(path='.disco/scripts/<name>.py')\n"
         "  3) Bei Fehler: fs_read, fix, fs_write, erneut run_python\n"
         "\n"
         "Inline (fuer Einzeiler / Quick-Checks):\n"
         "  run_python(code='import os; print(len(os.listdir(\"sources/\")))')\n"
         "\n"
         "Das Skript laeuft im Projekt-Verzeichnis als Working Directory.\n"
-        "Es hat Zugriff auf sources/, context/, work/, exports/, data.db.\n"
+        "Es hat Zugriff auf sources/, context/, exports/, datastore.db, workspace.db.\n"
         "Alle installierten Python-Packages sind verfuegbar (openpyxl, pypdf, etc.).\n"
         "API-Keys sind NICHT im Environment (Sicherheit).\n"
         "\n"
@@ -192,7 +192,7 @@ def _log_run(
                 "type": "string",
                 "description": (
                     "Pfad zum .py-Skript, relativ zum Projekt-Root. "
-                    "Typisch: 'work/scripts/<name>.py'. "
+                    "Typisch: '.disco/scripts/<name>.py'. "
                     "Mutually exclusive mit 'code'."
                 ),
             },
@@ -366,8 +366,9 @@ def _run_python(
     if exit_code == 0:
         out["hint"] = (
             "Skript erfolgreich. Ergebnisse stehen in stdout und/oder in der "
-            "Projekt-DB (data.db). Falls das Skript DB-Tabellen beschrieben hat, "
-            "kannst Du sie per sqlite_query abfragen."
+            "Projekt-DB (workspace.db fuer Reasoning-Ergebnisse, datastore.db "
+            "fuer Registry/Content). Falls das Skript DB-Tabellen beschrieben "
+            "hat, kannst Du sie per sqlite_query abfragen."
         )
     elif exit_code is not None and exit_code > 0:
         out["hint"] = (

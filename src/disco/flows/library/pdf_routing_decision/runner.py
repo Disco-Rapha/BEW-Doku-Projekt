@@ -5,6 +5,10 @@
   - azure-di          — Scans auf Normalformat, Standard-OCR reicht
   - azure-di-hr       — Vektor-Zeichnungen, Plan-Format (A3+),
                         oder Grossbild-Seiten → 4x DPI-OCR noetig
+
+Ebenen-Hinweis (Stufe 1 Architektur):
+  - agent_pdf_inventory → Ebene 2, in datastore.db (ATTACH `ds`) → `ds.`-Praefix.
+  - work_pdf_routing    → Ebene 3, in workspace.db als `main` → ohne Praefix.
 """
 
 from __future__ import annotations
@@ -203,7 +207,7 @@ def load_items(
     if rerun_where_engine:
         sql = (
             "SELECT a.id AS file_id, a.rel_path "
-            "FROM agent_pdf_inventory a "
+            "FROM ds.agent_pdf_inventory a "
             "JOIN work_pdf_routing w ON w.file_id = a.id "
             "WHERE w.engine = ? "
             "ORDER BY RANDOM()"
@@ -226,7 +230,7 @@ def load_items(
     rows = run.db.query(
         """
         SELECT id AS file_id, rel_path
-        FROM agent_pdf_inventory
+        FROM ds.agent_pdf_inventory
         ORDER BY id
         """
     )

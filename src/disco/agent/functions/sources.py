@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import register
-from .data import _connect as db_connect
+from ..context import connect_datastore_rw as _connect_datastore_rw
 from .fs import _data_root
 
 
@@ -125,7 +125,7 @@ def _sources_register(
         raise ValueError(f"subpath ausserhalb von sources/: {subpath!r}")
 
     t_start = time.monotonic()
-    conn = db_connect()
+    conn = _connect_datastore_rw()
 
     # Scan-Eintrag anlegen
     cur = conn.execute(
@@ -522,7 +522,7 @@ def _sources_attach_metadata(
         )
 
     # agent_sources-Indexe aufbauen fuer schnelles Matching
-    conn = db_connect()
+    conn = _connect_datastore_rw()
     try:
         src_rows = conn.execute(
             "SELECT id, rel_path, filename FROM agent_sources WHERE status = 'active'"
@@ -596,7 +596,7 @@ def _sources_attach_metadata(
         result["hint"] = "Keine Metadaten-Spalten zum Schreiben (alle ignoriert)."
         return result
 
-    conn = db_connect()
+    conn = _connect_datastore_rw()
     rows_written = 0
     try:
         for source_id, row in resolved_rows:
@@ -681,7 +681,7 @@ def _sources_detect_duplicates(
     min_group_size = max(2, int(min_group_size))
     status_clause = "" if include_deleted else " AND status = 'active'"
 
-    conn = db_connect()
+    conn = _connect_datastore_rw()
     try:
         # Existiert die Relations-Tabelle? (Projekt-Template-Migration 002)
         has_rel = conn.execute(

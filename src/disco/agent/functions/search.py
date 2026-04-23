@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from . import register
-from .data import _connect
+from ..context import connect_datastore_rw
 from .fs import _data_root, _resolve_under_data
 
 
@@ -179,7 +179,7 @@ def _build_search_index(
     if max_files is not None and max_files > 0:
         files = files[: max_files]
 
-    conn = _connect()
+    conn = connect_datastore_rw()
     _ensure_schema(conn)
 
     indexed: list[dict[str, Any]] = []
@@ -367,7 +367,7 @@ def _search_index(
     user_query = query
     fts_query = _fts_safe_query(query)
 
-    conn = _connect()
+    conn = connect_datastore_rw()
     try:
         _ensure_schema(conn)
 

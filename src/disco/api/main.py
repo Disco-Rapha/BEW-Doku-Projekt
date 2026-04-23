@@ -52,8 +52,15 @@ async def lifespan(app: FastAPI):
     try:
         applied = bootstrap_all_project_migrations()
         if applied:
-            for slug, files in applied.items():
-                logger.info("project-migration applied: %s -> %s", slug, files)
+            for slug, branches in applied.items():
+                for branch, files in branches.items():
+                    if files:
+                        logger.info(
+                            "project-migration applied: %s[%s] -> %s",
+                            slug,
+                            branch,
+                            files,
+                        )
     except Exception:  # noqa: BLE001
         logger.exception("Bootstrap der Projekt-Migrationen fehlgeschlagen")
 
@@ -947,31 +954,59 @@ async def api_workspace_file(slug: str, path: str):
     return FileResponse(str(target), media_type=mime, filename=target.name)
 
 
+_DB_CHOICES = {"workspace", "datastore"}
+
+
+def _resolve_project_db(root: Path, db: str) -> Path:
+    """Liefert den Pfad zur gewuenschten Projekt-DB (workspace.db/datastore.db)."""
+    if db not in _DB_CHOICES:
+        raise ValueError(f"Unbekannte DB {db!r}. Erlaubt: {sorted(_DB_CHOICES)}.")
+    return root / f"{db}.db"
+
+
 @app.get("/api/workspace/projects/{slug}/db/tables")
 async def api_workspace_db_tables(slug: str):
-    """Liste der Tabellen in der Projekt-data.db (ohne Internals)."""
+    """Liste der Tabellen in den Projekt-DBs (ohne Internals).
+
+    Liefert eine flache Liste mit beiden DBs — pro Eintrag ist ``db``
+    ('workspace'|'datastore') gesetzt, damit das Frontend den Kontext
+    beim anschliessenden `/db/rows`-Aufruf mitgeben kann.
+    """
     try:
         root = _resolve_project_root(slug)
     except (ValueError, FileNotFoundError) as exc:
         return {"error": str(exc)}
-    db = root / "data.db"
-    if not db.exists():
-        return []
+
     import sqlite3
-    c = sqlite3.connect(str(db))
-    try:
-        rows = c.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_disco_%' "
-            "ORDER BY name"
-        ).fetchall()
-        out: list[dict] = []
-        for (name,) in rows:
-            cnt = c.execute(f"SELECT COUNT(*) FROM \"{name}\"").fetchone()[0]
-            cols = [r[1] for r in c.execute(f"PRAGMA table_info(\"{name}\")").fetchall()]
-            out.append({"name": name, "row_count": cnt, "columns": cols})
-    finally:
-        c.close()
+    out: list[dict] = []
+    for branch in ("datastore", "workspace"):
+        db_path = root / f"{branch}.db"
+        if not db_path.exists():
+            continue
+        c = sqlite3.connect(str(db_path))
+        try:
+            rows = c.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+                "AND name NOT LIKE '_disco_%' "
+                "ORDER BY name"
+            ).fetchall()
+            for (name,) in rows:
+                cnt = c.execute(f"SELECT COUNT(*) FROM \"{name}\"").fetchone()[0]
+                cols = [
+                    r[1]
+                    for r in c.execute(f"PRAGMA table_info(\"{name}\")").fetchall()
+                ]
+                out.append(
+                    {
+                        "name": name,
+                        "db": branch,
+                        "row_count": cnt,
+                        "columns": cols,
+                    }
+                )
+        finally:
+            c.close()
     return out
 
 
@@ -979,12 +1014,18 @@ async def api_workspace_db_tables(slug: str):
 async def api_workspace_db_rows(
     slug: str,
     table: str,
+    db: str = "workspace",
     limit: int = 100,
     offset: int = 0,
     order_by: str | None = None,
     order_dir: str = "ASC",
 ):
-    """Paginiertes SELECT * aus einer Tabelle der Projekt-DB."""
+    """Paginiertes SELECT * aus einer Tabelle einer Projekt-DB.
+
+    ``db`` waehlt zwischen ``workspace`` (Ebene 3) und ``datastore``
+    (Ebene 1+2). Beide DBs koennen theoretisch gleich heissende Tabellen
+    haben, daher ist der Parameter Pflicht (mit Default ``workspace``).
+    """
     import re as _re
     if not _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table or ""):
         return {"error": f"Ungueltiger Tabellenname: {table!r}"}
@@ -992,17 +1033,19 @@ async def api_workspace_db_rows(
         return {"error": f"Ungueltige Sortierspalte: {order_by!r}"}
     if order_dir.upper() not in ("ASC", "DESC"):
         return {"error": "order_dir muss ASC oder DESC sein"}
+    if db not in _DB_CHOICES:
+        return {"error": f"Unbekannte DB {db!r}. Erlaubt: {sorted(_DB_CHOICES)}."}
 
     try:
         root = _resolve_project_root(slug)
     except (ValueError, FileNotFoundError) as exc:
         return {"error": str(exc)}
-    db = root / "data.db"
-    if not db.exists():
-        return {"error": "data.db existiert nicht"}
+    db_path = root / f"{db}.db"
+    if not db_path.exists():
+        return {"error": f"{db}.db existiert nicht"}
 
     import sqlite3
-    c = sqlite3.connect(str(db))
+    c = sqlite3.connect(str(db_path))
     c.row_factory = sqlite3.Row
     try:
         # Existenz pruefen
@@ -1010,7 +1053,7 @@ async def api_workspace_db_rows(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
             (table,),
         ).fetchone():
-            return {"error": f"Tabelle '{table}' nicht gefunden"}
+            return {"error": f"Tabelle '{table}' nicht in {db}.db gefunden"}
         total = c.execute(f"SELECT COUNT(*) FROM \"{table}\"").fetchone()[0]
         sql = f"SELECT * FROM \"{table}\""
         if order_by:
@@ -1020,6 +1063,7 @@ async def api_workspace_db_rows(
         cols = [d[0] for d in (c.execute(sql).description or [])]
         return {
             "table": table,
+            "db": db,
             "total": total,
             "limit": int(limit),
             "offset": int(offset),
@@ -1045,8 +1089,8 @@ def _resolve_project_path_or_error(slug: str):
     project_path = settings.projects_dir / slug
     if not project_path.is_dir():
         return None, {"error": f"Projekt '{slug}' nicht gefunden."}
-    if not (project_path / "data.db").exists():
-        return None, {"error": f"Projekt-DB fehlt in '{slug}'."}
+    if not (project_path / "workspace.db").exists():
+        return None, {"error": f"workspace.db fehlt in '{slug}'."}
     return project_path, None
 
 
@@ -1286,7 +1330,7 @@ async def api_active_runs():
 
     Versorgt den Run-Streifen im Chat-Header. 3-Sekunden-Polling-freundlich:
     pro Projekt-DB eine kurze Query auf `agent_flow_runs WHERE status IN (...)`.
-    Projekte ohne data.db oder unlesbare DBs werden still uebersprungen.
+    Projekte ohne workspace.db oder unlesbare DBs werden still uebersprungen.
     """
     from ..flows import service as flow_service
     from ..workspace import list_workspace_projects
@@ -1298,7 +1342,7 @@ async def api_active_runs():
         return {"error": f"Projekt-Liste: {exc}", "runs": [], "total": 0}
 
     for proj in projects:
-        if not proj.get("has_data_db"):
+        if not proj.get("has_workspace_db"):
             continue
         project_root = Path(proj["path"])
         slug = proj["slug"]

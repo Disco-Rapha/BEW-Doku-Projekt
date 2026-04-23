@@ -55,7 +55,8 @@ def process_one(item: dict) -> dict:
 
 def main() -> None:
     with run_context(FlowRun.from_env()) as run:
-        items = run.db.query("SELECT id, rel_path FROM agent_sources WHERE …")
+        # agent_sources ist Ebene 1 (datastore.db, attached als `ds`).
+        items = run.db.query("SELECT id, rel_path FROM ds.agent_sources WHERE …")
         run.set_total(len(items))
         for item in items:
             run.process(
