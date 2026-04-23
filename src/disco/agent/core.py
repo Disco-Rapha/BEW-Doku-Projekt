@@ -91,6 +91,23 @@ PORTAL_AGENT_OVERHEAD_TOKENS = 50_000
 CONTEXT_LIMIT_TOKENS = 260_000
 
 
+def _effective_context_tokens(state: dict[str, Any] | None) -> int:
+    """Liefert den effektiven Kontext-Fuellstand fuer Pre-Check und UI.
+
+    Bevorzugt Azure-Ground-Truth (measured_context_tokens aus
+    usage.input_tokens), faellt zurueck auf lokale Schaetzung
+    (token_estimate + PORTAL_AGENT_OVERHEAD_TOKENS) — fuer den
+    allerersten Turn, nach Compaction, oder wenn ein Modellwechsel
+    den letzten Messwert bezugslos gemacht hat.
+    """
+    if state is None:
+        return PORTAL_AGENT_OVERHEAD_TOKENS
+    measured = state.get("measured_context_tokens")
+    if measured is not None:
+        return int(measured)
+    return int(state.get("token_estimate") or 0) + PORTAL_AGENT_OVERHEAD_TOKENS
+
+
 # ---------------------------------------------------------------------------
 # Retry-Konfiguration fuer transiente Fehler (Connection Reset, Read-Timeout)
 # ---------------------------------------------------------------------------
@@ -580,6 +597,7 @@ class AgentService:
         assistant_text_buf: list[str] = []
         last_response_id: str | None = None
         last_usage: dict[str, Any] | None = None
+        last_model: str | None = None
         recorded_tool_calls: list[dict[str, Any]] = []
         recorded_tool_results: list[dict[str, Any]] = []
 
@@ -621,12 +639,13 @@ class AgentService:
             if previous_response_id:
                 call_kwargs["previous_response_id"] = previous_response_id
 
-            # Pre-Check: Wenn der geschaetzte Fuellstand das Context-Window
-            # nahe am Limit ist, bricht Azure mit context_length_exceeded.
-            # Lieber frueh und klar stoppen, damit der Nutzer /compact weiss.
-            _est_tokens = (
-                int(state.get("token_estimate") or 0) + PORTAL_AGENT_OVERHEAD_TOKENS
-            )
+            # Pre-Check: Wenn der Fuellstand das Context-Window nahe am
+            # Limit hat, bricht Azure mit context_length_exceeded. Lieber
+            # frueh und klar stoppen, damit der Nutzer /compact weiss.
+            # _effective_context_tokens bevorzugt Azure-Ground-Truth
+            # (measured_context_tokens) und faellt nur zurueck, wenn es
+            # noch keinen Messwert gibt.
+            _est_tokens = _effective_context_tokens(state)
             if _est_tokens >= CONTEXT_LIMIT_TOKENS:
                 logger.warning(
                     "Context-Limit erreicht (%d >= %d) — Turn abgebrochen",
@@ -778,11 +797,26 @@ class AgentService:
                         resp = getattr(event, "response", None)
                         if resp is not None:
                             last_response_id = getattr(resp, "id", None) or last_response_id
+                            last_model = (
+                                getattr(resp, "model", None) or last_model
+                            )
                             usage = getattr(resp, "usage", None)
                             if usage is not None:
+                                # Cached-Tokens liegen unter input_tokens_details
+                                # (GPT-5.1 mit Prompt-Cache; bei anderen Modellen
+                                # faellt das Feld weg).
+                                cached = None
+                                input_details = getattr(
+                                    usage, "input_tokens_details", None,
+                                )
+                                if input_details is not None:
+                                    cached = getattr(
+                                        input_details, "cached_tokens", None,
+                                    )
                                 last_usage = {
                                     "input": getattr(usage, "input_tokens", None),
                                     "output": getattr(usage, "output_tokens", None),
+                                    "cached_input": cached,
                                 }
 
                     # --- Fehler / Abbruch ---
@@ -1030,15 +1064,29 @@ class AgentService:
         if last_response_id:
             chat_repo.set_response_id(project_slug, last_response_id)
 
-        # Aktuellen Token-Fill fuer die UI holen (70/90-Warnung).
-        # Die chat_messages.token_count erfasst nur User/Assistant/Tool-
-        # Content. Fuer den realen Fuellstand gegen Azure rechnen wir den
-        # festen Overhead (System-Prompt + Tool-Defs) drauf.
+        # Reale Kontext-Groesse aus usage.input_tokens speichern — Ground-Truth
+        # gegen Azure, inklusive System-Prompt, Tool-Schemas, Reasoning-Trace.
+        # Fallback: wenn das Modell mal kein usage liefert, aktualisieren wir
+        # nichts — dann greift weiterhin die token_estimate-Schaetzung.
+        if last_usage and last_usage.get("input") is not None:
+            try:
+                chat_repo.set_measured_context(
+                    project_slug=project_slug,
+                    measured_context_tokens=int(last_usage["input"]),
+                    measured_model=last_model,
+                    measured_cached_tokens=last_usage.get("cached_input"),
+                )
+            except Exception as exc:  # pragma: no cover — Telemetrie
+                logger.warning(
+                    "set_measured_context fehlgeschlagen (slug=%s): %s",
+                    project_slug, exc,
+                )
+
+        # Aktuellen Fuellstand fuer die UI/DoneEvent ermitteln. Reihenfolge:
+        # 1. measured_context_tokens (Ground-Truth) falls vorhanden,
+        # 2. sonst token_estimate + PORTAL_AGENT_OVERHEAD_TOKENS (Schaetzung).
         current_state = chat_repo.get_state(project_slug)
-        current_token_estimate = (
-            int(current_state["token_estimate"]) + PORTAL_AGENT_OVERHEAD_TOKENS
-            if current_state else PORTAL_AGENT_OVERHEAD_TOKENS
-        )
+        current_token_estimate = _effective_context_tokens(current_state)
 
         yield DoneEvent(
             response_id=last_response_id,

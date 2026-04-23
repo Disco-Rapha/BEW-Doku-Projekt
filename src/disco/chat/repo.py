@@ -16,6 +16,7 @@ Konventionen:
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from typing import Any, Literal
 
@@ -24,6 +25,56 @@ from ..db import connect
 
 
 Role = Literal["user", "assistant", "tool", "system"]
+
+
+logger = logging.getLogger(__name__)
+
+
+# ----------------------------------------------------------------
+# tiktoken — lokale Praezisions-Schaetzung
+# ----------------------------------------------------------------
+# GPT-5 / GPT-5.1 nutzen den o200k_base-Encoder (wie gpt-4o). Wir laden
+# lazy + one-shot; bei Import-Fehlern fallen wir auf chars/4 zurueck.
+# Die Praezision liegt bei Einzelnachrichten im Rahmen ±1 %, gegenueber
+# der chars/4-Heuristik mit ±20-30 %.
+
+_TIKTOKEN_ENCODER = None
+_TIKTOKEN_FAILED = False
+
+
+def _get_tiktoken_encoder():
+    """Lazy-Loader fuer den tiktoken-Encoder. None wenn nicht verfuegbar."""
+    global _TIKTOKEN_ENCODER, _TIKTOKEN_FAILED
+    if _TIKTOKEN_FAILED:
+        return None
+    if _TIKTOKEN_ENCODER is not None:
+        return _TIKTOKEN_ENCODER
+    try:
+        import tiktoken  # type: ignore[import-not-found]
+        _TIKTOKEN_ENCODER = tiktoken.get_encoding("o200k_base")
+        return _TIKTOKEN_ENCODER
+    except Exception as exc:
+        _TIKTOKEN_FAILED = True
+        logger.warning(
+            "tiktoken nicht verfuegbar (%s) — Fallback auf chars/4-Schaetzung. "
+            "Installiere mit 'uv sync' fuer praezisere Messung.",
+            exc,
+        )
+        return None
+
+
+def count_tokens(text: str) -> int:
+    """Zaehlt Tokens fuer einen Text. Fallback auf chars/4 bei Tiktoken-Ausfall."""
+    if not text:
+        return 0
+    encoder = _get_tiktoken_encoder()
+    if encoder is None:
+        return (len(text) + 3) // 4
+    try:
+        return len(encoder.encode(text, disallowed_special=()))
+    except Exception as exc:
+        logger.warning("tiktoken.encode fehlgeschlagen (%s) — Fallback", exc)
+        return (len(text) + 3) // 4
 
 
 # ----------------------------------------------------------------
@@ -73,7 +124,10 @@ def get_state(project_slug: str, db_path=None) -> dict[str, Any] | None:
 def _get_state(project_slug: str, conn: sqlite3.Connection) -> dict[str, Any]:
     row = conn.execute(
         "SELECT project_slug, foundry_response_id, model_used, "
-        "       token_estimate, last_compaction_at, created_at, updated_at "
+        "       token_estimate, last_compaction_at, "
+        "       measured_context_tokens, measured_at, measured_model, "
+        "       measured_cached_tokens, "
+        "       created_at, updated_at "
         "FROM project_chat_state WHERE project_slug = ?",
         (project_slug,),
     ).fetchone()
@@ -117,6 +171,63 @@ def update_token_estimate(
             "SET token_estimate = ?, updated_at = datetime('now') "
             "WHERE project_slug = ?",
             (int(token_estimate), project_slug),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_measured_context(
+    project_slug: str,
+    measured_context_tokens: int,
+    measured_model: str | None = None,
+    measured_cached_tokens: int | None = None,
+    db_path=None,
+) -> None:
+    """Speichert die reale Kontext-Groesse aus usage.input_tokens einer
+    Foundry-Response.
+
+    Das ist unser Ground-Truth gegen Azure — er enthaelt System-Prompt,
+    Tool-Schemas, Reasoning-Trace und Message-Historie, also alles, was
+    im naechsten Turn wirklich durchs Netz wandert.
+
+    measured_cached_tokens (optional) kommt aus usage.input_tokens_details.
+    cached_tokens — GPT-5.1 liefert das bei aktivem Prompt-Cache.
+    """
+    conn = connect(db_path or settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE project_chat_state "
+            "SET measured_context_tokens = ?, "
+            "    measured_at = datetime('now'), "
+            "    measured_model = COALESCE(?, measured_model), "
+            "    measured_cached_tokens = ?, "
+            "    updated_at = datetime('now') "
+            "WHERE project_slug = ?",
+            (
+                int(measured_context_tokens),
+                measured_model,
+                int(measured_cached_tokens) if measured_cached_tokens is not None else None,
+                project_slug,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_measured_context(project_slug: str, db_path=None) -> None:
+    """Setzt die gemessene Kontext-Groesse zurueck (nach Compaction)."""
+    conn = connect(db_path or settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE project_chat_state "
+            "SET measured_context_tokens = NULL, "
+            "    measured_at = NULL, "
+            "    measured_cached_tokens = NULL, "
+            "    updated_at = datetime('now') "
+            "WHERE project_slug = ?",
+            (project_slug,),
         )
         conn.commit()
     finally:
@@ -210,20 +321,21 @@ def delete_state(project_slug: str, db_path=None) -> None:
 
 
 def _estimate_tokens(content: str | None, tool_calls_json: str | None, tool_results_json: str | None) -> int:
-    """Grobe Token-Schaetzung: 1 Token ~= 4 Zeichen.
+    """Praezise Token-Zaehlung via tiktoken (o200k_base, wie GPT-5/5.1 nutzt).
 
-    Ausreichend genau fuer Kompressions-Warnung (70/90 %). Wenn wir spaeter
-    Praezision brauchen, tauschen wir auf tiktoken.
+    Fallback auf chars/4 bei Import-/Encoder-Fehlern (siehe count_tokens).
+
+    Tool-Calls und Tool-Results werden bewusst als JSON-String gezaehlt —
+    genau so fliessen sie bei previous_response_id-Chains in den Context.
     """
-    total_chars = 0
+    total = 0
     if content:
-        total_chars += len(content)
+        total += count_tokens(content)
     if tool_calls_json:
-        total_chars += len(tool_calls_json)
+        total += count_tokens(tool_calls_json)
     if tool_results_json:
-        total_chars += len(tool_results_json)
-    # Ceil-Division
-    return (total_chars + 3) // 4
+        total += count_tokens(tool_results_json)
+    return total
 
 
 # ----------------------------------------------------------------

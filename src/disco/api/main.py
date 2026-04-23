@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from ..agent.core import (
     CHAT_TOKEN_BUDGET,
     PORTAL_AGENT_OVERHEAD_TOKENS,
+    _effective_context_tokens,
     get_agent_service,
 )
 from ..chat import repo as chat_repo
@@ -497,20 +498,24 @@ async def api_stats():
 def _chat_state_payload(state: dict[str, Any] | None) -> dict[str, Any]:
     """Packt den State + abgeleitete Felder (Prozent, Warnstufe) fuer die UI.
 
-    Der in der UI angezeigte token_estimate enthaelt den System-Prompt- und
-    Tool-Definitions-Overhead, damit der Fuellstand der realen Azure-
-    Request-Groesse entspricht.
+    Der in der UI angezeigte token_estimate ist der effektive Fuellstand
+    gegen Azure — bevorzugt aus measured_context_tokens (usage.input_tokens
+    der letzten Response, Ground-Truth), sonst token_estimate + Overhead
+    (lokale Schaetzung).
     """
     if state is None:
         return {
             "exists": False,
             "token_estimate": PORTAL_AGENT_OVERHEAD_TOKENS,
+            "token_estimate_source": "overhead_only",
             "token_budget": CHAT_TOKEN_BUDGET,
             "percent": round(PORTAL_AGENT_OVERHEAD_TOKENS / CHAT_TOKEN_BUDGET, 4),
             "warn_level": "ok",
         }
     raw_tok = int(state.get("token_estimate") or 0)
-    tok = raw_tok + PORTAL_AGENT_OVERHEAD_TOKENS
+    measured = state.get("measured_context_tokens")
+    tok = _effective_context_tokens(state)
+    source = "measured" if measured is not None else "estimate"
     pct = (tok / CHAT_TOKEN_BUDGET) if CHAT_TOKEN_BUDGET else 0.0
     if pct >= 0.90:
         warn = "critical"  # Auto-Kompressions-Vorschlag
@@ -522,6 +527,7 @@ def _chat_state_payload(state: dict[str, Any] | None) -> dict[str, Any]:
         "exists": True,
         **state,
         "token_estimate": tok,
+        "token_estimate_source": source,
         "token_estimate_messages": raw_tok,
         "token_overhead": PORTAL_AGENT_OVERHEAD_TOKENS,
         "token_budget": CHAT_TOKEN_BUDGET,
