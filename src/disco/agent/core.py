@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,6 +66,81 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "system_prompt.md"
+
+
+# ---------------------------------------------------------------------------
+# Kontext-Budget + Overhead
+# ---------------------------------------------------------------------------
+# GPT-5.1 Context-Window: 272k Input. Wir setzen 200k als Budget fuer die
+# Fuellstands-Anzeige — 72k Puffer fuer Output-Tokens + Rauschen.
+CHAT_TOKEN_BUDGET = 200_000
+
+# Fester Overhead pro Turn, den die chat_messages.token_count NICHT erfasst:
+# - System-Prompt (~15k Tokens)
+# - Tool-Definitionen (~20k Tokens, 49 Custom Functions — mit flow_fork +
+#   weiteren Flow-Tools ist die Schema-Groesse gewachsen)
+# - Reasoning-Traces die Foundry server-seitig via previous_response_id
+#   zwischen Turns haelt (effort='medium' → oft 5-15k je vorherigem Turn)
+# Gesamt ~50k pro Turn — konservativ kalibriert nach prod-Incident
+# 2026-04-23, bei dem context_length_exceeded trotz 35k-Overhead durchschlug.
+PORTAL_AGENT_OVERHEAD_TOKENS = 50_000
+
+# Hartes Limit: ueber diesem Wert schlagen Azure-Requests mit
+# context_length_exceeded fehl. Wir nutzen es, um vor dem Call abzubrechen
+# mit einer klaren Fehlermeldung (-> /compact-Vorschlag).
+CONTEXT_LIMIT_TOKENS = 260_000
+
+
+# ---------------------------------------------------------------------------
+# Retry-Konfiguration fuer transiente Fehler (Connection Reset, Read-Timeout)
+# ---------------------------------------------------------------------------
+_RETRY_DELAYS_SECONDS = (2.0, 5.0, 10.0)  # 3 Versuche zusaetzlich zum ersten
+
+
+def _is_transient_stream_error(exc: BaseException) -> bool:
+    """Erkennt Connection-Reset / Read-Timeout-Fehler aus httpx/SSE."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if name in ("ReadError", "ReadTimeout", "RemoteProtocolError",
+                "ConnectError", "ConnectTimeout"):
+        return True
+    patterns = (
+        "connection reset by peer",
+        "server disconnected",
+        "remote end closed connection",
+        "connection aborted",
+    )
+    return any(p in msg for p in patterns)
+
+
+_CONTEXT_EXCEEDED_PATTERNS = (
+    "context_length_exceeded",
+    "string too long",
+    "maximum context length",
+    "request too large",
+)
+
+
+def _is_context_exceeded_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(p in msg for p in _CONTEXT_EXCEEDED_PATTERNS)
+
+
+# Azure GPT-5.1 liefert gelegentlich ungueltigen Function-Call-JSON,
+# sichtbar als APIError mit "The model produced invalid content" und
+# Header 'azureml-ms-model-functionality-response: json.decoder.JSONDecodeError'.
+# Das ist transient (erneutes Senden hilft), aber nicht mit
+# _is_transient_stream_error abgedeckt — eigene Klassifizierung.
+_MODEL_INVALID_CONTENT_PATTERNS = (
+    "the model produced invalid content",
+    "json.decoder.jsondecodeerror",
+    "model_error",
+)
+
+
+def _is_model_invalid_content_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(p in msg for p in _MODEL_INVALID_CONTENT_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -544,11 +620,71 @@ class AgentService:
             # die API "type: Value is 'null' but should be 'string'"
             if previous_response_id:
                 call_kwargs["previous_response_id"] = previous_response_id
-            try:
-                stream = self._openai_client.responses.create(**call_kwargs)
-            except Exception as exc:
-                logger.exception("responses.create fehlgeschlagen")
-                yield ErrorEvent(message=f"Foundry-Call fehlgeschlagen: {exc}")
+
+            # Pre-Check: Wenn der geschaetzte Fuellstand das Context-Window
+            # nahe am Limit ist, bricht Azure mit context_length_exceeded.
+            # Lieber frueh und klar stoppen, damit der Nutzer /compact weiss.
+            _est_tokens = (
+                int(state.get("token_estimate") or 0) + PORTAL_AGENT_OVERHEAD_TOKENS
+            )
+            if _est_tokens >= CONTEXT_LIMIT_TOKENS:
+                logger.warning(
+                    "Context-Limit erreicht (%d >= %d) — Turn abgebrochen",
+                    _est_tokens, CONTEXT_LIMIT_TOKENS,
+                )
+                yield ErrorEvent(message=(
+                    f"Chat-Kontext ist voll ({_est_tokens:,} Tokens). "
+                    "Bitte den Chat komprimieren ('/compact' oder 'Kontext "
+                    "komprimieren' im Chat) — danach geht es weiter."
+                ))
+                return
+
+            # Retry-Loop nur fuer den Connection-Aufbau. Sobald der Stream
+            # laeuft und erste Events gesendet wurden, retryen wir NICHT
+            # mehr — partielle Ausgabe an die UI darf nicht doppelt laufen
+            # und Tool-Calls haetten sonst Duplikat-Risiko.
+            stream = None
+            _last_exc: BaseException | None = None
+            for _attempt, _delay in enumerate(
+                (0.0, *_RETRY_DELAYS_SECONDS), start=0,
+            ):
+                if _delay > 0:
+                    logger.info(
+                        "Retry responses.create — Versuch %d nach %.1fs",
+                        _attempt + 1, _delay,
+                    )
+                    time.sleep(_delay)
+                try:
+                    stream = self._openai_client.responses.create(**call_kwargs)
+                    _last_exc = None
+                    break
+                except Exception as exc:
+                    _last_exc = exc
+                    if _is_context_exceeded_error(exc):
+                        logger.exception(
+                            "responses.create: Context-Length-Exceeded",
+                        )
+                        yield ErrorEvent(message=(
+                            f"Azure lehnt den Request wegen Kontext-Laenge ab: "
+                            f"{exc}. Bitte den Chat komprimieren "
+                            "('/compact') und erneut senden."
+                        ))
+                        return
+                    if not _is_transient_stream_error(exc):
+                        # Nicht-transient: sofort abbrechen, kein Retry
+                        break
+                    logger.warning(
+                        "responses.create transient (%s) — Retry moeglich",
+                        type(exc).__name__,
+                    )
+            if stream is None:
+                logger.exception(
+                    "responses.create endgueltig fehlgeschlagen",
+                    exc_info=_last_exc,
+                )
+                yield ErrorEvent(
+                    message=f"Foundry-Call fehlgeschlagen: {_last_exc}",
+                )
                 return
 
             # Pro Runde sammeln.
@@ -661,13 +797,36 @@ class AgentService:
                         code = getattr(err_obj, "code", None)
                         type_ = getattr(err_obj, "type", None)
                         status = getattr(err, "status", None)
+                        # Zusatz-Diagnose fuer den "keine Details"-Fall:
+                        # Azure gibt manchmal status='failed' ohne error/msg —
+                        # dann helfen uns model/usage/incomplete_details/
+                        # reasoning/truncation zur Einordnung.
+                        incomplete = getattr(err, "incomplete_details", None)
+                        usage = getattr(err, "usage", None)
+                        model_used = getattr(err, "model", None)
+                        reasoning = getattr(err, "reasoning", None)
+                        truncation = getattr(err, "truncation", None)
+                        resp_id = getattr(err, "id", None)
                         logger.error(
-                            "Foundry response.failed — code=%r type=%r status=%r msg=%r event=%r",
-                            code, type_, status, msg, event,
+                            "Foundry response.failed — code=%r type=%r status=%r msg=%r "
+                            "resp_id=%r model=%r usage=%r incomplete=%r reasoning=%r "
+                            "truncation=%r",
+                            code, type_, status, msg, resp_id, model_used,
+                            usage, incomplete, reasoning, truncation,
                         )
                         parts = [str(p) for p in (code, type_, msg) if p]
-                        ui_msg = " — ".join(parts) if parts else "keine Details von Foundry"
-                        yield ErrorEvent(message=f"Foundry meldet Fehler: {ui_msg}")
+                        if parts:
+                            ui_msg = f"Foundry meldet Fehler: {' — '.join(parts)}"
+                        else:
+                            # Transienter Azure-Abbruch ohne Details — der Nutzer
+                            # soll wissen, dass ein einfaches Neu-Senden meist hilft.
+                            ui_msg = (
+                                "Azure/Foundry hat den Response abgebrochen, "
+                                "ohne Details zu liefern (transient — oft hilft "
+                                "einfach erneut senden). "
+                                f"Resp-ID: {resp_id or 'unbekannt'}."
+                            )
+                        yield ErrorEvent(message=ui_msg)
                         return
                     elif etype == "error":
                         msg = getattr(event, "message", "") or ""
@@ -711,6 +870,9 @@ class AgentService:
                     or "too many requests" in msg_text.lower()
                     or (isinstance(code, str) and "rate" in code.lower())
                 )
+                is_context_exceeded = _is_context_exceeded_error(exc)
+                is_transient = _is_transient_stream_error(exc)
+                is_model_invalid = _is_model_invalid_content_error(exc)
 
                 if status_code is not None:
                     detail_parts.append(f"status={status_code}")
@@ -722,11 +884,31 @@ class AgentService:
 
                 logger.exception("Fehler im Event-Stream%s", detail)
 
-                if is_rate_limit:
+                if is_context_exceeded:
+                    ui_msg = (
+                        "Chat-Kontext ist zu gross fuer Azure GPT-5.1 "
+                        f"({msg_text or 'context_length_exceeded'}). "
+                        "Bitte den Chat komprimieren ('/compact' oder "
+                        "'Kontext komprimieren' im Chat) und erneut senden."
+                    )
+                elif is_rate_limit:
                     ui_msg = (
                         f"Azure OpenAI Rate-Limit (429): {msg_text or 'Too Many Requests'}. "
                         "Moeglicherweise laeuft parallel ein Flow auf demselben Deployment — "
                         "kurz warten und erneut versuchen."
+                    )
+                elif is_transient:
+                    ui_msg = (
+                        f"Verbindung zu Azure abgerissen ({type(exc).__name__}: "
+                        f"{msg_text or 'connection reset'}). Bitte die Nachricht "
+                        "noch einmal senden — die Antwort war unvollstaendig."
+                    )
+                elif is_model_invalid:
+                    ui_msg = (
+                        "Azure GPT-5.1 hat ungueltigen Content produziert "
+                        "(meist defekter Function-Call-JSON) — transienter "
+                        "Modell-Fehler. Bitte die letzte Nachricht einfach "
+                        "erneut senden; zweimal hintereinander ist selten."
                     )
                 else:
                     ui_msg = f"Stream-Fehler: {msg_text}{detail}"
@@ -752,13 +934,20 @@ class AgentService:
                 call_id = d["call_id"]
                 name = d["name"]
                 args = d["arguments"]
+                _t0 = time.monotonic()
                 result_json = fn_registry.dispatch(name, args)
+                _duration_ms = int((time.monotonic() - _t0) * 1000)
 
                 recorded_tool_calls.append(
                     {"call_id": call_id, "name": name, "arguments": args}
                 )
                 recorded_tool_results.append(
-                    {"call_id": call_id, "name": name, "result": result_json}
+                    {
+                        "call_id": call_id,
+                        "name": name,
+                        "result": result_json,
+                        "duration_ms": _duration_ms,
+                    }
                 )
 
                 yield ToolResultEvent(call_id=call_id, name=name, result=result_json)
@@ -841,10 +1030,14 @@ class AgentService:
         if last_response_id:
             chat_repo.set_response_id(project_slug, last_response_id)
 
-        # Aktuellen Token-Fill fuer die UI holen (70/90-Warnung)
+        # Aktuellen Token-Fill fuer die UI holen (70/90-Warnung).
+        # Die chat_messages.token_count erfasst nur User/Assistant/Tool-
+        # Content. Fuer den realen Fuellstand gegen Azure rechnen wir den
+        # festen Overhead (System-Prompt + Tool-Defs) drauf.
         current_state = chat_repo.get_state(project_slug)
         current_token_estimate = (
-            int(current_state["token_estimate"]) if current_state else None
+            int(current_state["token_estimate"]) + PORTAL_AGENT_OVERHEAD_TOKENS
+            if current_state else PORTAL_AGENT_OVERHEAD_TOKENS
         )
 
         yield DoneEvent(
