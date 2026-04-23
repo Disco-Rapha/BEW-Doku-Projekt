@@ -16,7 +16,12 @@ from fastapi import FastAPI, File, Query, UploadFile, WebSocket, WebSocketDiscon
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..agent.core import get_agent_service
+from ..agent.core import (
+    CHAT_TOKEN_BUDGET,
+    PORTAL_AGENT_OVERHEAD_TOKENS,
+    _effective_context_tokens,
+    get_agent_service,
+)
 from ..chat import repo as chat_repo
 from ..config import settings
 from ..db import connect
@@ -487,23 +492,30 @@ async def api_stats():
 # REST-API: Projekt-Chat (Migration 006 — 1 persistenter Chat pro Projekt)
 # ---------------------------------------------------------------------------
 
-# Token-Kapazitaet pro Chat (fuer 70/90-Prozent-Warnung).
-# GPT-5.1 kann nominell 200k, wir setzen 180k als Sicherheitspuffer fuer
-# System-Prompt, Tool-Definitionen, usw.
-CHAT_TOKEN_BUDGET = 180_000
+# Token-Kapazitaet + Overhead kommen aus agent.core (oben importiert).
 
 
 def _chat_state_payload(state: dict[str, Any] | None) -> dict[str, Any]:
-    """Packt den State + abgeleitete Felder (Prozent, Warnstufe) fuer die UI."""
+    """Packt den State + abgeleitete Felder (Prozent, Warnstufe) fuer die UI.
+
+    Der in der UI angezeigte token_estimate ist der effektive Fuellstand
+    gegen Azure — bevorzugt aus measured_context_tokens (usage.input_tokens
+    der letzten Response, Ground-Truth), sonst token_estimate + Overhead
+    (lokale Schaetzung).
+    """
     if state is None:
         return {
             "exists": False,
-            "token_estimate": 0,
+            "token_estimate": PORTAL_AGENT_OVERHEAD_TOKENS,
+            "token_estimate_source": "overhead_only",
             "token_budget": CHAT_TOKEN_BUDGET,
-            "percent": 0.0,
+            "percent": round(PORTAL_AGENT_OVERHEAD_TOKENS / CHAT_TOKEN_BUDGET, 4),
             "warn_level": "ok",
         }
-    tok = int(state.get("token_estimate") or 0)
+    raw_tok = int(state.get("token_estimate") or 0)
+    measured = state.get("measured_context_tokens")
+    tok = _effective_context_tokens(state)
+    source = "measured" if measured is not None else "estimate"
     pct = (tok / CHAT_TOKEN_BUDGET) if CHAT_TOKEN_BUDGET else 0.0
     if pct >= 0.90:
         warn = "critical"  # Auto-Kompressions-Vorschlag
@@ -515,6 +527,9 @@ def _chat_state_payload(state: dict[str, Any] | None) -> dict[str, Any]:
         "exists": True,
         **state,
         "token_estimate": tok,
+        "token_estimate_source": source,
+        "token_estimate_messages": raw_tok,
+        "token_overhead": PORTAL_AGENT_OVERHEAD_TOKENS,
         "token_budget": CHAT_TOKEN_BUDGET,
         "percent": round(pct, 4),
         "warn_level": warn,
@@ -552,12 +567,20 @@ async def api_chat_messages(slug: str, include_compacted: bool = False):
 
 @app.post("/api/projects/{slug}/chat/compact")
 async def api_chat_compact(slug: str, body: dict | None = None):
-    """Markiert alle aktuellen Messages als komprimiert.
+    """Compaction v2 — Handover-Brief + letzte Dialog-Paare erhalten.
 
-    Der Agent MUSS vor dem Aufruf die wichtigen Erkenntnisse per
-    memory_write in die Memory-Bank geschrieben haben — diese REST-
-    Route markiert nur den Cut. Body optional: {cutoff_message_id}.
-    Wenn nicht gesetzt, wird das letzte aktive Message-ID genommen.
+    Ein /compact macht jetzt:
+      - Die letzten N user/assistant-Text-Paare (Default 3) bleiben aktiv.
+      - Alles davor wird mit is_compacted=1 markiert.
+      - Ein LLM-Call erzeugt eine kurze Handover-Notiz, die als neue
+        system-Message VOR den erhaltenen Paaren eingehaengt wird.
+      - foundry_response_id + measured_context_tokens werden genullt.
+
+    Body optional:
+      - keep_pairs (int, Default 3) — wie viele Dialog-Paare erhalten bleiben.
+      - legacy (bool) — falls true, lief die v1-Logik (alles markieren, kein
+        Handover, nur Memory-Reload). Abwaertskompatibilitaet.
+      - cutoff_message_id (int) — nur im legacy-Mode akzeptiert.
     """
     from ..workspace import validate_slug
     try:
@@ -566,6 +589,19 @@ async def api_chat_compact(slug: str, body: dict | None = None):
         return {"error": str(exc)}
 
     body = body or {}
+    legacy = bool(body.get("legacy"))
+
+    if not legacy:
+        from ..chat.compaction import DEFAULT_KEEP_PAIRS, run_compaction_with_handover
+        keep_pairs = int(body.get("keep_pairs") or DEFAULT_KEEP_PAIRS)
+        try:
+            result = run_compaction_with_handover(slug, keep_pairs=keep_pairs)
+        except Exception as exc:
+            logger.exception("Compaction v2 fehlgeschlagen")
+            return {"error": f"Compaction fehlgeschlagen: {exc}"}
+        return result
+
+    # Legacy-Mode: altes Verhalten unveraendert (alle Messages markieren).
     cutoff = body.get("cutoff_message_id")
     if cutoff is None:
         cutoff = chat_repo.last_active_message_id(slug)
@@ -573,17 +609,13 @@ async def api_chat_compact(slug: str, body: dict | None = None):
         return {"error": "Keine aktiven Messages zum Komprimieren."}
 
     marked = chat_repo.mark_compacted(slug, int(cutoff))
-    # foundry_response_id NICHT zuruecksetzen: der Agent laeuft nach
-    # Kompression mit leerem Chat + Memory-Reload weiter. Der Portal-
-    # Response-Chain liegt dann hinter uns, aber Disco soll frisch starten.
-    # -> setResponseId(None) damit der naechste Turn kein previous_response_id
-    # mit veralteten Inhalten mitschickt.
     chat_repo.set_response_id(slug, None)
-    # Token-Estimate neu berechnen (sollte nahe 0 sein)
+    chat_repo.clear_measured_context(slug)
     new_estimate = chat_repo.recompute_token_estimate(slug)
 
     return {
         "ok": True,
+        "mode": "legacy",
         "marked_compacted": marked,
         "cutoff_message_id": int(cutoff),
         "new_token_estimate": new_estimate,
@@ -604,6 +636,173 @@ async def api_chat_reset(slug: str):
         return {"error": str(exc)}
     chat_repo.delete_state(slug)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Observability: Tool-Call-Stats + Message-Feedback
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/chat/messages/{message_id}/feedback")
+async def api_message_feedback(message_id: int, body: dict):
+    """Speichert ein Feedback-Event (good|bad + optionaler Kommentar)."""
+    rating = (body or {}).get("rating")
+    comment = (body or {}).get("comment")
+    if rating not in ("good", "bad"):
+        return {"error": "rating muss 'good' oder 'bad' sein."}
+    try:
+        fb = chat_repo.add_message_feedback(
+            message_id=int(message_id),
+            rating=rating,
+            comment=comment,
+        )
+        return {"ok": True, "feedback": fb}
+    except KeyError as exc:
+        return {"error": str(exc)}
+
+
+@app.get("/api/chat/messages/feedback")
+async def api_message_feedback_latest(ids: str):
+    """Holt das jeweils neueste Feedback fuer eine Liste von Message-IDs.
+
+    ids als komma-separierter String: ?ids=1,2,3.
+    Antwort: { "12": {"rating": "bad", "comment": "..."}, ... }.
+    """
+    try:
+        message_ids = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        return {"error": "ids muss komma-separierte Integers sein."}
+    result = chat_repo.latest_feedback_for_messages(message_ids)
+    return {str(k): v for k, v in result.items()}
+
+
+@app.get("/api/agent-stats")
+async def api_agent_stats(project: str | None = None, days: int = 30):
+    """Aggregiert Tool-Call-Metriken aus agent_tool_calls.
+
+    Query-Parameter:
+      - project: optionaler Slug-Filter (default: global ueber alle Projekte)
+      - days: Zeitfenster in Tagen (default: 30)
+
+    Antwort:
+      {
+        "scope": "<slug oder 'all'>",
+        "window_days": N,
+        "totals": {"calls": X, "errors": Y, "feedback_good": A, "feedback_bad": B},
+        "per_tool": [ {tool_name, calls, errors, error_rate, avg_ms, max_ms}, ... ],
+        "recent_errors": [ {tool_name, arguments_summary, result_error_msg, created_at}, ... ],
+        "recent_feedback": [ {rating, comment, created_at, project_slug, message_id}, ... ]
+      }
+    """
+    from ..db import connect
+
+    window_clause = "datetime(created_at) >= datetime('now', ?)"
+    window_arg = f"-{int(days)} days"
+
+    conn = connect(settings.db_path)
+    try:
+        where = [window_clause]
+        args: list[Any] = [window_arg]
+        if project:
+            where.append("project_slug = ?")
+            args.append(project)
+        where_sql = " AND ".join(where)
+
+        totals_row = conn.execute(
+            f"SELECT COUNT(*) AS calls, "
+            f"       COALESCE(SUM(result_is_error), 0) AS errors "
+            f"FROM agent_tool_calls WHERE {where_sql}",
+            args,
+        ).fetchone()
+        totals = {
+            "calls": int(totals_row["calls"]) if totals_row else 0,
+            "errors": int(totals_row["errors"]) if totals_row else 0,
+        }
+
+        per_tool = [
+            {
+                "tool_name": r["tool_name"],
+                "calls": int(r["calls"]),
+                "errors": int(r["errors"]),
+                "error_rate": (float(r["errors"]) / float(r["calls"])) if r["calls"] else 0.0,
+                "avg_ms": int(r["avg_ms"] or 0),
+                "max_ms": int(r["max_ms"] or 0),
+            }
+            for r in conn.execute(
+                f"SELECT tool_name, COUNT(*) AS calls, "
+                f"       SUM(result_is_error) AS errors, "
+                f"       AVG(duration_ms) AS avg_ms, "
+                f"       MAX(duration_ms) AS max_ms "
+                f"FROM agent_tool_calls WHERE {where_sql} "
+                f"GROUP BY tool_name ORDER BY calls DESC",
+                args,
+            ).fetchall()
+        ]
+
+        recent_errors = [
+            {
+                "id": int(r["id"]),
+                "tool_name": r["tool_name"],
+                "arguments_summary": r["arguments_summary"],
+                "result_error_msg": r["result_error_msg"],
+                "project_slug": r["project_slug"],
+                "message_id": r["message_id"],
+                "created_at": r["created_at"],
+            }
+            for r in conn.execute(
+                f"SELECT id, tool_name, arguments_summary, result_error_msg, "
+                f"       project_slug, message_id, created_at "
+                f"FROM agent_tool_calls "
+                f"WHERE result_is_error = 1 AND {where_sql} "
+                f"ORDER BY id DESC LIMIT 15",
+                args,
+            ).fetchall()
+        ]
+
+        # Feedback — separat, andere WHERE-Condition
+        fb_where = [window_clause]
+        fb_args: list[Any] = [window_arg]
+        if project:
+            fb_where.append("project_slug = ?")
+            fb_args.append(project)
+        fb_where_sql = " AND ".join(fb_where)
+
+        fb_totals = conn.execute(
+            f"SELECT rating, COUNT(*) AS c FROM chat_message_feedback "
+            f"WHERE {fb_where_sql} GROUP BY rating",
+            fb_args,
+        ).fetchall()
+        totals["feedback_good"] = sum(int(r["c"]) for r in fb_totals if r["rating"] == "good")
+        totals["feedback_bad"] = sum(int(r["c"]) for r in fb_totals if r["rating"] == "bad")
+
+        recent_feedback = [
+            {
+                "id": int(r["id"]),
+                "message_id": int(r["message_id"]),
+                "project_slug": r["project_slug"],
+                "rating": r["rating"],
+                "comment": r["comment"],
+                "created_at": r["created_at"],
+            }
+            for r in conn.execute(
+                f"SELECT id, message_id, project_slug, rating, comment, created_at "
+                f"FROM chat_message_feedback "
+                f"WHERE {fb_where_sql} "
+                f"ORDER BY id DESC LIMIT 20",
+                fb_args,
+            ).fetchall()
+        ]
+
+        return {
+            "scope": project or "all",
+            "window_days": int(days),
+            "totals": totals,
+            "per_tool": per_tool,
+            "recent_errors": recent_errors,
+            "recent_feedback": recent_feedback,
+        }
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -852,9 +1051,15 @@ def _resolve_project_path_or_error(slug: str):
 
 
 def _flow_info_to_dict(info, project_root) -> dict:
+    # Library-Flows liegen im Code-Repo, nicht im Projekt; dann gibt relative_to einen ValueError.
+    try:
+        path_str = str(info.path.relative_to(project_root))
+    except ValueError:
+        path_str = f"<library>/{info.name}"
     return {
         "name": info.name,
-        "path": str(info.path.relative_to(project_root)),
+        "path": path_str,
+        "source": info.source,
         "has_runner": info.has_runner,
         "has_readme": info.has_readme,
         "readme_excerpt": info.readme_excerpt,

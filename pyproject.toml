@@ -34,6 +34,10 @@ dependencies = [
     # Standard-Pipeline (docling-standard) plus Azure DI fuer Scans/Plaene.
     "docling>=2.90.0",
     "pymupdf>=1.27.2.2",
+    # Praezise Token-Messung fuer Chat-Context-Management (Phase 2c).
+    # Lokale Schaetzung neuer Messages; Ground-Truth kommt weiter aus
+    # usage.input_tokens der Foundry-Response.
+    "tiktoken>=0.7",
 ]
 
 [build-system]

@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,6 +66,106 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "system_prompt.md"
+
+
+# ---------------------------------------------------------------------------
+# Kontext-Budget + Overhead
+# ---------------------------------------------------------------------------
+# GPT-5.1 Context-Window: 272k Input. Wir setzen 200k als Budget fuer die
+# Fuellstands-Anzeige — 72k Puffer fuer Output-Tokens + Rauschen.
+CHAT_TOKEN_BUDGET = 200_000
+
+# Fester Overhead pro Turn, den die chat_messages.token_count NICHT erfasst:
+# - System-Prompt (~15k Tokens)
+# - Tool-Definitionen (~20k Tokens, 49 Custom Functions — mit flow_fork +
+#   weiteren Flow-Tools ist die Schema-Groesse gewachsen)
+# - Reasoning-Traces die Foundry server-seitig via previous_response_id
+#   zwischen Turns haelt (effort='medium' → oft 5-15k je vorherigem Turn)
+# Gesamt ~50k pro Turn — konservativ kalibriert nach prod-Incident
+# 2026-04-23, bei dem context_length_exceeded trotz 35k-Overhead durchschlug.
+PORTAL_AGENT_OVERHEAD_TOKENS = 50_000
+
+# Hartes Limit: ueber diesem Wert schlagen Azure-Requests mit
+# context_length_exceeded fehl. Wir nutzen es, um vor dem Call abzubrechen
+# mit einer klaren Fehlermeldung (-> /compact-Vorschlag).
+CONTEXT_LIMIT_TOKENS = 260_000
+
+# Auto-Compact-Schwelle: ueber diesem Fuellstand wird der Chat VOR dem
+# naechsten Turn automatisch komprimiert (run_compaction_with_handover).
+# 70 % vom Budget (= 140k Tokens bei 200k Budget) ist der Punkt, ab dem
+# es mit naechster Antwort + Reasoning-Trace knapp werden wuerde. Lieber
+# einmal proaktiv komprimieren als in context_length_exceeded rennen.
+AUTO_COMPACT_THRESHOLD_PERCENT = 0.70
+AUTO_COMPACT_TRIGGER_TOKENS = int(CHAT_TOKEN_BUDGET * AUTO_COMPACT_THRESHOLD_PERCENT)
+
+
+def _effective_context_tokens(state: dict[str, Any] | None) -> int:
+    """Liefert den effektiven Kontext-Fuellstand fuer Pre-Check und UI.
+
+    Bevorzugt Azure-Ground-Truth (measured_context_tokens aus
+    usage.input_tokens), faellt zurueck auf lokale Schaetzung
+    (token_estimate + PORTAL_AGENT_OVERHEAD_TOKENS) — fuer den
+    allerersten Turn, nach Compaction, oder wenn ein Modellwechsel
+    den letzten Messwert bezugslos gemacht hat.
+    """
+    if state is None:
+        return PORTAL_AGENT_OVERHEAD_TOKENS
+    measured = state.get("measured_context_tokens")
+    if measured is not None:
+        return int(measured)
+    return int(state.get("token_estimate") or 0) + PORTAL_AGENT_OVERHEAD_TOKENS
+
+
+# ---------------------------------------------------------------------------
+# Retry-Konfiguration fuer transiente Fehler (Connection Reset, Read-Timeout)
+# ---------------------------------------------------------------------------
+_RETRY_DELAYS_SECONDS = (2.0, 5.0, 10.0)  # 3 Versuche zusaetzlich zum ersten
+
+
+def _is_transient_stream_error(exc: BaseException) -> bool:
+    """Erkennt Connection-Reset / Read-Timeout-Fehler aus httpx/SSE."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if name in ("ReadError", "ReadTimeout", "RemoteProtocolError",
+                "ConnectError", "ConnectTimeout"):
+        return True
+    patterns = (
+        "connection reset by peer",
+        "server disconnected",
+        "remote end closed connection",
+        "connection aborted",
+    )
+    return any(p in msg for p in patterns)
+
+
+_CONTEXT_EXCEEDED_PATTERNS = (
+    "context_length_exceeded",
+    "string too long",
+    "maximum context length",
+    "request too large",
+)
+
+
+def _is_context_exceeded_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(p in msg for p in _CONTEXT_EXCEEDED_PATTERNS)
+
+
+# Azure GPT-5.1 liefert gelegentlich ungueltigen Function-Call-JSON,
+# sichtbar als APIError mit "The model produced invalid content" und
+# Header 'azureml-ms-model-functionality-response: json.decoder.JSONDecodeError'.
+# Das ist transient (erneutes Senden hilft), aber nicht mit
+# _is_transient_stream_error abgedeckt — eigene Klassifizierung.
+_MODEL_INVALID_CONTENT_PATTERNS = (
+    "the model produced invalid content",
+    "json.decoder.jsondecodeerror",
+    "model_error",
+)
+
+
+def _is_model_invalid_content_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(p in msg for p in _MODEL_INVALID_CONTENT_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +252,20 @@ class DoneEvent(AgentEvent):
     tokens_output: int | None = None
     total_token_estimate: int | None = None  # aktueller Chat-Fill nach diesem Turn
     type: str = "done"
+
+
+@dataclass
+class SystemNoticeEvent(AgentEvent):
+    """Server-seitige Info, die vor dem eigentlichen Turn ausgeliefert wird.
+
+    Aktuell genutzt vom Auto-Compact (Phase 5): die UI soll anzeigen, dass
+    der Chat wegen hohem Fuellstand automatisch komprimiert wurde. `kind`
+    markiert die Kategorie fuer das Frontend (auto_compact | info).
+    """
+
+    message: str = ""
+    kind: str = "info"
+    type: str = "system_notice"
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +507,68 @@ class AgentService:
             " [SYSTEM-TRIGGER]" if _system_trigger else "",
         )
 
+        # Phase 5: Auto-Compact-Trigger.
+        # Wenn der Fuellstand (bevorzugt Azure-Ground-Truth aus dem letzten
+        # Turn) >= 70 % des Budgets ist, komprimieren wir VOR dem naechsten
+        # responses.create-Call. So rennt Disco nicht in das harte
+        # CONTEXT_LIMIT_TOKENS-Abbruchfenster. Die frisch persistierte
+        # User-Message bleibt erhalten — run_compaction_with_handover
+        # behaelt die letzten 3 User/Assistant-Paare.
+        _pre_turn_tokens = _effective_context_tokens(state)
+        if _pre_turn_tokens >= AUTO_COMPACT_TRIGGER_TOKENS:
+            logger.info(
+                "Auto-Compact getriggert: %d >= %d (%.1f%% von %d). "
+                "Starte Compaction-v2 vor dem Turn.",
+                _pre_turn_tokens, AUTO_COMPACT_TRIGGER_TOKENS,
+                100 * _pre_turn_tokens / CHAT_TOKEN_BUDGET,
+                CHAT_TOKEN_BUDGET,
+            )
+            yield SystemNoticeEvent(
+                kind="auto_compact",
+                message=(
+                    f"Kontext bei {_pre_turn_tokens:,} Tokens "
+                    f"({100 * _pre_turn_tokens / CHAT_TOKEN_BUDGET:.0f} % "
+                    f"vom Budget). Chat wird automatisch komprimiert "
+                    "(Handover-Brief wird erzeugt) …"
+                ),
+            )
+            try:
+                from ..chat.compaction import run_compaction_with_handover
+                result = run_compaction_with_handover(project_slug)
+                if result.get("skipped"):
+                    logger.info(
+                        "Auto-Compact uebersprungen: %s",
+                        result.get("reason"),
+                    )
+                else:
+                    logger.info(
+                        "Auto-Compact fertig: marked=%d kept=%d "
+                        "new_estimate=%d brief_chars=%d",
+                        result.get("marked_compacted", 0),
+                        len(result.get("kept_ids") or []),
+                        result.get("new_token_estimate", 0),
+                        result.get("handover_brief_chars", 0),
+                    )
+                # State neu laden — foundry_response_id ist jetzt None,
+                # measured_context_tokens geloescht, token_estimate neu
+                # berechnet (deutlich niedriger).
+                state = chat_repo.get_or_create_state(project_slug)
+            except Exception as exc:
+                # Compaction darf niemals den Turn verhindern. Wenn sie
+                # fehlschlaegt, bleibt der harte Pre-Check unten als Netz.
+                logger.warning(
+                    "Auto-Compact fehlgeschlagen (%s) — Turn laeuft mit "
+                    "altem Kontext weiter. Der CONTEXT_LIMIT_TOKENS-"
+                    "Pre-Check greift ggf. als Fallback.", exc,
+                )
+                yield SystemNoticeEvent(
+                    kind="info",
+                    message=(
+                        "Auto-Compact fehlgeschlagen, Turn laeuft trotzdem: "
+                        f"{exc}"
+                    ),
+                )
+
         # Projekt-Kontext aktivieren — gilt fuer alle Tool-Aufrufe in
         # diesem Turn (fs_*, sqlite_*, memory_*). Reset im finally am Ende.
         from .context import _current_project, _is_system_triggered
@@ -436,6 +613,10 @@ class AgentService:
                 "kein vollstaendiger Deep-Dive.\n"
             )
 
+        # Developer-Kontext-Block vorbereiten. Der steht in JEDEM Turn als
+        # erstes Item, damit Disco Projekt-Sandbox und ggf. System-Trigger-
+        # Regeln kennt. In beiden Modi (Chain + Stateless) identisch.
+        developer_ctx_items: list[dict[str, Any]] = []
         if _p_info is not None:
             # Env-Label fuer die Disco-Instanz (prod|dev). Wird vom
             # DISCO_ENV-Flag in der .env gesetzt — so weiss Disco ob er
@@ -465,22 +646,39 @@ class AgentService:
                 "nicht."
                 + trigger_block
             )
-            current_input = [
-                {"type": "message", "role": "developer", "content": _ctx_text},
-                {"type": "message", "role": "user", "content": user_text},
-            ]
+            developer_ctx_items.append(
+                {"type": "message", "role": "developer", "content": _ctx_text}
+            )
+        elif _system_trigger:
+            developer_ctx_items.append({
+                "type": "message",
+                "role": "developer",
+                "content": trigger_block.strip(),
+            })
+
+        # Zwei Kontext-Aufbau-Modi:
+        #   - Chain-Modus (previous_response_id gesetzt): Foundry haelt den
+        #     Verlauf serverseitig inklusive Reasoning-Trace. Wir schicken
+        #     nur den Developer-Kontext + die neue User-Message.
+        #   - Stateless-Modus (previous_response_id=None, typisch nach
+        #     Compaction): wir rekonstruieren den kompletten aktiven
+        #     Verlauf aus chat_messages. Die neue User-/System-Message
+        #     ist dabei schon im Verlauf, weil sie oben via append_message
+        #     persistiert wurde.
+        if previous_response_id is None:
+            logger.info(
+                "run_turn: Stateless-Modus aktiv (kein previous_response_id) "
+                "— baue Input aus is_compacted=0 Messages"
+            )
+            current_input = chat_repo.build_responses_api_input(
+                project_slug,
+                prepend_items=developer_ctx_items or None,
+            )
         else:
-            # Projekt nur im Workspace, nicht in system.db — trotzdem arbeiten
-            if _system_trigger:
-                # Ohne Projekt-Info-Block muessen wir den Trigger-Block
-                # separat als developer-Message schicken, damit Disco die
-                # System-Trigger-Regeln kennt.
+            # Chain-Modus: developer + neue user-Message genuegen.
+            if developer_ctx_items:
                 current_input = [
-                    {
-                        "type": "message",
-                        "role": "developer",
-                        "content": trigger_block.strip(),
-                    },
+                    *developer_ctx_items,
                     {"type": "message", "role": "user", "content": user_text},
                 ]
             else:
@@ -504,6 +702,7 @@ class AgentService:
         assistant_text_buf: list[str] = []
         last_response_id: str | None = None
         last_usage: dict[str, Any] | None = None
+        last_model: str | None = None
         recorded_tool_calls: list[dict[str, Any]] = []
         recorded_tool_results: list[dict[str, Any]] = []
 
@@ -544,11 +743,72 @@ class AgentService:
             # die API "type: Value is 'null' but should be 'string'"
             if previous_response_id:
                 call_kwargs["previous_response_id"] = previous_response_id
-            try:
-                stream = self._openai_client.responses.create(**call_kwargs)
-            except Exception as exc:
-                logger.exception("responses.create fehlgeschlagen")
-                yield ErrorEvent(message=f"Foundry-Call fehlgeschlagen: {exc}")
+
+            # Pre-Check: Wenn der Fuellstand das Context-Window nahe am
+            # Limit hat, bricht Azure mit context_length_exceeded. Lieber
+            # frueh und klar stoppen, damit der Nutzer /compact weiss.
+            # _effective_context_tokens bevorzugt Azure-Ground-Truth
+            # (measured_context_tokens) und faellt nur zurueck, wenn es
+            # noch keinen Messwert gibt.
+            _est_tokens = _effective_context_tokens(state)
+            if _est_tokens >= CONTEXT_LIMIT_TOKENS:
+                logger.warning(
+                    "Context-Limit erreicht (%d >= %d) — Turn abgebrochen",
+                    _est_tokens, CONTEXT_LIMIT_TOKENS,
+                )
+                yield ErrorEvent(message=(
+                    f"Chat-Kontext ist voll ({_est_tokens:,} Tokens). "
+                    "Bitte den Chat komprimieren ('/compact' oder 'Kontext "
+                    "komprimieren' im Chat) — danach geht es weiter."
+                ))
+                return
+
+            # Retry-Loop nur fuer den Connection-Aufbau. Sobald der Stream
+            # laeuft und erste Events gesendet wurden, retryen wir NICHT
+            # mehr — partielle Ausgabe an die UI darf nicht doppelt laufen
+            # und Tool-Calls haetten sonst Duplikat-Risiko.
+            stream = None
+            _last_exc: BaseException | None = None
+            for _attempt, _delay in enumerate(
+                (0.0, *_RETRY_DELAYS_SECONDS), start=0,
+            ):
+                if _delay > 0:
+                    logger.info(
+                        "Retry responses.create — Versuch %d nach %.1fs",
+                        _attempt + 1, _delay,
+                    )
+                    time.sleep(_delay)
+                try:
+                    stream = self._openai_client.responses.create(**call_kwargs)
+                    _last_exc = None
+                    break
+                except Exception as exc:
+                    _last_exc = exc
+                    if _is_context_exceeded_error(exc):
+                        logger.exception(
+                            "responses.create: Context-Length-Exceeded",
+                        )
+                        yield ErrorEvent(message=(
+                            f"Azure lehnt den Request wegen Kontext-Laenge ab: "
+                            f"{exc}. Bitte den Chat komprimieren "
+                            "('/compact') und erneut senden."
+                        ))
+                        return
+                    if not _is_transient_stream_error(exc):
+                        # Nicht-transient: sofort abbrechen, kein Retry
+                        break
+                    logger.warning(
+                        "responses.create transient (%s) — Retry moeglich",
+                        type(exc).__name__,
+                    )
+            if stream is None:
+                logger.exception(
+                    "responses.create endgueltig fehlgeschlagen",
+                    exc_info=_last_exc,
+                )
+                yield ErrorEvent(
+                    message=f"Foundry-Call fehlgeschlagen: {_last_exc}",
+                )
                 return
 
             # Pro Runde sammeln.
@@ -642,11 +902,26 @@ class AgentService:
                         resp = getattr(event, "response", None)
                         if resp is not None:
                             last_response_id = getattr(resp, "id", None) or last_response_id
+                            last_model = (
+                                getattr(resp, "model", None) or last_model
+                            )
                             usage = getattr(resp, "usage", None)
                             if usage is not None:
+                                # Cached-Tokens liegen unter input_tokens_details
+                                # (GPT-5.1 mit Prompt-Cache; bei anderen Modellen
+                                # faellt das Feld weg).
+                                cached = None
+                                input_details = getattr(
+                                    usage, "input_tokens_details", None,
+                                )
+                                if input_details is not None:
+                                    cached = getattr(
+                                        input_details, "cached_tokens", None,
+                                    )
                                 last_usage = {
                                     "input": getattr(usage, "input_tokens", None),
                                     "output": getattr(usage, "output_tokens", None),
+                                    "cached_input": cached,
                                 }
 
                     # --- Fehler / Abbruch ---
@@ -661,13 +936,36 @@ class AgentService:
                         code = getattr(err_obj, "code", None)
                         type_ = getattr(err_obj, "type", None)
                         status = getattr(err, "status", None)
+                        # Zusatz-Diagnose fuer den "keine Details"-Fall:
+                        # Azure gibt manchmal status='failed' ohne error/msg —
+                        # dann helfen uns model/usage/incomplete_details/
+                        # reasoning/truncation zur Einordnung.
+                        incomplete = getattr(err, "incomplete_details", None)
+                        usage = getattr(err, "usage", None)
+                        model_used = getattr(err, "model", None)
+                        reasoning = getattr(err, "reasoning", None)
+                        truncation = getattr(err, "truncation", None)
+                        resp_id = getattr(err, "id", None)
                         logger.error(
-                            "Foundry response.failed — code=%r type=%r status=%r msg=%r event=%r",
-                            code, type_, status, msg, event,
+                            "Foundry response.failed — code=%r type=%r status=%r msg=%r "
+                            "resp_id=%r model=%r usage=%r incomplete=%r reasoning=%r "
+                            "truncation=%r",
+                            code, type_, status, msg, resp_id, model_used,
+                            usage, incomplete, reasoning, truncation,
                         )
                         parts = [str(p) for p in (code, type_, msg) if p]
-                        ui_msg = " — ".join(parts) if parts else "keine Details von Foundry"
-                        yield ErrorEvent(message=f"Foundry meldet Fehler: {ui_msg}")
+                        if parts:
+                            ui_msg = f"Foundry meldet Fehler: {' — '.join(parts)}"
+                        else:
+                            # Transienter Azure-Abbruch ohne Details — der Nutzer
+                            # soll wissen, dass ein einfaches Neu-Senden meist hilft.
+                            ui_msg = (
+                                "Azure/Foundry hat den Response abgebrochen, "
+                                "ohne Details zu liefern (transient — oft hilft "
+                                "einfach erneut senden). "
+                                f"Resp-ID: {resp_id or 'unbekannt'}."
+                            )
+                        yield ErrorEvent(message=ui_msg)
                         return
                     elif etype == "error":
                         msg = getattr(event, "message", "") or ""
@@ -711,6 +1009,9 @@ class AgentService:
                     or "too many requests" in msg_text.lower()
                     or (isinstance(code, str) and "rate" in code.lower())
                 )
+                is_context_exceeded = _is_context_exceeded_error(exc)
+                is_transient = _is_transient_stream_error(exc)
+                is_model_invalid = _is_model_invalid_content_error(exc)
 
                 if status_code is not None:
                     detail_parts.append(f"status={status_code}")
@@ -722,11 +1023,31 @@ class AgentService:
 
                 logger.exception("Fehler im Event-Stream%s", detail)
 
-                if is_rate_limit:
+                if is_context_exceeded:
+                    ui_msg = (
+                        "Chat-Kontext ist zu gross fuer Azure GPT-5.1 "
+                        f"({msg_text or 'context_length_exceeded'}). "
+                        "Bitte den Chat komprimieren ('/compact' oder "
+                        "'Kontext komprimieren' im Chat) und erneut senden."
+                    )
+                elif is_rate_limit:
                     ui_msg = (
                         f"Azure OpenAI Rate-Limit (429): {msg_text or 'Too Many Requests'}. "
                         "Moeglicherweise laeuft parallel ein Flow auf demselben Deployment — "
                         "kurz warten und erneut versuchen."
+                    )
+                elif is_transient:
+                    ui_msg = (
+                        f"Verbindung zu Azure abgerissen ({type(exc).__name__}: "
+                        f"{msg_text or 'connection reset'}). Bitte die Nachricht "
+                        "noch einmal senden — die Antwort war unvollstaendig."
+                    )
+                elif is_model_invalid:
+                    ui_msg = (
+                        "Azure GPT-5.1 hat ungueltigen Content produziert "
+                        "(meist defekter Function-Call-JSON) — transienter "
+                        "Modell-Fehler. Bitte die letzte Nachricht einfach "
+                        "erneut senden; zweimal hintereinander ist selten."
                     )
                 else:
                     ui_msg = f"Stream-Fehler: {msg_text}{detail}"
@@ -752,13 +1073,20 @@ class AgentService:
                 call_id = d["call_id"]
                 name = d["name"]
                 args = d["arguments"]
+                _t0 = time.monotonic()
                 result_json = fn_registry.dispatch(name, args)
+                _duration_ms = int((time.monotonic() - _t0) * 1000)
 
                 recorded_tool_calls.append(
                     {"call_id": call_id, "name": name, "arguments": args}
                 )
                 recorded_tool_results.append(
-                    {"call_id": call_id, "name": name, "result": result_json}
+                    {
+                        "call_id": call_id,
+                        "name": name,
+                        "result": result_json,
+                        "duration_ms": _duration_ms,
+                    }
                 )
 
                 yield ToolResultEvent(call_id=call_id, name=name, result=result_json)
@@ -841,11 +1169,29 @@ class AgentService:
         if last_response_id:
             chat_repo.set_response_id(project_slug, last_response_id)
 
-        # Aktuellen Token-Fill fuer die UI holen (70/90-Warnung)
+        # Reale Kontext-Groesse aus usage.input_tokens speichern — Ground-Truth
+        # gegen Azure, inklusive System-Prompt, Tool-Schemas, Reasoning-Trace.
+        # Fallback: wenn das Modell mal kein usage liefert, aktualisieren wir
+        # nichts — dann greift weiterhin die token_estimate-Schaetzung.
+        if last_usage and last_usage.get("input") is not None:
+            try:
+                chat_repo.set_measured_context(
+                    project_slug=project_slug,
+                    measured_context_tokens=int(last_usage["input"]),
+                    measured_model=last_model,
+                    measured_cached_tokens=last_usage.get("cached_input"),
+                )
+            except Exception as exc:  # pragma: no cover — Telemetrie
+                logger.warning(
+                    "set_measured_context fehlgeschlagen (slug=%s): %s",
+                    project_slug, exc,
+                )
+
+        # Aktuellen Fuellstand fuer die UI/DoneEvent ermitteln. Reihenfolge:
+        # 1. measured_context_tokens (Ground-Truth) falls vorhanden,
+        # 2. sonst token_estimate + PORTAL_AGENT_OVERHEAD_TOKENS (Schaetzung).
         current_state = chat_repo.get_state(project_slug)
-        current_token_estimate = (
-            int(current_state["token_estimate"]) if current_state else None
-        )
+        current_token_estimate = _effective_context_tokens(current_state)
 
         yield DoneEvent(
             response_id=last_response_id,

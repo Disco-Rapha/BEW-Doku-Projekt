@@ -105,7 +105,7 @@ HEARTBEAT_MAX_SEC = 14400  # 4 h
 
 
 # ---------------------------------------------------------------------------
-# Pricing — Stand 2026-04 fuer GPT-5 in Sweden Central, API-Version 2025-11-01
+# Pricing — Stand 2026-04 fuer GPT-5.1 in Sweden Central, Data Zone Standard
 # ---------------------------------------------------------------------------
 # Quelle: Azure-Preisliste (USD/1M Tokens). Wird von
 # FlowRun.add_cost_from_azure_response() genutzt, wenn der Runner keinen
@@ -114,16 +114,33 @@ HEARTBEAT_MAX_SEC = 14400  # 4 h
 # Wichtig: Das sind Naeherungen. Fuer rechtssichere Abrechnungen bitte
 # weiterhin aus dem Azure-Portal exportieren. Hier geht es um Live-Budget-
 # Anzeige im UI, nicht um die Finanzbuchhaltung.
+#
+# Cached-Input-Rabatt ist bewusst NICHT implementiert (Backlog-Punkt
+# "Cached-Input-Rabatt in Kostenberechnung"). Jeder Input-Token zaehlt
+# derzeit zum Voll-Tarif — konservativ, Live-Tracker liegt ueber echter
+# Azure-Rechnung.
 # ---------------------------------------------------------------------------
 
-USD_TO_EUR = 1.09  # grober Stand 2026-04
+# 1 USD ≈ 0.85 EUR (April 2026, EZB-Referenzkurs). Achtung: Richtung zaehlt!
+# usd_to_eur = usd_betrag * USD_TO_EUR
+USD_TO_EUR = 0.85
 
 MODEL_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
-    # GPT-5 Familie (default fuer Portal-Agent "disco-prod-agent")
+    # GPT-5.1 Familie (aktueller Default fuer disco-prod-agent / disco-dev-agent
+    # in Sweden Central, Data Zone Standard deployment).
+    # Azure publiziert fuer Sweden Central in EUR; Data Zone Standard
+    # (Stand 2026-04-22): Input €1.20 / Output €9.55 / 1M Tokens.
+    # Rueckgerechnet via USD_TO_EUR=0.85: 1.20/0.85 = 1.412, 9.55/0.85 = 11.235.
+    "gpt-5.1": {"input": 1.412, "output": 11.235},
+    # mini/nano: nicht im aktuellen Azure-Data-Zone-Screenshot enthalten,
+    # daher unveraendert — vor Live-Einsatz pruefen.
+    "gpt-5.1-mini": {"input": 0.25, "output": 2.00},
+    "gpt-5.1-nano": {"input": 0.05, "output": 0.40},
+    # GPT-5 Familie (Legacy — falls ein Deployment noch darauf zeigt)
     "gpt-5": {"input": 5.0, "output": 15.0},
     "gpt-5-mini": {"input": 0.5, "output": 2.0},
     "gpt-5-nano": {"input": 0.1, "output": 0.4},
-    # GPT-4.1-Familie (noch in Migration)
+    # GPT-4.1-Familie (in Migration)
     "gpt-4.1": {"input": 2.5, "output": 10.0},
     "gpt-4.1-mini": {"input": 0.25, "output": 1.0},
     # Embeddings (fuer spaetere Hybrid-Search-Flows)
@@ -135,9 +152,10 @@ MODEL_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
 def compute_cost_eur(model: str, tokens_in: int, tokens_out: int) -> float:
     """Berechnet EUR-Kosten fuer einen API-Call.
 
-    Nimmt den Modellnamen wie er im Deployment steht (z.B. 'gpt-5',
-    'gpt-5-mini'). Deployment-Aliase mit Suffixen wie 'gpt-5-2025-08-07'
-    werden automatisch auf das Basis-Modell zurueckgefuehrt.
+    Nimmt den Modellnamen wie er im Deployment steht (z.B. 'gpt-5.1',
+    'gpt-5.1-mini'). Deployment-Aliase mit Suffixen wie
+    'gpt-5.1-2026-02-01' werden automatisch auf das Basis-Modell
+    zurueckgefuehrt.
 
     Unbekannte Modelle → 0.0 EUR + Warnung im Log (spaeter: Exception).
     """
@@ -902,7 +920,7 @@ class FlowRun:
             Runner das in seine Ergebnis-Tabelle schreiben will.
         """
         tokens_in, tokens_out = _extract_usage(response)
-        used_model = model or getattr(response, "model", None) or "gpt-5"
+        used_model = model or getattr(response, "model", None) or "gpt-5.1"
         eur = compute_cost_eur(used_model, tokens_in, tokens_out)
         self.add_cost(eur=eur, tokens_in=tokens_in, tokens_out=tokens_out)
         return tokens_in, tokens_out, eur

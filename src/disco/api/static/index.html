@@ -707,6 +707,65 @@ a:hover { text-decoration: underline; }
 .flow-items-list .row:hover { background: var(--panel2); }
 .flow-items-list .row .ref { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-items-list .row .err { color: var(--red); font-size: 10px; }
+
+/* Feedback-Icons rechts an der Message-Bubble */
+.feedback-icons {
+  display: inline-flex; gap: 2px;
+  margin-top: 2px; margin-left: 6px;
+  opacity: 0.25; transition: opacity 0.15s;
+  vertical-align: middle;
+}
+.msg:hover .feedback-icons { opacity: 0.8; }
+.feedback-icons .fb-ico {
+  cursor: pointer; background: transparent; border: none;
+  padding: 2px 4px; font-size: 13px; line-height: 1;
+  color: var(--text-dim); border-radius: 3px;
+}
+.feedback-icons .fb-ico:hover { background: var(--panel2); color: var(--text); }
+.feedback-icons .fb-ico.active-good { opacity: 1; color: var(--green); }
+.feedback-icons .fb-ico.active-bad  { opacity: 1; color: var(--red); }
+.feedback-icons.has-rating { opacity: 1; }
+
+/* Popup fuer Kommentar bei 👎 */
+#feedback-modal .modal { max-width: 440px; width: 92vw; }
+#feedback-modal textarea {
+  width: 100%; min-height: 80px; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 8px; color: var(--text); font: inherit; font-size: 13px;
+  resize: vertical; box-sizing: border-box;
+}
+
+/* Stats-Modal */
+#stats-modal .modal { max-width: 860px; width: 92vw; max-height: 84vh; overflow-y: auto; }
+.stats-totals {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 12px; margin-bottom: 16px;
+}
+.stats-totals .card {
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 12px;
+}
+.stats-totals .card .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px; }
+.stats-totals .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+.stats-totals .card.good .value { color: var(--green); }
+.stats-totals .card.bad  .value { color: var(--red); }
+.stats-section { margin-top: 16px; }
+.stats-section h4 { margin: 0 0 6px 0; font-size: 13px; color: var(--text-bright); }
+.stats-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+  font-family: var(--mono);
+}
+.stats-table th, .stats-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.stats-table th { color: var(--text-dim); font-weight: 500; font-size: 11px; text-transform: uppercase; }
+.stats-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.stats-table tr.err { color: var(--red); }
+.stats-bar {
+  display: inline-block; height: 10px; background: var(--accent2);
+  border-radius: 2px; vertical-align: middle;
+}
+.stats-empty { color: var(--text-dim); font-style: italic; font-size: 12px; padding: 6px 0; }
+
+#btn-stats { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -767,6 +826,7 @@ a:hover { text-decoration: underline; }
       <span class="spacer" style="flex:1"></span>
       <span id="chat-token-counter" title="Aktueller Chat-Fuellstand. Warnung bei 70 %, kritisch bei 90 %.">0 / 180k · 0 %</span>
       <button id="btn-compact" title="Chat komprimieren — wichtige Erkenntnisse in Memory-Bank schreiben, dann Verlauf einklappen" onclick="openCompactModal()">🗜 Komprimieren</button>
+      <button id="btn-stats" title="Agent-Stats: Tool-Usage, Fehler, Feedback" onclick="openStatsModal()">📊 Stats</button>
       <button class="icon-btn" title="Viewer ein-/ausblenden" onclick="toggleViewer()">▭</button>
     </div>
 
@@ -856,6 +916,16 @@ function initMarkdown() {
       return '<pre><code class="hljs">' + state.md.utils.escapeHtml(str) + '</code></pre>';
     }
   });
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function renderMarkdown(text) {
@@ -1249,6 +1319,150 @@ async function hardCompact() {
   }
 }
 
+// ----- Stats-Modal -------------------------------------------------------
+async function openStatsModal() {
+  if (document.getElementById('stats-modal')) return;
+  const slug = state.activeProjectSlug;
+  const days = 30;
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'stats-modal';
+  backdrop.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Agent-Stats <span class="muted" style="font-weight:normal;font-size:12px;">
+        (${slug ? 'Projekt <b>' + slug + '</b>' : 'alle Projekte'}, letzte ${days} Tage)</span></h3>
+      <div id="stats-body"><p class="muted">lade …</p></div>
+      <div class="modal-actions">
+        <button onclick="closeStatsModal()">Schliessen</button>
+      </div>
+    </div>`;
+  backdrop.onclick = closeStatsModal;
+  document.body.appendChild(backdrop);
+  try {
+    const qs = new URLSearchParams({days: String(days)});
+    if (slug) qs.set('project', slug);
+    const r = await fetch('/api/agent-stats?' + qs.toString());
+    const d = await r.json();
+    if (d.error) {
+      document.getElementById('stats-body').innerHTML =
+        `<p class="err">Fehler: ${escapeHtml(d.error)}</p>`;
+      return;
+    }
+    renderStats(d);
+  } catch (e) {
+    document.getElementById('stats-body').innerHTML =
+      `<p class="err">Fehler: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function closeStatsModal() {
+  const el = document.getElementById('stats-modal');
+  if (el) el.remove();
+}
+
+function renderStats(d) {
+  const t = d.totals || {};
+  const perTool = d.per_tool || [];
+  const errors = d.recent_errors || [];
+  const feedback = d.recent_feedback || [];
+  const errRate = t.calls ? Math.round(100 * (t.errors || 0) / t.calls) : 0;
+  const fbGood = t.feedback_good || 0;
+  const fbBad = t.feedback_bad || 0;
+  // Ø Dauer aus per_tool berechnen (gewichtetes Mittel)
+  let totalMs = 0, totalCalls = 0;
+  for (const r of perTool) {
+    totalMs += (r.avg_ms || 0) * (r.calls || 0);
+    totalCalls += (r.calls || 0);
+  }
+  const avgMs = totalCalls ? totalMs / totalCalls : null;
+
+  const totalsHtml = `
+    <div class="stats-totals">
+      <div class="card"><div class="label">Tool-Calls</div><div class="value">${t.calls || 0}</div></div>
+      <div class="card ${errRate > 10 ? 'bad' : ''}"><div class="label">Fehler-Rate</div><div class="value">${errRate}%</div></div>
+      <div class="card"><div class="label">Ø Dauer</div><div class="value">${fmtMs(avgMs)}</div></div>
+      <div class="card good"><div class="label">Feedback 👍</div><div class="value">${fbGood}</div></div>
+      <div class="card bad"><div class="label">Feedback 👎</div><div class="value">${fbBad}</div></div>
+    </div>`;
+
+  let perToolHtml;
+  if (!perTool.length) {
+    perToolHtml = '<div class="stats-empty">Keine Tool-Calls im Zeitraum.</div>';
+  } else {
+    const maxCalls = Math.max(...perTool.map(r => r.calls || 0), 1);
+    perToolHtml = `
+      <table class="stats-table">
+        <thead><tr>
+          <th>Tool</th>
+          <th class="num">Calls</th>
+          <th>Verteilung</th>
+          <th class="num">Fehler</th>
+          <th class="num">Ø ms</th>
+          <th class="num">Max ms</th>
+        </tr></thead>
+        <tbody>
+        ${perTool.map(r => {
+          const pct = Math.round(100 * (r.calls || 0) / maxCalls);
+          const erate = r.calls ? Math.round(100 * (r.errors || 0) / r.calls) : 0;
+          return `<tr${erate > 10 ? ' class="err"' : ''}>
+            <td><code>${escapeHtml(r.tool_name || '')}</code></td>
+            <td class="num">${r.calls || 0}</td>
+            <td><div class="stats-bar" style="width:${pct}%"></div></td>
+            <td class="num">${r.errors || 0}${erate ? ' (' + erate + '%)' : ''}</td>
+            <td class="num">${fmtMs(r.avg_ms)}</td>
+            <td class="num">${fmtMs(r.max_ms)}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  const errorsHtml = errors.length
+    ? `<ul style="margin:0;padding-left:18px;font-size:12px;">
+         ${errors.map(e => `<li>
+           <code>${escapeHtml(e.tool_name)}</code>
+           <span class="muted">${escapeHtml(e.created_at || '')}</span>
+           ${e.arguments_summary ? ' — ' + escapeHtml(e.arguments_summary) : ''}
+           <br><span class="err">${escapeHtml(e.result_error_msg || '(kein Text)')}</span>
+         </li>`).join('')}
+       </ul>`
+    : '<div class="stats-empty">Keine Fehler — stark.</div>';
+
+  const feedbackHtml = feedback.length
+    ? `<ul style="margin:0;padding-left:18px;font-size:12px;">
+         ${feedback.map(f => `<li>
+           ${f.rating === 'good' ? '👍' : '👎'}
+           <span class="muted">${escapeHtml(f.created_at || '')} · msg #${f.message_id}</span>
+           ${f.comment ? '<br>' + escapeHtml(f.comment) : ''}
+         </li>`).join('')}
+       </ul>`
+    : '<div class="stats-empty">Noch kein Feedback abgegeben.</div>';
+
+  document.getElementById('stats-body').innerHTML = `
+    ${totalsHtml}
+    <div class="stats-section">
+      <h4>Tool-Usage</h4>
+      ${perToolHtml}
+    </div>
+    <div class="stats-section">
+      <h4>Letzte Fehler</h4>
+      ${errorsHtml}
+    </div>
+    <div class="stats-section">
+      <h4>Letztes Feedback</h4>
+      ${feedbackHtml}
+    </div>
+  `;
+}
+
+function fmtMs(n) {
+  if (n == null) return '–';
+  n = Math.round(n);
+  if (n < 1000) return n + ' ms';
+  if (n < 60000) return (n/1000).toFixed(1) + ' s';
+  return Math.floor(n/60000) + 'm ' + Math.round((n%60000)/1000) + 's';
+}
+
 // =========================================================================
 // Explorer
 // =========================================================================
@@ -1339,10 +1553,22 @@ async function loadMessages(slug) {
       setSystemMessage('Neuer Projekt-Chat. Wie kann Disco helfen?');
       return;
     }
+    // Feedback-Zustand fuer alle Assistant-Messages vorab holen
+    const assistantIds = items.filter(m => m.role === 'assistant' && m.content).map(m => m.id);
+    let feedbackMap = {};
+    if (assistantIds.length) {
+      try {
+        feedbackMap = await api(`/api/chat/messages/feedback?ids=${assistantIds.join(',')}`);
+      } catch (e) { feedbackMap = {}; }
+    }
     for (const m of items) {
       if (m.role === 'user') appendMessage('user', m.content || '');
       else if (m.role === 'assistant') {
-        if (m.content) appendMessage('agent', m.content);
+        if (m.content) {
+          const el = appendMessage('agent', m.content, m.id);
+          const fb = feedbackMap[String(m.id)];
+          if (fb && el) applyFeedbackState(el, fb.rating, fb.comment);
+        }
         if (Array.isArray(m.tool_calls)) {
           for (const tc of m.tool_calls) {
             const result = findHistoricResult(items, tc.call_id);
@@ -1492,6 +1718,20 @@ function handleEvent(ev) {
       setSystemMessage('FEHLER: ' + (ev.message || ev.text || 'unbekannt'));
       setStatus('Fehler', 'err');
       break;
+    case 'system_notice':
+      // Server-seitige Info vor dem Turn (z. B. Auto-Compact). Als
+      // system-Bubble anzeigen und laufenden Text-Stream zuruecksetzen,
+      // damit der anschliessende Assistent-Turn in eine neue Bubble geht.
+      currentBubble = null; currentText = '';
+      if (ev.kind === 'auto_compact') {
+        setSystemMessage('🗜️ ' + escHtml(ev.message || 'Auto-Compact laeuft …'));
+        // Nach Kompression den Chat-State frisch ziehen, damit der
+        // Token-Counter sofort den neuen (niedrigeren) Fuellstand zeigt.
+        if (state.activeProjectSlug) loadChatState(state.activeProjectSlug);
+      } else {
+        setSystemMessage(escHtml(ev.message || ''));
+      }
+      break;
     case 'done':
       currentBubble = null; currentText = '';
       state._isStreaming = false;
@@ -1516,6 +1756,8 @@ function handleEvent(ev) {
         loadFlows(state.activeProjectSlug);
         // Viewer auto-refresh: wenn eine Datei offen ist, nochmal laden
         refreshOpenViewer();
+        // Letzte Assistant-Bubble mit Feedback-Leiste versehen.
+        attachFeedbackToLastAssistantBubble(state.activeProjectSlug);
       }
       break;
   }
@@ -1524,18 +1766,142 @@ function handleEvent(ev) {
 // =========================================================================
 // Render-Helfer Chat
 // =========================================================================
-function appendMessage(role, text) {
+function appendMessage(role, text, messageId) {
   const msgs = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = `msg ${role}`;
+  if (messageId != null) div.dataset.messageId = String(messageId);
   const sender = role === 'user' ? 'Du' : role === 'agent' ? 'Disco' : 'System';
   div.innerHTML = `
     <div class="sender">${sender}</div>
     <div class="bubble">${renderMarkdown(text)}</div>
   `;
+  if (role === 'agent' && messageId != null) {
+    div.querySelector('.sender').appendChild(buildFeedbackIcons(messageId));
+  }
   msgs.appendChild(div);
   scrollChat();
   return div;
+}
+
+function buildFeedbackIcons(messageId) {
+  const wrap = document.createElement('span');
+  wrap.className = 'feedback-icons';
+  wrap.dataset.messageId = String(messageId);
+  wrap.innerHTML = `
+    <button class="fb-ico fb-good" title="gute Antwort" onclick="submitQuickFeedback(${messageId}, 'good', this)">👍</button>
+    <button class="fb-ico fb-bad"  title="schlechte/suboptimale Antwort" onclick="openFeedbackModal(${messageId}, this)">👎</button>
+  `;
+  return wrap;
+}
+
+function applyFeedbackState(msgEl, rating, comment) {
+  const wrap = msgEl.querySelector('.feedback-icons');
+  if (!wrap) return;
+  wrap.classList.remove('has-rating');
+  const g = wrap.querySelector('.fb-good');
+  const b = wrap.querySelector('.fb-bad');
+  if (g) g.classList.remove('active-good');
+  if (b) b.classList.remove('active-bad');
+  if (rating === 'good' && g) { g.classList.add('active-good'); wrap.classList.add('has-rating'); }
+  if (rating === 'bad'  && b) { b.classList.add('active-bad');  wrap.classList.add('has-rating'); }
+  if (comment) wrap.dataset.comment = comment; else delete wrap.dataset.comment;
+  if (rating === 'bad' && b) {
+    const hint = comment ? `👎 gespeichert\n\n„${comment}"` : '👎 gespeichert';
+    b.title = hint;
+  }
+}
+
+async function submitQuickFeedback(messageId, rating, btnEl) {
+  const wrap = btnEl.closest('.feedback-icons');
+  try {
+    const r = await fetch(`/api/chat/messages/${messageId}/feedback`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ rating, comment: null }),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    applyFeedbackState(wrap.closest('.msg'), rating, null);
+  } catch (e) {
+    alert('Fehler: ' + e.message);
+  }
+}
+
+function openFeedbackModal(messageId, btnEl) {
+  if (document.getElementById('feedback-modal')) return;
+  const wrap = btnEl.closest('.feedback-icons');
+  const existing = (wrap && wrap.dataset.comment) || '';
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'feedback-modal';
+  backdrop.dataset.messageId = String(messageId);
+  backdrop.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Feedback zur Antwort</h3>
+      <p class="muted" style="margin:0 0 8px 0;font-size:12px;">
+        Warum war die Antwort suboptimal? (optional — Kommentar hilft beim Feintuning)
+      </p>
+      <textarea id="fb-textarea" placeholder="z.B. falsches Tool gewaehlt, zu lange, Info fehlt ...">${escapeHtml(existing)}</textarea>
+      <div class="modal-actions">
+        <button onclick="closeFeedbackModal()">Abbrechen</button>
+        <button class="btn-primary" onclick="submitBadFeedback()">👎 Speichern</button>
+      </div>
+    </div>`;
+  backdrop.onclick = closeFeedbackModal;
+  document.body.appendChild(backdrop);
+  setTimeout(() => {
+    const ta = document.getElementById('fb-textarea');
+    if (ta) ta.focus();
+  }, 50);
+}
+
+function closeFeedbackModal() {
+  const el = document.getElementById('feedback-modal');
+  if (el) el.remove();
+}
+
+async function submitBadFeedback() {
+  const modal = document.getElementById('feedback-modal');
+  if (!modal) return;
+  const messageId = parseInt(modal.dataset.messageId, 10);
+  const comment = (document.getElementById('fb-textarea').value || '').trim();
+  try {
+    const r = await fetch(`/api/chat/messages/${messageId}/feedback`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ rating: 'bad', comment: comment || null }),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    const msgEl = document.querySelector(`.msg[data-message-id="${messageId}"]`);
+    if (msgEl) applyFeedbackState(msgEl, 'bad', comment || null);
+    closeFeedbackModal();
+  } catch (e) {
+    alert('Fehler: ' + e.message);
+  }
+}
+
+async function attachFeedbackToLastAssistantBubble(slug) {
+  try {
+    const items = await api(`/api/projects/${encodeURIComponent(slug)}/chat/messages`);
+    if (!Array.isArray(items) || !items.length) return;
+    let lastAsst = null;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].role === 'assistant' && items[i].content) { lastAsst = items[i]; break; }
+    }
+    if (!lastAsst) return;
+    const bubbles = document.querySelectorAll('#chat-messages .msg.agent');
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      if (b.dataset.messageId) continue;
+      if (b.querySelector('.feedback-icons')) continue;
+      b.dataset.messageId = String(lastAsst.id);
+      const sender = b.querySelector('.sender');
+      if (sender) sender.appendChild(buildFeedbackIcons(lastAsst.id));
+      break;
+    }
+  } catch (e) { /* still */ }
 }
 
 function appendTyping() {

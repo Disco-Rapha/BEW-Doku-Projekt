@@ -16,6 +16,7 @@ Konventionen:
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from typing import Any, Literal
 
@@ -24,6 +25,56 @@ from ..db import connect
 
 
 Role = Literal["user", "assistant", "tool", "system"]
+
+
+logger = logging.getLogger(__name__)
+
+
+# ----------------------------------------------------------------
+# tiktoken — lokale Praezisions-Schaetzung
+# ----------------------------------------------------------------
+# GPT-5 / GPT-5.1 nutzen den o200k_base-Encoder (wie gpt-4o). Wir laden
+# lazy + one-shot; bei Import-Fehlern fallen wir auf chars/4 zurueck.
+# Die Praezision liegt bei Einzelnachrichten im Rahmen ±1 %, gegenueber
+# der chars/4-Heuristik mit ±20-30 %.
+
+_TIKTOKEN_ENCODER = None
+_TIKTOKEN_FAILED = False
+
+
+def _get_tiktoken_encoder():
+    """Lazy-Loader fuer den tiktoken-Encoder. None wenn nicht verfuegbar."""
+    global _TIKTOKEN_ENCODER, _TIKTOKEN_FAILED
+    if _TIKTOKEN_FAILED:
+        return None
+    if _TIKTOKEN_ENCODER is not None:
+        return _TIKTOKEN_ENCODER
+    try:
+        import tiktoken  # type: ignore[import-not-found]
+        _TIKTOKEN_ENCODER = tiktoken.get_encoding("o200k_base")
+        return _TIKTOKEN_ENCODER
+    except Exception as exc:
+        _TIKTOKEN_FAILED = True
+        logger.warning(
+            "tiktoken nicht verfuegbar (%s) — Fallback auf chars/4-Schaetzung. "
+            "Installiere mit 'uv sync' fuer praezisere Messung.",
+            exc,
+        )
+        return None
+
+
+def count_tokens(text: str) -> int:
+    """Zaehlt Tokens fuer einen Text. Fallback auf chars/4 bei Tiktoken-Ausfall."""
+    if not text:
+        return 0
+    encoder = _get_tiktoken_encoder()
+    if encoder is None:
+        return (len(text) + 3) // 4
+    try:
+        return len(encoder.encode(text, disallowed_special=()))
+    except Exception as exc:
+        logger.warning("tiktoken.encode fehlgeschlagen (%s) — Fallback", exc)
+        return (len(text) + 3) // 4
 
 
 # ----------------------------------------------------------------
@@ -73,7 +124,10 @@ def get_state(project_slug: str, db_path=None) -> dict[str, Any] | None:
 def _get_state(project_slug: str, conn: sqlite3.Connection) -> dict[str, Any]:
     row = conn.execute(
         "SELECT project_slug, foundry_response_id, model_used, "
-        "       token_estimate, last_compaction_at, created_at, updated_at "
+        "       token_estimate, last_compaction_at, "
+        "       measured_context_tokens, measured_at, measured_model, "
+        "       measured_cached_tokens, "
+        "       created_at, updated_at "
         "FROM project_chat_state WHERE project_slug = ?",
         (project_slug,),
     ).fetchone()
@@ -117,6 +171,63 @@ def update_token_estimate(
             "SET token_estimate = ?, updated_at = datetime('now') "
             "WHERE project_slug = ?",
             (int(token_estimate), project_slug),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_measured_context(
+    project_slug: str,
+    measured_context_tokens: int,
+    measured_model: str | None = None,
+    measured_cached_tokens: int | None = None,
+    db_path=None,
+) -> None:
+    """Speichert die reale Kontext-Groesse aus usage.input_tokens einer
+    Foundry-Response.
+
+    Das ist unser Ground-Truth gegen Azure — er enthaelt System-Prompt,
+    Tool-Schemas, Reasoning-Trace und Message-Historie, also alles, was
+    im naechsten Turn wirklich durchs Netz wandert.
+
+    measured_cached_tokens (optional) kommt aus usage.input_tokens_details.
+    cached_tokens — GPT-5.1 liefert das bei aktivem Prompt-Cache.
+    """
+    conn = connect(db_path or settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE project_chat_state "
+            "SET measured_context_tokens = ?, "
+            "    measured_at = datetime('now'), "
+            "    measured_model = COALESCE(?, measured_model), "
+            "    measured_cached_tokens = ?, "
+            "    updated_at = datetime('now') "
+            "WHERE project_slug = ?",
+            (
+                int(measured_context_tokens),
+                measured_model,
+                int(measured_cached_tokens) if measured_cached_tokens is not None else None,
+                project_slug,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_measured_context(project_slug: str, db_path=None) -> None:
+    """Setzt die gemessene Kontext-Groesse zurueck (nach Compaction)."""
+    conn = connect(db_path or settings.db_path)
+    try:
+        conn.execute(
+            "UPDATE project_chat_state "
+            "SET measured_context_tokens = NULL, "
+            "    measured_at = NULL, "
+            "    measured_cached_tokens = NULL, "
+            "    updated_at = datetime('now') "
+            "WHERE project_slug = ?",
+            (project_slug,),
         )
         conn.commit()
     finally:
@@ -210,20 +321,223 @@ def delete_state(project_slug: str, db_path=None) -> None:
 
 
 def _estimate_tokens(content: str | None, tool_calls_json: str | None, tool_results_json: str | None) -> int:
-    """Grobe Token-Schaetzung: 1 Token ~= 4 Zeichen.
+    """Praezise Token-Zaehlung via tiktoken (o200k_base, wie GPT-5/5.1 nutzt).
 
-    Ausreichend genau fuer Kompressions-Warnung (70/90 %). Wenn wir spaeter
-    Praezision brauchen, tauschen wir auf tiktoken.
+    Fallback auf chars/4 bei Import-/Encoder-Fehlern (siehe count_tokens).
+
+    Tool-Calls und Tool-Results werden bewusst als JSON-String gezaehlt —
+    genau so fliessen sie bei previous_response_id-Chains in den Context.
     """
-    total_chars = 0
+    total = 0
     if content:
-        total_chars += len(content)
+        total += count_tokens(content)
     if tool_calls_json:
-        total_chars += len(tool_calls_json)
+        total += count_tokens(tool_calls_json)
     if tool_results_json:
-        total_chars += len(tool_results_json)
-    # Ceil-Division
-    return (total_chars + 3) // 4
+        total += count_tokens(tool_results_json)
+    return total
+
+
+# ----------------------------------------------------------------
+# agent_tool_calls — strukturierte Spiegelung der JSON-Rohdaten
+# ----------------------------------------------------------------
+# Die Rohdaten landen weiterhin in chat_messages.tool_calls_json /
+# tool_results_json (wir aendern das nicht). Zusaetzlich spiegeln wir
+# jeden Call in agent_tool_calls, damit Dashboard-Queries ohne
+# JSON-Parsing auskommen. Bei Fehlern beim Spiegeln loggen wir und
+# schlucken die Exception — die Chat-Persistenz darf NIE davon abhaengen.
+
+
+_ARG_SUMMARY_MAX = 160
+_RESULT_SUMMARY_MAX = 500
+
+
+def _summarize_arguments(args_value: Any) -> str:
+    """Kompakte One-Liner-Repraesentation der Tool-Argumente fuer Dashboards.
+
+    args_value kann ein JSON-String (wie Foundry ihn liefert) oder ein Dict sein.
+    """
+    if args_value is None:
+        return ""
+    if isinstance(args_value, str):
+        try:
+            parsed = json.loads(args_value)
+        except json.JSONDecodeError:
+            return args_value[:_ARG_SUMMARY_MAX]
+    else:
+        parsed = args_value
+    if isinstance(parsed, dict):
+        parts = []
+        for k, v in parsed.items():
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                s = str(v)
+                if len(s) > 60:
+                    s = s[:57] + "..."
+                parts.append(f"{k}={s}")
+            else:
+                parts.append(f"{k}=<...>")
+        summary = ", ".join(parts)
+    else:
+        summary = json.dumps(parsed, ensure_ascii=False)
+    return summary[:_ARG_SUMMARY_MAX]
+
+
+def _parse_tool_result(result_value: Any) -> tuple[str | None, bool, str | None]:
+    """Interpretiert das Tool-Result. Liefert (summary, is_error, error_msg).
+
+    Convention in disco.agent.functions.__init__.dispatch: Fehler werden immer
+    als JSON-String '{"error": "..."}' serialisiert.
+    """
+    if result_value is None:
+        return None, False, None
+    # result kann schon dict sein (bei Tool-Messages im recorded_tool_results-Pfad
+    # liefert der Agent-Loop ein dict, nicht den Raw-String).
+    if isinstance(result_value, str):
+        raw = result_value
+        try:
+            parsed = json.loads(result_value)
+        except json.JSONDecodeError:
+            parsed = None
+    else:
+        parsed = result_value
+        raw = json.dumps(result_value, ensure_ascii=False)
+    summary = raw[:_RESULT_SUMMARY_MAX]
+    is_error = False
+    error_msg: str | None = None
+    if isinstance(parsed, dict) and "error" in parsed and len(parsed) == 1:
+        is_error = True
+        error_msg = str(parsed["error"])[:_RESULT_SUMMARY_MAX]
+    return summary, is_error, error_msg
+
+
+def _record_tool_call_requests(
+    conn: sqlite3.Connection,
+    message_id: int,
+    project_slug: str,
+    tool_calls: list[dict[str, Any]],
+) -> None:
+    """Legt fuer jeden Tool-Call im assistant-Turn eine agent_tool_calls-Zeile an."""
+    for call in tool_calls:
+        try:
+            call_id = call.get("call_id") or call.get("id")
+            name = call.get("name") or (call.get("function") or {}).get("name")
+            args = call.get("arguments")
+            if args is None and "function" in call:
+                args = (call["function"] or {}).get("arguments")
+            if not name:
+                continue
+            arguments_json = (
+                args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+                if args is not None else None
+            )
+            arguments_summary = _summarize_arguments(args)
+            conn.execute(
+                "INSERT OR IGNORE INTO agent_tool_calls "
+                "  (message_id, project_slug, tool_call_id, tool_name, "
+                "   arguments_json, arguments_summary) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    message_id,
+                    project_slug,
+                    call_id,
+                    name,
+                    arguments_json,
+                    arguments_summary,
+                ),
+            )
+        except Exception:  # pragma: no cover — Telemetrie darf nichts kaputtmachen
+            import logging
+            logging.getLogger(__name__).exception(
+                "Konnte Tool-Call-Request nicht spiegeln (message_id=%s)", message_id
+            )
+
+
+def _record_tool_call_results(
+    conn: sqlite3.Connection,
+    result_message_id: int,
+    project_slug: str,
+    tool_results: Any,
+) -> None:
+    """Verknuepft Tool-Results mit den zuvor angelegten agent_tool_calls-Zeilen.
+
+    Ergaenzt result_summary, result_is_error, result_error_msg, duration_ms.
+    Matching laeuft ueber (project_slug, tool_call_id).
+    """
+    # Ergebnisse koennen entweder eine Liste (recorded_tool_results) oder ein
+    # einzelnes dict sein (legacy). Normalisieren.
+    if isinstance(tool_results, list):
+        results_iter = tool_results
+    elif isinstance(tool_results, dict):
+        results_iter = [tool_results]
+    else:
+        return
+
+    for res in results_iter:
+        try:
+            call_id = res.get("call_id") or res.get("tool_call_id")
+            if not call_id:
+                continue
+            raw_result = res.get("result")
+            if raw_result is None:
+                raw_result = res.get("content")
+            summary, is_error, err_msg = _parse_tool_result(raw_result)
+            # duration_ms kommt idealerweise aus dem Dispatch (Python-Seite,
+            # Millisekunden-Auflösung). Fehlt sie (alte Daten oder Legacy-
+            # Pfad), fallen wir zurueck auf die SQL-Differenz der created_at
+            # Stempel — die ist aber Sekunden-Auflösung, also oft 0.
+            duration_ms = res.get("duration_ms")
+            if duration_ms is not None:
+                conn.execute(
+                    "UPDATE agent_tool_calls "
+                    "SET result_message_id = ?, "
+                    "    result_summary = ?, "
+                    "    result_is_error = ?, "
+                    "    result_error_msg = ?, "
+                    "    duration_ms = ? "
+                    "WHERE project_slug = ? AND tool_call_id = ? "
+                    "  AND result_message_id IS NULL",
+                    (
+                        result_message_id,
+                        summary,
+                        1 if is_error else 0,
+                        err_msg,
+                        int(duration_ms),
+                        project_slug,
+                        call_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    "UPDATE agent_tool_calls "
+                    "SET result_message_id = ?, "
+                    "    result_summary = ?, "
+                    "    result_is_error = ?, "
+                    "    result_error_msg = ?, "
+                    "    duration_ms = ( "
+                    "       SELECT CAST((julianday(cm_res.created_at) - julianday(cm_req.created_at)) "
+                    "                   * 86400 * 1000 AS INTEGER) "
+                    "       FROM chat_messages cm_req, chat_messages cm_res "
+                    "       WHERE cm_req.id = agent_tool_calls.message_id "
+                    "         AND cm_res.id = ? "
+                    "    ) "
+                    "WHERE project_slug = ? AND tool_call_id = ? "
+                    "  AND result_message_id IS NULL",
+                    (
+                        result_message_id,
+                        summary,
+                        1 if is_error else 0,
+                        err_msg,
+                        result_message_id,
+                        project_slug,
+                        call_id,
+                    ),
+                )
+        except Exception:  # pragma: no cover
+            import logging
+            logging.getLogger(__name__).exception(
+                "Konnte Tool-Call-Result nicht verknuepfen (call_id=%s)",
+                res.get("call_id") if isinstance(res, dict) else None,
+            )
 
 
 def append_message(
@@ -281,6 +595,14 @@ def append_message(
             ),
         )
 
+        # Tool-Calls in agent_tool_calls spiegeln (best-effort; loggt und
+        # schluckt Exceptions, damit die Chat-Persistenz unbeeinflusst bleibt).
+        msg_id = cur.lastrowid
+        if role == "assistant" and tool_calls:
+            _record_tool_call_requests(conn, msg_id, project_slug, tool_calls)
+        elif role == "tool" and tool_results is not None:
+            _record_tool_call_results(conn, msg_id, project_slug, tool_results)
+
         # token_estimate fortschreiben (nur ueber aktive, d.h. nicht komprimierte,
         # Messages — was fuer eine frische Message per Definition zutrifft)
         conn.execute(
@@ -319,6 +641,159 @@ def list_active_messages(
         return [_hydrate_message(dict(r)) for r in rows]
     finally:
         conn.close()
+
+
+def build_responses_api_input(
+    project_slug: str,
+    prepend_items: list[dict[str, Any]] | None = None,
+    append_items: list[dict[str, Any]] | None = None,
+    db_path=None,
+) -> list[dict[str, Any]]:
+    """Rekonstruiert den Message-Verlauf als Responses-API input-Liste.
+
+    Wird im Stateless-Input-Modus gebraucht — wenn wir Foundrys
+    previous_response_id-Chain bewusst nicht nutzen, muss der komplette
+    aktive Verlauf in jedem Turn mitgeschickt werden. Genau das, was
+    Anthropic's Messages API von Haus aus tut (history + latest).
+
+    Das Format folgt der Azure-Responses-API-Spezifikation:
+      - User/Developer/System message: type='message', role=..., content=str
+      - Assistant text message: type='message', role='assistant', content=str
+      - Tool-Aufruf: type='function_call', call_id, name, arguments=json_str
+      - Tool-Ergebnis: type='function_call_output', call_id, output=json_str
+
+    Tool-Calls/Results koennen in einem chat_messages-Row gebuendelt sein
+    (N Calls in tool_calls, N Results in tool_results). Wir flachen sie
+    auf — jeder Call wird ein eigenes function_call-Item, jedes Result
+    ein eigenes function_call_output-Item.
+
+    Args:
+        project_slug: Das aktive Projekt.
+        prepend_items: Items, die VOR dem rekonstruierten Verlauf stehen
+            sollen (z.B. developer-Kontext-Block). None = nichts prepent.
+        append_items: Items, die NACH dem Verlauf stehen sollen — z.B.
+            die neue User-Message des aktuellen Turns.
+
+    Returns:
+        Liste von input-Items, direkt an openai_client.responses.create
+        als `input=` uebergebbar.
+    """
+    items: list[dict[str, Any]] = []
+    if prepend_items:
+        items.extend(prepend_items)
+
+    for msg in list_active_messages(project_slug, db_path=db_path):
+        role = msg["role"]
+        content = msg.get("content")
+        tool_calls = msg.get("tool_calls")
+        tool_results = msg.get("tool_results")
+
+        if role == "user":
+            if content:
+                items.append({
+                    "type": "message",
+                    "role": "user",
+                    "content": content,
+                })
+        elif role == "system":
+            # System-Trigger-Summary. Responses-API kennt 'system' nicht
+            # in der Portal-Agent-Form — wir mappen auf developer, damit
+            # Disco den Kontext als Regel-Block wahrnimmt, nicht als
+            # Instruktion vom Nutzer.
+            if content:
+                items.append({
+                    "type": "message",
+                    "role": "developer",
+                    "content": f"[SYSTEM-EVENT]\n{content}",
+                })
+        elif role == "assistant":
+            if content:
+                items.append({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": content,
+                })
+            # Tool-Calls als separate function_call-Items.
+            if tool_calls:
+                for call in tool_calls:
+                    call_id = call.get("call_id") or call.get("id")
+                    name = call.get("name") or (
+                        (call.get("function") or {}).get("name")
+                    )
+                    args = call.get("arguments")
+                    if args is None and "function" in call:
+                        args = (call["function"] or {}).get("arguments")
+                    if not call_id or not name:
+                        continue
+                    args_str = (
+                        args if isinstance(args, str)
+                        else json.dumps(args, ensure_ascii=False)
+                        if args is not None else ""
+                    )
+                    items.append({
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": args_str,
+                    })
+        elif role == "tool":
+            # Ein tool-Row kann N Ergebnisse enthalten (ein Tool-Turn nach
+            # einem Assistant-Turn mit N Calls). Als function_call_output
+            # einzeln auflisten.
+            if tool_results is None:
+                continue
+            results_iter = (
+                tool_results if isinstance(tool_results, list)
+                else [tool_results]
+            )
+            for res in results_iter:
+                if not isinstance(res, dict):
+                    continue
+                call_id = res.get("call_id") or res.get("tool_call_id")
+                raw_result = res.get("result")
+                if raw_result is None:
+                    raw_result = res.get("content")
+                if not call_id:
+                    continue
+                output_str = (
+                    raw_result if isinstance(raw_result, str)
+                    else json.dumps(raw_result, ensure_ascii=False)
+                    if raw_result is not None else ""
+                )
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output_str,
+                })
+
+    if append_items:
+        items.extend(append_items)
+
+    # Orphan-Filter: wenn ein function_call keine function_call_output-
+    # Partnerin hat (z.B. weil die tool-Message komprimiert wurde, aber
+    # die assistant-Message dariber erhalten blieb), lehnt Azure den Call
+    # mit "missing tool result" ab. Wir strippen solche verwaisten Calls
+    # bevor sie rausgehen — ihre textliche Spur im assistant-Turn reicht.
+    call_output_ids = {
+        i.get("call_id") for i in items
+        if i.get("type") == "function_call_output"
+    }
+    pruned: list[dict[str, Any]] = []
+    dropped_orphan_calls = 0
+    for item in items:
+        if item.get("type") == "function_call":
+            cid = item.get("call_id")
+            if cid not in call_output_ids:
+                dropped_orphan_calls += 1
+                continue
+        pruned.append(item)
+    if dropped_orphan_calls:
+        logger.info(
+            "build_responses_api_input: %d orphan function_call-Items verworfen "
+            "(Matching function_call_output fehlt)",
+            dropped_orphan_calls,
+        )
+    return pruned
 
 
 def list_all_messages(
@@ -388,3 +863,151 @@ def _hydrate_message(msg: dict[str, Any]) -> dict[str, Any]:
     msg["tool_calls"] = json.loads(tc) if tc else None
     msg["tool_results"] = json.loads(tr) if tr else None
     return msg
+
+
+def backfill_agent_tool_calls(db_path=None) -> dict[str, int]:
+    """Befuellt agent_tool_calls aus bestehenden chat_messages rueckwirkend.
+
+    Idempotent — dank dem UNIQUE-Index auf (message_id, tool_call_id) werden
+    bereits gespiegelte Calls uebersprungen. Results koennen mehrfach laufen,
+    weil das UPDATE auf 'result_message_id IS NULL' filtert.
+
+    Returns:
+        {"requests_inserted": N, "results_matched": M}
+    """
+    conn = connect(db_path or settings.db_path)
+    requests_inserted = 0
+    results_matched = 0
+    try:
+        # 1. Assistant-Turns mit tool_calls_json aufloesen
+        rows = conn.execute(
+            "SELECT id, project_slug, tool_calls_json FROM chat_messages "
+            "WHERE role = 'assistant' AND tool_calls_json IS NOT NULL "
+            "ORDER BY id ASC"
+        ).fetchall()
+        for r in rows:
+            try:
+                calls = json.loads(r["tool_calls_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not calls:
+                continue
+            before = conn.execute(
+                "SELECT COUNT(*) AS c FROM agent_tool_calls WHERE message_id = ?",
+                (r["id"],),
+            ).fetchone()["c"]
+            _record_tool_call_requests(conn, r["id"], r["project_slug"], calls)
+            after = conn.execute(
+                "SELECT COUNT(*) AS c FROM agent_tool_calls WHERE message_id = ?",
+                (r["id"],),
+            ).fetchone()["c"]
+            requests_inserted += (after - before)
+        conn.commit()
+
+        # 2. Tool-Turns mit tool_results_json den Requests zuordnen
+        rows = conn.execute(
+            "SELECT id, project_slug, tool_results_json FROM chat_messages "
+            "WHERE role = 'tool' AND tool_results_json IS NOT NULL "
+            "ORDER BY id ASC"
+        ).fetchall()
+        for r in rows:
+            try:
+                results = json.loads(r["tool_results_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not results:
+                continue
+            before = conn.execute(
+                "SELECT COUNT(*) AS c FROM agent_tool_calls "
+                "WHERE result_message_id = ?",
+                (r["id"],),
+            ).fetchone()["c"]
+            _record_tool_call_results(conn, r["id"], r["project_slug"], results)
+            after = conn.execute(
+                "SELECT COUNT(*) AS c FROM agent_tool_calls "
+                "WHERE result_message_id = ?",
+                (r["id"],),
+            ).fetchone()["c"]
+            results_matched += (after - before)
+        conn.commit()
+
+        return {
+            "requests_inserted": requests_inserted,
+            "results_matched": results_matched,
+        }
+    finally:
+        conn.close()
+
+
+# ----------------------------------------------------------------
+# chat_message_feedback — User-Signale fuer spaetere Evals
+# ----------------------------------------------------------------
+
+
+def add_message_feedback(
+    message_id: int,
+    rating: str,
+    comment: str | None = None,
+    db_path=None,
+) -> dict[str, Any]:
+    """Legt ein Feedback-Event zu einer Assistant-Message an.
+
+    Mehrere Events pro Message erlaubt; der neueste gilt.
+    """
+    if rating not in ("good", "bad"):
+        raise ValueError(f"rating muss 'good' oder 'bad' sein, nicht {rating!r}")
+    conn = connect(db_path or settings.db_path)
+    try:
+        # project_slug aus der Message holen
+        row = conn.execute(
+            "SELECT project_slug FROM chat_messages WHERE id = ?",
+            (int(message_id),),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Message {message_id} nicht gefunden")
+        cur = conn.execute(
+            "INSERT INTO chat_message_feedback "
+            "  (message_id, project_slug, rating, comment) "
+            "VALUES (?, ?, ?, ?)",
+            (int(message_id), row["project_slug"], rating, comment),
+        )
+        conn.commit()
+        fb = conn.execute(
+            "SELECT id, message_id, project_slug, rating, comment, created_at "
+            "FROM chat_message_feedback WHERE id = ?",
+            (cur.lastrowid,),
+        ).fetchone()
+        return dict(fb)
+    finally:
+        conn.close()
+
+
+def latest_feedback_for_messages(
+    message_ids: list[int],
+    db_path=None,
+) -> dict[int, dict[str, Any]]:
+    """Holt das neueste Feedback pro Message (message_id -> feedback-dict).
+
+    Wird von der UI genutzt, um den Knopf-Zustand zu rendern.
+    """
+    if not message_ids:
+        return {}
+    conn = connect(db_path or settings.db_path)
+    try:
+        placeholders = ",".join("?" for _ in message_ids)
+        rows = conn.execute(
+            f"SELECT id, message_id, project_slug, rating, comment, created_at "
+            f"FROM chat_message_feedback "
+            f"WHERE message_id IN ({placeholders}) "
+            f"ORDER BY message_id, created_at DESC",
+            [int(m) for m in message_ids],
+        ).fetchall()
+        seen: dict[int, dict[str, Any]] = {}
+        for r in rows:
+            mid = int(r["message_id"])
+            if mid in seen:
+                continue
+            seen[mid] = dict(r)
+        return seen
+    finally:
+        conn.close()

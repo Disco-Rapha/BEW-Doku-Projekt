@@ -539,6 +539,39 @@ echten sensiblen Quellen notwendig.
 
 ## Flows / Worker-System
 
+### Cached-Input-Rabatt in Kostenberechnung (Priorität: mittel — 2026-04-22)
+
+Aktuell rechnet [compute_cost_eur](../src/disco/flows/sdk.py:135) jeden
+Input-Token zum Voll-Tarif ($1.38/1M bei GPT-5.1). Azure gewaehrt aber
+einen Cached-Input-Rabatt von **90 %** ($0.138/1M) fuer Tokens, die im
+Prompt-Cache gelandet sind (bleibt 5 Min warm).
+
+**Warum das viel ausmacht:**
+- Bei Flow-Loops (gleicher System-Prompt + Projekt-Kontext + Skill-Body
+  ueber 1000 Items) bleibt ein grosser Prompt-Anteil konstant.
+- Hitrate typisch 60–90 %, sprich: wir ueberschaetzen die Kosten aktuell
+  um 50–80 %.
+- Die echte Azure-Rechnung wird dann immer niedriger sein als unser
+  Live-Tracker anzeigt — konservativ, aber irritierend.
+
+**Was zu tun ist:**
+1. **Verifizieren:** Foundry Responses API liefert bei GPT-5.1 das Feld
+   `usage.input_tokens_details.cached_tokens`. Sobald ein Flow laeuft,
+   einmal die JSON-Response loggen und bestaetigen.
+2. **Signatur erweitern:** `compute_cost_eur(tokens_in, tokens_out, cached_in=0)`.
+   Formel: `billable_in = (tokens_in - cached_in) * rate_in + cached_in * rate_in * 0.10`.
+3. **Aufrufer umstellen:** In `FlowRun.add_cost_from_azure_response()`
+   (`src/disco/flows/sdk.py`) die Cached-Tokens aus der Response ziehen
+   und durchreichen. Auch im Agent-Core (chat-Turns, wo verfuegbar).
+4. **Retroaktive Nachberechnung** fuer Runs in `agent_flow_runs`:
+   nur moeglich, wenn wir Token-Counts granular in `agent_tool_calls`
+   gespeichert haben. Falls ja — kleiner Migrations-Run. Falls nein,
+   Historie stehen lassen.
+
+Abhaengigkeit: Prompt-Cache-Hits lohnen sich nur, wenn der System-Prompt
++ Projekt-Kontext vor den variablen Teilen steht und > ca. 1024 Tokens
+ist. Prompt-Aufbau mal auditieren, falls die Hitrate zu niedrig ist.
+
 ### Parallele Flow-Runs (Priorität: mittel — aus UAT 2026-04-19)
 
 Aktuell faehrt Disco Flows strikt sequentiell: er startet einen Flow,
@@ -737,6 +770,85 @@ Ursprung: UAT-Session 2026-04-20 (Granite too slow) → Beschluss
 ---
 
 ## Architektur
+
+### Dashboards + Reports — Disco pflegt sie selbst (Priorität: mittel) — 2026-04-22
+
+**Wunsch des Nutzers:** Disco soll Dashboards und Reports **selbständig
+erstellen, konfigurieren und überarbeiten können**. Projekt-DB liefert die
+Daten, Frontend zeigt Visualisierungen, alles versionierbar im Projektordner.
+
+**Drei geprüfte Wege mit Trade-off:**
+
+1. **Evidence.dev (Markdown + SQL → HTML):** Disco schreibt
+   `dashboards/foo.md` mit SQL-Blöcken, Evidence rendert statische Seiten.
+   MIT-Lizenz, SQLite nativ. Nachteil: Node-Stack + Build-Schritt kommen
+   ins Projekt.
+2. **Vega-Lite JSON-Specs + eigener Renderer (empfohlen):** Disco schreibt
+   `dashboards/foo.json`, Frontend rendert im bestehenden Viewer-Panel mit
+   Vega-Lite (~40 KB). Kein Fremd-Stack, max. Kontrolle, Dashboards sind
+   einfache Files im Projekt. Nachteil: Dashboard-Verwaltung (Liste, Edit,
+   Parameter) bauen wir selbst.
+3. **Metabase lokal (Docker):** Industriestandard, REST-API zum Steuern.
+   Nachteil: Docker-Dependency, Dashboards leben ausserhalb des Projekt-
+   ordners (nicht git-/SharePoint-syncbar).
+
+**Empfehlung: Variante 2** — passt zur lokalen Architektur und zur
+chat-getriebenen Arbeitsweise. Reports (PDF/Excel) lassen sich aus denselben
+Specs generieren (Renderer → Screenshot / Headless-Export), wobei wir fuer
+Excel schon `build_xlsx_from_tables` haben.
+
+**Skizze:**
+- Neuer Projekt-Ordner `dashboards/` mit `.json`-Dateien (Vega-Lite oder
+  erweiterte Disco-Spec mit SQL-Query + Layout-Metadaten).
+- Neues Agent-Tool `dashboard_create/update/delete` plus `dashboard_render`
+  (SQL-Query-Validation + Ergebnis → Vega-Lite-Bindings).
+- Viewer-Panel erkennt `.json` im Dashboard-Ordner und rendert.
+- Reports = Dashboard-Bundle + Markdown-Rahmen; Export-Pipeline baut
+  PDF/Excel.
+
+**Noch offen:** Dashboard-Parameter (Zeitfenster, Gewerke-Filter) — als
+Form im Viewer, oder nur als Chat-Instruktion an Disco?
+
+Ursprung: UAT-Session 2026-04-22, Feature-Wunsch des Nutzers.
+
+---
+
+### Tabellen-Katalog pro Projekt-DB (Priorität: mittel) — 2026-04-22
+
+**Beobachtung:** In einem aktiven Projekt wachsen die Tabellen schnell
+(Kern-Migrations-Tabellen + agent-erstellte `agent_*`/`work_*`). Man sieht
+in der UI-Sidebar nur Name + Row-Count. Wer sie angelegt hat, wofür, ob sie
+noch gebraucht wird — nirgends dokumentiert. Migrations-Files dokumentieren
+nur die Template-Tabellen; alles, was Disco später selbst anlegt, bleibt
+unbeschrieben.
+
+**Vorschlag:**
+- Neue Tabelle `agent_table_catalog(name PK, namespace, purpose TEXT,
+  created_by_message_id, created_at, last_used_at, status: active|deprecated)`
+  als weitere Projekt-DB-Template-Migration.
+- Pflege-Pfade:
+  - Automatisch: `sqlite_write` erkennt `CREATE TABLE` / `DROP TABLE` und
+    aktualisiert den Katalog (Eintrag anlegen / status=deprecated).
+  - Halbautomatisch: System-Prompt-Regel — „nach jedem `CREATE TABLE` muss
+    `table_catalog_set(name, purpose)` aufgerufen werden".
+- Template-Tabellen aus den Migrations-Files werden beim Projekt-Init
+  direkt mit Purpose befüllt (aus Header-Kommentaren extrahiert).
+- UI:
+  - Tooltip auf Tabellennamen in der Sidebar zeigt `purpose`.
+  - Filter „undokumentierte Tabellen" und „> N Tage ungenutzt" als
+    Aufräum-Trigger.
+- Abräum-Policy: `work_*` ohne Zugriff seit X Tagen → Disco schlägt Drop vor.
+
+**Warum wichtig:** passt zur Observability-Linie (agent_tool_calls, Feedback).
+Ohne Katalog wachsen Projekte unüberschaubar; mit Katalog wird das Projekt
+selbsterklärend und Aufräumen planbar.
+
+**Offene Fragen vor Umsetzung:**
+- Wer trägt den Purpose ein — Disco beim CREATE (Pflicht-Parameter) oder
+  in einem separaten Tool-Call? Ersteres ist strikter, letzteres flexibler.
+- Sollen auch Column-Beschreibungen rein oder reicht Tabelle-Level fürs Erste?
+
+---
 
 ### Architecture Review mit Claude (Priorität: mittel)
 
