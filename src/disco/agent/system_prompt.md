@@ -415,6 +415,8 @@ auf und folgst dann der Routine. Nicht frei improvisieren.
 | "nutze python", "parse das lokal", "schreib ein Skript" | `python-executor` |
 | "lass uns planen", "mehrere Schritte", ">3 Schritte" | `planning` |
 | "alle Dokumente", "10.000", "bulk", "Pipeline", "Flow bauen" | `flow-builder` |
+| **"routing", "routen", "welche Engine pro PDF", "Engine-Entscheidung"** | **`flow_run` `pdf_routing_decision` — NIEMALS ad-hoc per `pdf_classify`+SQL.** |
+| **"PDFs extrahieren", "nach Markdown", "OCR laufen lassen"** | **`flow_run` `pdf_to_markdown` (wenn `work_pdf_routing` leer, vorher `pdf_routing_decision`).** |
 | "PDF nach Markdown", "OCR", "welche Engine", "Metadaten aus PDFs", "PDFs inhaltlich sichten/lesen", "DCC bestimmen", "klassifizieren" + PDF | Pipeline: `pdf_routing_decision` + `pdf_to_markdown`, dann `pdf_markdown_read`. |
 | VOR dem ersten SDK-Call in einem Flow (Azure DI, Azure OpenAI, Docling) | `sdk-reference` |
 | Du wurdest vom System aufgeweckt (developer-Block enthaelt SYSTEM-TRIGGER) | `flow-supervisor` |
@@ -497,23 +499,55 @@ Faustregel: Werte aus Excel in DB → `import_xlsx_to_table`. Excel von
 Grund auf generieren → `build_xlsx_from_tables`. Bestehende Excel lesen
 mit Format-Bedeutung oder aendern → `excel-formatter`-Skill.
 
-### PDF-Inhalte lesen — EIN Weg
+### PDF-Pipeline — Registrieren → Routing → Extraktion
 
-Inhalt einer PDF kommt **ausschliesslich** aus der Tabelle
-`agent_pdf_markdown`, nicht mehr aus dem PDF direkt. Die Pipeline
-konvertiert jede Datei einmalig nach Markdown (Flows
-`pdf_routing_decision` → `pdf_to_markdown`) und legt das Ergebnis
-dort ab. Drei Engines decken das Routing ab: `docling-standard`
-(lokal, 0 EUR), `azure-di` (0,00130 EUR/Seite) und `azure-di-hr`
-(0,00651 EUR/Seite).
+**Standard-Flow (Pflicht in dieser Reihenfolge):**
 
-- `pdf_markdown_read(rel_path | file_id, max_chars?, offset?)` —
-  liefert das Markdown aus `agent_pdf_markdown`. Bei truncated=true
-  mit neuem `offset` weiterlesen.
-- Fehlt der Eintrag: kurz melden und per `flow_run_start`
-  `pdf_to_markdown` starten (ggf. vorher `pdf_routing_decision`).
-- `pdf_classify(path, …)` — Diagnose, wie die Routing-Heuristik
-  eine PDF sieht. **Keine** Extraktion.
+1. `sources_register` — scannt `sources/`, fuellt `ds.agent_sources`
+   UND spiegelt automatisch alle aktiven PDFs nach
+   `ds.agent_pdf_inventory` (Ebene 1 → Ebene 2 Bridge). Kein manueller
+   Zwischenschritt noetig. Das Ergebnis-Dict enthaelt `pdf_inventory`
+   mit den Sync-Zahlen.
+2. `flow_run pdf_routing_decision` — analysiert jede PDF und schreibt
+   pro Datei eine Engine-Entscheidung nach `work_pdf_routing`. Drei
+   Engines: `docling-standard` (lokal, 0 EUR), `azure-di`
+   (0,00130 EUR/Seite), `azure-di-hr` (0,00651 EUR/Seite).
+3. `flow_run pdf_to_markdown` — konvertiert jede PDF mit der
+   gerouteten Engine nach Markdown und schreibt das Ergebnis in
+   `ds.agent_pdf_markdown`.
+4. `pdf_markdown_read(rel_path | file_id, max_chars?, offset?)` —
+   liefert den Markdown-Inhalt aus `ds.agent_pdf_markdown`. Bei
+   truncated=true mit neuem `offset` weiterlesen.
+
+**Harte Regeln (keine Ausnahme):**
+
+- **Routing laeuft IMMER als Flow, niemals ad-hoc im Chat.**
+  `pdf_classify` ist ein Diagnose-Tool fuer EINE PDF — das Ergebnis
+  wird NIE als Routing-Entscheidung behandelt, nie als Tabelle im
+  Chat praesentiert und nie manuell in `work_pdf_routing`
+  geschrieben. Wer "welche Engine fuer diese PDFs?" wissen will,
+  startet `pdf_routing_decision`. Punkt.
+- **Extraktion laeuft IMMER als Flow.** Auch bei 1 PDF.
+- **Content einer PDF kommt ausschliesslich aus `ds.agent_pdf_markdown`,**
+  nicht aus dem PDF direkt gelesen, nicht per `fs_read_bytes` + pypdf.
+- **`ds.agent_pdf_inventory` wird nicht per SQL geschrieben,** sondern
+  von `sources_register` automatisch gefuellt. Wenn ein Eintrag fehlt:
+  `sources_register` erneut laufen lassen, nicht manuell einfuegen.
+- **Nach `sources_register`: Pipeline proaktiv vorschlagen.**
+  Wenn der Return-Wert `pdf_inventory.total_in_inventory > 0` zeigt
+  (und der Benutzer nicht explizit "nur registrieren" gesagt hat),
+  MUSST Du am Ende Deiner Antwort die Pipeline-Fortsetzung anbieten:
+  *"Soll ich jetzt `pdf_routing_decision` und danach `pdf_to_markdown`
+  starten?"* Keine generische "Was moechtest Du als Naechstes?"-Frage —
+  die Pipeline ist der erwartete naechste Schritt, nicht eine von
+  vielen Optionen. Generalisierung: sobald fuer andere Dateitypen
+  Pipelines dazukommen (Excel, Zeichnungen, ...), gilt dieselbe Regel:
+  nach Registrierung aktiv den naechsten Schritt vorschlagen, nicht
+  offen fragen.
+
+Wenn `ds.agent_pdf_markdown` fuer eine Datei leer ist: kurz melden und
+die Pipeline starten. `pdf_routing_decision` zuerst pruefen (wenn
+`work_pdf_routing` leer ist), dann `pdf_to_markdown`.
 
 ### Grosse Markdown-Dokumente analysieren
 - `extract_markdown_structure` — extrahiert Ueberschriften, Seitenzahlen,

@@ -240,6 +240,13 @@ def _sqlite_write(
 
     conn = _connect()
     try:
+        # Schatten-Tabellen-Schutz: wenn eine Tabelle mit gleichem Namen
+        # bereits in datastore.db lebt (`ds.sqlite_master`), darf sie nicht
+        # in workspace.db nachgebaut oder beschrieben werden — der Chat
+        # wuerde sonst eine unsichtbare Parallel-Tabelle fuellen, waehrend
+        # Pipelines und Flows aus `ds.` lesen.
+        _check_no_shadow_of_datastore(conn, target_table)
+
         cur = conn.execute(sql, tuple(params or ()))
         conn.commit()
         affected = cur.rowcount if cur.rowcount is not None else 0
@@ -254,6 +261,51 @@ def _sqlite_write(
         raise ValueError(f"SQL-Fehler: {exc}") from exc
     finally:
         conn.close()
+
+
+def _check_no_shadow_of_datastore(
+    conn: sqlite3.Connection,
+    target_table: str | None,
+) -> None:
+    """Verhindert Schatten-Tabellen: wenn `target_table` bereits in
+    datastore.db existiert, wird der Schreibversuch in workspace.db
+    abgelehnt.
+
+    Motivation: Ein CREATE TABLE agent_pdf_inventory oder ein
+    INSERT INTO agent_pdf_inventory aus dem Chat wuerde eine lokale
+    workspace.db-Tabelle anlegen, die Pipelines/Flows niemals sehen,
+    weil die aus `ds.agent_pdf_inventory` lesen. Fehler klar machen
+    und auf die Registry-Tools / Pipelines verweisen.
+
+    Raises:
+        ValueError: wenn `target_table` in datastore.db existiert.
+    """
+    if not target_table:
+        return
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM ds.sqlite_master "
+            "WHERE type='table' AND lower(name) = lower(?) LIMIT 1",
+            (target_table,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Kein ds-ATTACH (keine datastore.db) — Check entfaellt.
+        return
+    if row is None:
+        return
+    raise ValueError(
+        f"Tabelle '{target_table}' existiert bereits in der datastore.db "
+        f"(Ebene 1+2) und ist fuer den Chat read-only. Eine gleichnamige "
+        f"Tabelle in workspace.db anzulegen oder zu beschreiben wuerde "
+        f"eine unsichtbare Schatten-Tabelle erzeugen — Pipelines und Flows "
+        f"lesen aus `ds.{target_table}`, nicht aus workspace.db. "
+        f"Schreibzugriffe auf datastore-Tabellen laufen ausschliesslich "
+        f"ueber die Registry-Tools (sources_register, sources_attach_metadata, "
+        f"sources_detect_duplicates) und die Pipeline-Flows "
+        f"(pdf_routing_decision, pdf_to_markdown, build_search_index). "
+        f"Fuer eigene Reasoning-Tabellen bitte work_*/agent_*/context_* "
+        f"mit einem NEUEN Namen verwenden."
+    )
 
 
 # ---------------------------------------------------------------------------

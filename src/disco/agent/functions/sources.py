@@ -8,11 +8,19 @@ Pattern: "File Registry with Change Detection"
 Performance: auf SSD ca. 2-5s fuer 1600 Dateien bei gemischten Groessen.
 Hash wird gecacht per (rel_path, size, mtime) — wenn nichts davon sich
 geaendert hat, ueberspringen wir das erneute Hashen (optimierung).
+
+Pipeline-Bridge (Stufe 1 Architektur):
+  Nach jedem Scan werden alle aktiven PDFs automatisch in die PDF-Pipeline-
+  Einstiegstabelle `agent_pdf_inventory` (Ebene 2, datastore.db) gespiegelt.
+  Damit ist der Standard-Flow `Registrieren → Routing → Extraktion` ohne
+  manuellen Zwischenschritt lauffaehig — `pdf_routing_decision` findet
+  sofort gefuelltes Inventar vor.
 """
 
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -280,6 +288,11 @@ def _sources_register(
         )
         conn.commit()
 
+        # Bridge Ebene 1 -> Ebene 2: PDF-Inventar automatisch spiegeln,
+        # damit der Standard-Flow Registrieren -> Routing -> Extraktion
+        # ohne manuelle Zwischenschritte laeuft.
+        inventory_stats = _sync_pdf_inventory_from_sources(conn)
+
     finally:
         conn.close()
 
@@ -308,11 +321,130 @@ def _sources_register(
             "changed": _preview(changed_list),
             "deleted": _preview(deleted_list),
         },
-        "hint": (
-            "Details pro Datei per SQL: "
-            "SELECT rel_path, size_bytes, extension, status, last_changed_at "
-            "FROM agent_sources ORDER BY last_changed_at DESC LIMIT 50"
-        ),
+        "pdf_inventory": inventory_stats,
+        "hint": _build_sources_hint(inventory_stats),
+    }
+
+
+def _build_sources_hint(inventory_stats: dict[str, Any]) -> str:
+    """Baut den `hint`-String fuer `sources_register`-Return.
+
+    Macht den naechsten Pipeline-Schritt explizit, wenn PDFs im Inventar
+    stehen — Disco soll laut System-Prompt daraufhin aktiv die Pipeline
+    anbieten, nicht generisch nachfragen.
+    """
+    base = (
+        "Details pro Datei per SQL: "
+        "SELECT rel_path, size_bytes, extension, status, last_changed_at "
+        "FROM ds.agent_sources ORDER BY last_changed_at DESC LIMIT 50."
+    )
+    total = int(inventory_stats.get("total_in_inventory", 0) or 0)
+    if total > 0:
+        return (
+            base + " "
+            f"PDF-Inventar: {total} Datei(en) bereit fuer die Pipeline. "
+            "Naechster Schritt: `flow_run pdf_routing_decision` starten, "
+            "danach `flow_run pdf_to_markdown` — dem Benutzer aktiv vorschlagen, "
+            "nicht offen 'was moechtest Du als Naechstes' fragen."
+        )
+    return (
+        base + " "
+        "Keine PDFs im Paket — Standard-Pipeline (Routing/Extraktion) entfaellt."
+    )
+
+
+# ===========================================================================
+# PDF-Inventar-Sync (Ebene 1 -> Ebene 2 Bridge)
+# ===========================================================================
+
+
+def _sync_pdf_inventory_from_sources(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Spiegelt alle aktiven PDFs aus agent_sources nach agent_pdf_inventory.
+
+    Schliesst die Luecke zwischen Ebene 1 (Provenance — `agent_sources`) und
+    Ebene 2 (PDF-Pipeline-Einstieg — `agent_pdf_inventory`). Ohne diesen Sync
+    liefe `pdf_routing_decision` gegen eine leere Inputtabelle.
+
+    rel_path im Inventory traegt den `sources/`-Praefix, weil die Pipeline-
+    Flows die Datei vom project_root aus aufloesen (siehe
+    `pdf_to_markdown/runner.py`: ``run.project_root / rel_path``).
+
+    gewerk wird heuristisch aus der ersten Pfadkomponente unter sources/
+    abgeleitet (z.B. `sources/Elektro/foo.pdf` -> gewerk='Elektro'). Kann
+    spaeter von Disco ueberschrieben werden.
+
+    Idempotent: UPSERT ueber UNIQUE(rel_path), gelegte IDs bleiben stabil —
+    wichtig, weil `work_pdf_routing.file_id` logisch auf diese IDs zeigt.
+
+    Returns stats dict fuer den Chat-Report.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT id, rel_path, filename, size_bytes, sha256 "
+            "FROM agent_sources "
+            "WHERE status = 'active' AND lower(extension) = 'pdf'"
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        return {"error": f"agent_sources nicht lesbar: {exc}", "synced": 0}
+
+    # Inventar-Tabelle muss existieren (Template-Migration 004).
+    has_inv = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_pdf_inventory'"
+    ).fetchone()
+    if not has_inv:
+        return {
+            "error": (
+                "agent_pdf_inventory existiert nicht. Template-Migration 004 "
+                "fehlt — 'disco project init <slug>' neu laufen lassen."
+            ),
+            "synced": 0,
+        }
+
+    existing_paths = {
+        r["rel_path"] for r in conn.execute(
+            "SELECT rel_path FROM agent_pdf_inventory"
+        ).fetchall()
+    }
+
+    n_inserted = 0
+    n_updated = 0
+    for r in rows:
+        src_rel = r["rel_path"] or ""
+        full_rel = f"sources/{src_rel}" if not src_rel.startswith("sources/") else src_rel
+        # Gewerk = erste Pfadkomponente unter sources/, falls vorhanden.
+        first_segment = src_rel.split("/", 1)[0] if "/" in src_rel else None
+        gewerk = first_segment
+        file_name = r["filename"]
+        file_name_norm = (file_name or "").strip().lower()
+
+        was_existing = full_rel in existing_paths
+        conn.execute(
+            """
+            INSERT INTO agent_pdf_inventory
+                (rel_path, file_name, file_name_norm, gewerk, size_bytes, sha256)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(rel_path) DO UPDATE SET
+                file_name = excluded.file_name,
+                file_name_norm = excluded.file_name_norm,
+                gewerk = excluded.gewerk,
+                size_bytes = excluded.size_bytes,
+                sha256 = excluded.sha256
+            """,
+            (full_rel, file_name, file_name_norm, gewerk, r["size_bytes"], r["sha256"]),
+        )
+        if was_existing:
+            n_updated += 1
+        else:
+            n_inserted += 1
+
+    conn.commit()
+
+    total = conn.execute("SELECT COUNT(*) FROM agent_pdf_inventory").fetchone()[0]
+    return {
+        "synced_from_agent_sources": len(rows),
+        "inserted": n_inserted,
+        "updated": n_updated,
+        "total_in_inventory": int(total),
     }
 
 

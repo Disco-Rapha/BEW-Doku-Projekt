@@ -182,6 +182,38 @@ ORDER BY c.rel_path, s.rel_path;
 - **Keine Klassifikation beim Scan.** Der Scan registriert nur. DCC-
   oder Gewerks-Klassifikation kommt spaeter ueber Jobs (Phase 2c).
 
+## Anschluss-Schritt 3: PDF-Pipeline vorschlagen (PFLICHT bei PDFs)
+
+Der Return von `sources_register` enthaelt `pdf_inventory` mit der Anzahl
+PDFs, die nach `ds.agent_pdf_inventory` (Ebene 2) gespiegelt wurden. Wenn
+`pdf_inventory.total_inventory > 0`, MUSST Du dem Benutzer die
+PDF-Pipeline aktiv vorschlagen — *nicht* nur als Hinweis am Ende,
+sondern als klare Handlungsempfehlung mit Frage.
+
+**Warum Pflicht:** Ohne Routing + Extraktion bleiben die PDFs im
+Inventar, aber ihr Inhalt ist fuer Disco nicht lesbar. Das ist fuer den
+Benutzer nicht selbsterklaerend — er sieht die Dateien registriert und
+denkt "fertig". Ist er nicht.
+
+**Formulierungsbeispiele** (waehle je nach Kontext):
+- Erstregistrierung, groesseres Paket:
+  *"Als Naechstes wuerde ich die PDF-Pipeline starten: erst
+  `pdf_routing_decision` (entscheidet pro Datei welche Engine —
+  docling lokal oder Azure DI), dann `pdf_to_markdown` fuer die
+  eigentliche Text-Extraktion. Soll ich anfangen?"*
+- Kleines Paket / wenige PDFs:
+  *"Soll ich gleich das PDF-Routing + die Extraktion laufen lassen,
+  damit der Inhalt lesbar wird?"*
+- Benutzer hat `pdf_routing_decision` bereits manuell/frueher gemacht:
+  *"Routing ist fuer X von Y PDFs schon gelaufen. Soll ich fuer die
+  restlichen Z das Routing nachziehen und dann extrahieren?"*
+
+**Ausnahmen:**
+- Kein einziges PDF im Paket (`pdf_inventory.total_inventory == 0`) →
+  kein Vorschlag, stattdessen generische Frage.
+- Benutzer hat explizit gesagt "erst mal nur registrieren" → respektieren
+  und nur kurz erwaehnen.
+
 ## Antwort-Vorlage
 
 ```
@@ -195,5 +227,16 @@ Delta:
 
 Top-Ordner: <ordner>: <n>, <ordner>: <n>, ...
 
-Was möchtest Du als Nächstes damit machen?
+PDF-Inventar: <pdf_inventory.total_inventory> PDFs eingangsbereit.
+
+Vorschlag: Als Naechstes `pdf_routing_decision` starten (Engine-Wahl pro
+Datei), danach `pdf_to_markdown` fuer die Extraktion. Soll ich anfangen?
+```
+
+Falls keine PDFs im Paket sind:
+
+```
+Scan durch (<dauer_s>s) — ...
+
+Keine PDFs dabei. Was moechtest Du als Naechstes damit machen?
 ```

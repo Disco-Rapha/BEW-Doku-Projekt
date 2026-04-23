@@ -45,9 +45,8 @@ vorgesehenen Pruefweg.
   → Check: `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND
   name LIKE 'context_%'` >= 1 und die Tabelle hat plausible Zeilenzahl
   (grob: fuer DCC etwa 300-500 Codes).
-- [ ] `.disco/memory/activeContext.md` oder `NOTES.md` hat einen Eintrag
-  zum aktuellen Stand (Next Steps genannt).
-  → Check: `fs_read` und prueft auf Datum-Header.
+- [ ] `NOTES.md` hat einen Eintrag zum aktuellen Stand (Next Steps genannt).
+  → Check: `memory_read(file="NOTES.md")` und prueft auf Timestamp-Header.
 
 **Weich:**
 

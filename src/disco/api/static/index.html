@@ -708,17 +708,19 @@ a:hover { text-decoration: underline; }
 .flow-items-list .row .ref { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-items-list .row .err { color: var(--red); font-size: 10px; }
 
-/* Feedback-Icons rechts an der Message-Bubble */
+/* Feedback-Leiste unterhalb jeder Disco-Bubble.
+   Eigenes Kind von .msg (NICHT in .sender), damit es auch dann sichtbar bleibt,
+   wenn der DISCO-Label bei Folge-Bubbles per display:none ausgeblendet ist. */
 .feedback-icons {
-  display: inline-flex; gap: 2px;
-  margin-top: 2px; margin-left: 6px;
-  opacity: 0.25; transition: opacity 0.15s;
-  vertical-align: middle;
+  display: flex; gap: 2px;
+  margin-top: 2px; margin-left: 2px;
+  opacity: 0.55; transition: opacity 0.15s;
+  align-self: flex-start;
 }
-.msg:hover .feedback-icons { opacity: 0.8; }
+.msg:hover .feedback-icons { opacity: 1; }
 .feedback-icons .fb-ico {
   cursor: pointer; background: transparent; border: none;
-  padding: 2px 4px; font-size: 13px; line-height: 1;
+  padding: 3px 6px; font-size: 14px; line-height: 1;
   color: var(--text-dim); border-radius: 3px;
 }
 .feedback-icons .fb-ico:hover { background: var(--panel2); color: var(--text); }
@@ -825,7 +827,7 @@ a:hover { text-decoration: underline; }
       <span id="chat-project-tag">(kein Projekt)</span>
       <span class="spacer" style="flex:1"></span>
       <span id="chat-token-counter" title="Aktueller Chat-Fuellstand. Warnung bei 70 %, kritisch bei 90 %.">0 / 180k · 0 %</span>
-      <button id="btn-compact" title="Chat komprimieren — wichtige Erkenntnisse in Memory-Bank schreiben, dann Verlauf einklappen" onclick="openCompactModal()">🗜 Komprimieren</button>
+      <button id="btn-compact" title="Chat komprimieren — wichtige Erkenntnisse in NOTES.md / DISCO.md schreiben, dann Verlauf einklappen" onclick="openCompactModal()">🗜 Komprimieren</button>
       <button id="btn-stats" title="Agent-Stats: Tool-Usage, Fehler, Feedback" onclick="openStatsModal()">📊 Stats</button>
       <button class="icon-btn" title="Viewer ein-/ausblenden" onclick="toggleViewer()">▭</button>
     </div>
@@ -1252,10 +1254,11 @@ function openCompactModal(auto) {
       ${autoHint}
       <p>Aktueller Fuellstand: <b>${tok} / ${budget}</b> (${pct} %).</p>
       <p>Beim Komprimieren wird Disco gebeten, die wichtigsten Erkenntnisse
-         aus dem bisherigen Verlauf in die Memory-Bank
-         (<code>.disco/memory/</code>) zu schreiben. Anschliessend wird
-         der sichtbare Verlauf eingeklappt — der Agent arbeitet mit
-         frischem Kontext weiter und liest die Memory-Bank neu ein.</p>
+         aus dem bisherigen Verlauf in die Memory-Dateien
+         (<code>NOTES.md</code> / <code>DISCO.md</code>) zu schreiben.
+         Anschliessend wird der sichtbare Verlauf eingeklappt — der Agent
+         arbeitet mit frischem Kontext weiter und liest die Memory-Dateien
+         in der naechsten Session neu ein.</p>
       <p class="muted">Der Verlauf bleibt in der Projekt-DB erhalten
          (<code>is_compacted = 1</code>), nur der Agent-Kontext wird
          geleert.</p>
@@ -1279,12 +1282,17 @@ function runCompaction() {
   // auf. Alternativ: direkter POST /chat/compact (harter Cut ohne Memory-
   // Update — falls der Nutzer weiss, dass er nichts braucht).
   closeCompactModal();
-  const prompt = 'Bitte komprimiere jetzt den Chat: Fasse die wichtigsten '
-    + 'Erkenntnisse, offenen Entscheidungen und naechsten Schritte in der '
-    + 'Memory-Bank zusammen (memory_write / memory_append_adr nach Bedarf). '
-    + 'Halte activeContext.md und progress.md aktuell. Danach nur einen '
-    + 'kurzen Bestaetigungstext in den Chat schreiben — der Frontend-Code '
-    + 'erledigt das technische Zuruecksetzen anschliessend.';
+  const prompt = 'Bitte komprimiere jetzt den Chat. '
+    + 'Schritt 1: memory_append(file="NOTES.md", content=...) mit einem '
+    + 'knappen chronologischen Eintrag — was wurde in dieser Session getan, '
+    + 'welche Entscheidungen sind gefallen, was sind die naechsten Schritte. '
+    + 'Schritt 2: Wenn neue Konventionen, Tabellen, Lookup-Pfade oder '
+    + 'Entscheidungen destilliert werden sollen, pflege DISCO.md gezielt '
+    + '(memory_read -> memory_write oder memory_append mit heading). '
+    + 'Keine neuen progress.md / activeContext.md im Projekt-Root anlegen — '
+    + 'das Memory-Modell ist README.md + NOTES.md + DISCO.md, sonst nichts. '
+    + 'Danach nur einen kurzen Bestaetigungstext in den Chat schreiben — '
+    + 'der Frontend-Code erledigt das technische Zuruecksetzen anschliessend.';
   const input = document.getElementById('chat-input');
   input.value = prompt;
   // Hinweis fuer den Nutzer
@@ -1777,7 +1785,10 @@ function appendMessage(role, text, messageId) {
     <div class="bubble">${renderMarkdown(text)}</div>
   `;
   if (role === 'agent' && messageId != null) {
-    div.querySelector('.sender').appendChild(buildFeedbackIcons(messageId));
+    // Feedback-Leiste als eigenes Kind von .msg (NICHT in .sender), damit die
+    // Icons auch bei Folge-Bubbles sichtbar bleiben — dort ist .sender per
+    // display:none ausgeblendet (verhindert wiederholten "DISCO"-Label).
+    div.appendChild(buildFeedbackIcons(messageId));
   }
   msgs.appendChild(div);
   scrollChat();
@@ -1897,8 +1908,9 @@ async function attachFeedbackToLastAssistantBubble(slug) {
       if (b.dataset.messageId) continue;
       if (b.querySelector('.feedback-icons')) continue;
       b.dataset.messageId = String(lastAsst.id);
-      const sender = b.querySelector('.sender');
-      if (sender) sender.appendChild(buildFeedbackIcons(lastAsst.id));
+      // Icons an die Bubble haengen, nicht in .sender (wird bei Folge-Bubbles
+      // via CSS auf display:none gesetzt).
+      b.appendChild(buildFeedbackIcons(lastAsst.id));
       break;
     }
   } catch (e) { /* still */ }
