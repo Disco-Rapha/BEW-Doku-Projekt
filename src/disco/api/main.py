@@ -567,12 +567,20 @@ async def api_chat_messages(slug: str, include_compacted: bool = False):
 
 @app.post("/api/projects/{slug}/chat/compact")
 async def api_chat_compact(slug: str, body: dict | None = None):
-    """Markiert alle aktuellen Messages als komprimiert.
+    """Compaction v2 — Handover-Brief + letzte Dialog-Paare erhalten.
 
-    Der Agent MUSS vor dem Aufruf die wichtigen Erkenntnisse per
-    memory_write in die Memory-Bank geschrieben haben — diese REST-
-    Route markiert nur den Cut. Body optional: {cutoff_message_id}.
-    Wenn nicht gesetzt, wird das letzte aktive Message-ID genommen.
+    Ein /compact macht jetzt:
+      - Die letzten N user/assistant-Text-Paare (Default 3) bleiben aktiv.
+      - Alles davor wird mit is_compacted=1 markiert.
+      - Ein LLM-Call erzeugt eine kurze Handover-Notiz, die als neue
+        system-Message VOR den erhaltenen Paaren eingehaengt wird.
+      - foundry_response_id + measured_context_tokens werden genullt.
+
+    Body optional:
+      - keep_pairs (int, Default 3) — wie viele Dialog-Paare erhalten bleiben.
+      - legacy (bool) — falls true, lief die v1-Logik (alles markieren, kein
+        Handover, nur Memory-Reload). Abwaertskompatibilitaet.
+      - cutoff_message_id (int) — nur im legacy-Mode akzeptiert.
     """
     from ..workspace import validate_slug
     try:
@@ -581,6 +589,19 @@ async def api_chat_compact(slug: str, body: dict | None = None):
         return {"error": str(exc)}
 
     body = body or {}
+    legacy = bool(body.get("legacy"))
+
+    if not legacy:
+        from ..chat.compaction import DEFAULT_KEEP_PAIRS, run_compaction_with_handover
+        keep_pairs = int(body.get("keep_pairs") or DEFAULT_KEEP_PAIRS)
+        try:
+            result = run_compaction_with_handover(slug, keep_pairs=keep_pairs)
+        except Exception as exc:
+            logger.exception("Compaction v2 fehlgeschlagen")
+            return {"error": f"Compaction fehlgeschlagen: {exc}"}
+        return result
+
+    # Legacy-Mode: altes Verhalten unveraendert (alle Messages markieren).
     cutoff = body.get("cutoff_message_id")
     if cutoff is None:
         cutoff = chat_repo.last_active_message_id(slug)
@@ -588,17 +609,13 @@ async def api_chat_compact(slug: str, body: dict | None = None):
         return {"error": "Keine aktiven Messages zum Komprimieren."}
 
     marked = chat_repo.mark_compacted(slug, int(cutoff))
-    # foundry_response_id NICHT zuruecksetzen: der Agent laeuft nach
-    # Kompression mit leerem Chat + Memory-Reload weiter. Der Portal-
-    # Response-Chain liegt dann hinter uns, aber Disco soll frisch starten.
-    # -> setResponseId(None) damit der naechste Turn kein previous_response_id
-    # mit veralteten Inhalten mitschickt.
     chat_repo.set_response_id(slug, None)
-    # Token-Estimate neu berechnen (sollte nahe 0 sein)
+    chat_repo.clear_measured_context(slug)
     new_estimate = chat_repo.recompute_token_estimate(slug)
 
     return {
         "ok": True,
+        "mode": "legacy",
         "marked_compacted": marked,
         "cutoff_message_id": int(cutoff),
         "new_token_estimate": new_estimate,

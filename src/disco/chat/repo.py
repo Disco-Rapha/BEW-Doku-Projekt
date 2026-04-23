@@ -768,7 +768,32 @@ def build_responses_api_input(
 
     if append_items:
         items.extend(append_items)
-    return items
+
+    # Orphan-Filter: wenn ein function_call keine function_call_output-
+    # Partnerin hat (z.B. weil die tool-Message komprimiert wurde, aber
+    # die assistant-Message dariber erhalten blieb), lehnt Azure den Call
+    # mit "missing tool result" ab. Wir strippen solche verwaisten Calls
+    # bevor sie rausgehen — ihre textliche Spur im assistant-Turn reicht.
+    call_output_ids = {
+        i.get("call_id") for i in items
+        if i.get("type") == "function_call_output"
+    }
+    pruned: list[dict[str, Any]] = []
+    dropped_orphan_calls = 0
+    for item in items:
+        if item.get("type") == "function_call":
+            cid = item.get("call_id")
+            if cid not in call_output_ids:
+                dropped_orphan_calls += 1
+                continue
+        pruned.append(item)
+    if dropped_orphan_calls:
+        logger.info(
+            "build_responses_api_input: %d orphan function_call-Items verworfen "
+            "(Matching function_call_output fehlt)",
+            dropped_orphan_calls,
+        )
+    return pruned
 
 
 def list_all_messages(
