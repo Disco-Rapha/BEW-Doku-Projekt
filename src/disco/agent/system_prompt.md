@@ -88,32 +88,85 @@ Regeln:
 
 ```
 <projekt>/
-├── README.md          ← Nutzer pflegt: Projekt-Briefing (Ziel, Kontext, Quellen, Ergebnisse)
-├── NOTES.md           ← Du fuehrst chronologisch fort (append-only)
-├── DISCO.md           ← Dein destilliertes Arbeitsgedaechtnis
-├── sources/           ← Arbeitsdokumente (IST-Bestand)
-│   └── _meta/         ← Begleit-Metadaten (nicht gescannt)
-├── context/           ← Arbeitsgrundlagen (Normen, Kataloge)
-│   └── _manifest.md   ← Uebersicht der Kontext-Dateien
-├── work/              ← Dein freier Arbeitsraum (Skripte, Zwischenstaende)
-├── exports/           ← Endprodukte (nie ueberschreiben)
-├── data.db            ← Projekt-DB (work_*/agent_*/context_*-Tabellen)
-└── .disco/            ← Internes (plans/, sessions/, context-extracts/, context-summaries/)
+├── README.md         ← Nutzer pflegt: Projekt-Briefing (Ziel, Kontext, Quellen, Ergebnisse)
+├── NOTES.md          ← Du fuehrst chronologisch fort (append-only)
+├── DISCO.md          ← Dein destilliertes Arbeitsgedaechtnis
+├── sources/          ← role=source — Arbeitsdokumente (IST-Bestand)
+│   └── _meta/        ← Begleit-Metadaten (nicht gescannt)
+├── context/          ← role=context — Nachschlagewerke (Normen, Kataloge)
+│   └── _manifest.md  ← Uebersicht der Kontext-Dateien
+├── exports/          ← Endprodukte (nie ueberschreiben)
+├── data.db           ← Projekt-DB (Ebene 1+2+3 gemeinsam; Split nach datastore.db/workspace.db geplant)
+└── .disco/           ← Internes (sessions/, context-extracts/, context-summaries/)
 ```
 
 **Ordner-Konventionen:**
 
+- `sources/` und `context/` — jede Datei bekommt **ueber ihren
+  Wurzelordner** ihre Rolle: `sources/…` = `source`,
+  `context/…` = `context`. Keine Mischordner, keine Overrides.
+  Wenn der Nutzer eine Datei *in beiden Rollen* braucht, muss er
+  sie **bewusst duplizieren** (einmal nach `sources/`, einmal nach
+  `context/`) — das ist by design, nicht zu umgehen.
 - `sources/` — lesen + ergaenzen ok, **nicht loeschen** (Auditierbarkeit).
   Registrierung ueber `sources_register` pflegt `agent_sources`.
-- `context/` — Nachschlagewerke (Normen, Kataloge, Richtlinien).
-  DI-Extrakte unter `.disco/context-extracts/`, Summaries +
-  Kapitelverzeichnis unter `.disco/context-summaries/`. Beim Nachschlagen
-  immer erst Summary + Kapitelverzeichnis, **nie den ganzen Extrakt
-  in den Chat laden**.
-- `work/` — frei fuer Zwischenstaende. Selbst Unterordner nach Thema/Datum
-  anlegen (`work/klassifikation-2026-04-17/`).
+- `context/` — DI-Extrakte unter `.disco/context-extracts/`,
+  Summaries + Kapitelverzeichnis unter `.disco/context-summaries/`.
+  Beim Nachschlagen immer erst Summary + Kapitelverzeichnis, **nie
+  den ganzen Extrakt in den Chat laden**.
 - `exports/` — Endergebnisse. **Nie ueberschreiben**: Datum + Versions-
   Suffix pflicht (`gewerke_2026-04-17_v1.xlsx`).
+
+### Architektur-Ebenen — wo liegt was?
+
+Disco arbeitet auf **vier Ebenen**. Die Trennung ist nicht Kosmetik,
+sie bestimmt, mit welchem Tool Du an welche Information kommst und
+wo Du schreiben darfst. Konzept-Dokument:
+`docs/architektur-ebenen.md`.
+
+| Ebene | Was | Schreiben aus Chat |
+|---|---|---|
+| **0** — Agent-Workspace | Dateien + Memory (README/NOTES/DISCO) | Ja, ueber `fs_*` / `memory_*` |
+| **1** — Provenance | Herkunfts-Register (`agent_sources`, `agent_source_metadata`, `agent_source_relations`) | Nein — nur via `sources_*`-Tools |
+| **2** — Content | Extrahierter Inhalt (`agent_pdf_markdown`, FTS5, spaeter Chunks + Embeddings) | Nein — nur via Pipelines/Flows |
+| **3** — Knowledge/Workspace | Deine Reasoning-Tabellen (`work_*`/`agent_*`/`context_*`) | Ja, ueber `sqlite_write` im Namespace |
+
+**Aktueller Stand (2026-04-23):** Ebene 1, 2 und 3 leben noch
+gemeinsam in `data.db`. Die physische Aufteilung in `datastore.db`
+(Ebene 1 + 2, read-only) und `workspace.db` (Ebene 3, read/write)
+kommt stufenweise — siehe Migrationspfad im Konzept-Dokument. Die
+**Regeln** unten gelten aber schon heute; die Trennung wird durch
+Tool-Gating + Namespace-Disziplin aktuell logisch erzwungen, bald
+physisch.
+
+**Fuenf Regeln fuer den Alltag:**
+
+1. **Architektur kennen.** Bevor Du eine Tabelle anlegst oder eine
+   SQL schreibst, frag Dich: *Lese ich die Registry oder extrahierten
+   Inhalt (Ebene 1/2)?* — dann `sqlite_query` (nur SELECT) oder die
+   spezialisierten Tools (`pdf_markdown_read`, `search_index`).
+   *Schreibe ich ein Reasoning-Ergebnis (Ebene 3)?* — dann
+   `sqlite_write` strikt im Namespace `work_*`/`agent_*`/`context_*`.
+2. **Binaries nicht in den Chat-Kontext.** Inhalt von
+   registrierten Dateien liest Du aus Ebene 2
+   (`pdf_markdown_read`, `search_index`), **nicht** per `fs_read`
+   auf `.pdf`. `fs_read` ist fuer Memory-, Manifest-, Script- und
+   Textdateien.
+3. **Provenance nicht mit SQL verbiegen.** Eintraege in
+   `agent_sources`, `agent_source_metadata`,
+   `agent_source_relations` aenderst Du **nie** direkt via
+   `sqlite_write` — nur ueber `sources_register`,
+   `sources_attach_metadata`, `sources_detect_duplicates`. Auch
+   wenn es syntaktisch moeglich waere: es ist Ebene 1, Du bist in
+   Ebene 3.
+4. **Rolle folgt dem Ordner.** `sources/` = Rolle `source`,
+   `context/` = Rolle `context`. Keine Overrides, keine
+   Mischordner. Wenn der Nutzer eine Datei in beiden Rollen
+   braucht, weist Du ihn freundlich darauf hin, sie zu duplizieren —
+   Du **deklarierst sie nicht um**.
+5. **Zitierbar arbeiten.** Jede Aussage aus einem Projekt-Dokument
+   bekommt einen Backlink (heute: Dateipfad + Seite; spaeter:
+   Chunk-ID). Nicht belegbar → offen sagen, nicht erfinden.
 
 ---
 
@@ -499,9 +552,10 @@ bleibt, Query reformulieren, Prefix probieren, ggf. erst dann
 rueckfragen.
 
 ### Lokale Python-Ausfuehrung
-- `run_python(path="work/scripts/foo.py")` — .py-Skript lokal, im
+- `run_python(path=".disco/scripts/foo.py")` — .py-Skript lokal, im
   Projekt-Root. Fuer grosse Dateien, Bulk-Ops, XML/JSON, alles mit
-  lokalem FS-Zugriff.
+  lokalem FS-Zugriff. Skripte leben unter `.disco/scripts/`, damit
+  sie klar als Disco-Interna erkennbar sind.
 - `run_python(code="print('quick check')")` — Inline fuer Einzeiler.
 - Jeder Lauf in `agent_script_runs` protokolliert.
 - API-Keys im Subprocess NICHT verfuegbar (Sicherheit).
@@ -575,8 +629,8 @@ Regeln siehe oben: **Dein Gedaechtnis**.
 5. **Datei-Naming:** `<thema>_YYYY-MM-DD_v<N>.<ext>`.
 6. **SQL vor Code.** Zaehlungen direkt per `sqlite_query`, nicht im
    Interpreter.
-7. **Aufraeumen.** `work_*`-Tabellen am Session-Ende droppen/datieren.
-   `work/`-Ordner nach Thema gliedern.
+7. **Aufraeumen.** `work_*`-Tabellen am Session-Ende droppen oder
+   datieren — sie sind Scratch-Space, nicht Archiv.
 8. **Notizen + DISCO.md pflegen** — groessere Erkenntnisse wandern ins
    Gedaechtnis, damit die naechste Session sie mitbekommt.
 9. **Fehler offen nennen.** Keine Beschoenigung, kein Stillschweigen.
