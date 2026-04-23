@@ -643,6 +643,134 @@ def list_active_messages(
         conn.close()
 
 
+def build_responses_api_input(
+    project_slug: str,
+    prepend_items: list[dict[str, Any]] | None = None,
+    append_items: list[dict[str, Any]] | None = None,
+    db_path=None,
+) -> list[dict[str, Any]]:
+    """Rekonstruiert den Message-Verlauf als Responses-API input-Liste.
+
+    Wird im Stateless-Input-Modus gebraucht — wenn wir Foundrys
+    previous_response_id-Chain bewusst nicht nutzen, muss der komplette
+    aktive Verlauf in jedem Turn mitgeschickt werden. Genau das, was
+    Anthropic's Messages API von Haus aus tut (history + latest).
+
+    Das Format folgt der Azure-Responses-API-Spezifikation:
+      - User/Developer/System message: type='message', role=..., content=str
+      - Assistant text message: type='message', role='assistant', content=str
+      - Tool-Aufruf: type='function_call', call_id, name, arguments=json_str
+      - Tool-Ergebnis: type='function_call_output', call_id, output=json_str
+
+    Tool-Calls/Results koennen in einem chat_messages-Row gebuendelt sein
+    (N Calls in tool_calls, N Results in tool_results). Wir flachen sie
+    auf — jeder Call wird ein eigenes function_call-Item, jedes Result
+    ein eigenes function_call_output-Item.
+
+    Args:
+        project_slug: Das aktive Projekt.
+        prepend_items: Items, die VOR dem rekonstruierten Verlauf stehen
+            sollen (z.B. developer-Kontext-Block). None = nichts prepent.
+        append_items: Items, die NACH dem Verlauf stehen sollen — z.B.
+            die neue User-Message des aktuellen Turns.
+
+    Returns:
+        Liste von input-Items, direkt an openai_client.responses.create
+        als `input=` uebergebbar.
+    """
+    items: list[dict[str, Any]] = []
+    if prepend_items:
+        items.extend(prepend_items)
+
+    for msg in list_active_messages(project_slug, db_path=db_path):
+        role = msg["role"]
+        content = msg.get("content")
+        tool_calls = msg.get("tool_calls")
+        tool_results = msg.get("tool_results")
+
+        if role == "user":
+            if content:
+                items.append({
+                    "type": "message",
+                    "role": "user",
+                    "content": content,
+                })
+        elif role == "system":
+            # System-Trigger-Summary. Responses-API kennt 'system' nicht
+            # in der Portal-Agent-Form — wir mappen auf developer, damit
+            # Disco den Kontext als Regel-Block wahrnimmt, nicht als
+            # Instruktion vom Nutzer.
+            if content:
+                items.append({
+                    "type": "message",
+                    "role": "developer",
+                    "content": f"[SYSTEM-EVENT]\n{content}",
+                })
+        elif role == "assistant":
+            if content:
+                items.append({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": content,
+                })
+            # Tool-Calls als separate function_call-Items.
+            if tool_calls:
+                for call in tool_calls:
+                    call_id = call.get("call_id") or call.get("id")
+                    name = call.get("name") or (
+                        (call.get("function") or {}).get("name")
+                    )
+                    args = call.get("arguments")
+                    if args is None and "function" in call:
+                        args = (call["function"] or {}).get("arguments")
+                    if not call_id or not name:
+                        continue
+                    args_str = (
+                        args if isinstance(args, str)
+                        else json.dumps(args, ensure_ascii=False)
+                        if args is not None else ""
+                    )
+                    items.append({
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": args_str,
+                    })
+        elif role == "tool":
+            # Ein tool-Row kann N Ergebnisse enthalten (ein Tool-Turn nach
+            # einem Assistant-Turn mit N Calls). Als function_call_output
+            # einzeln auflisten.
+            if tool_results is None:
+                continue
+            results_iter = (
+                tool_results if isinstance(tool_results, list)
+                else [tool_results]
+            )
+            for res in results_iter:
+                if not isinstance(res, dict):
+                    continue
+                call_id = res.get("call_id") or res.get("tool_call_id")
+                raw_result = res.get("result")
+                if raw_result is None:
+                    raw_result = res.get("content")
+                if not call_id:
+                    continue
+                output_str = (
+                    raw_result if isinstance(raw_result, str)
+                    else json.dumps(raw_result, ensure_ascii=False)
+                    if raw_result is not None else ""
+                )
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output_str,
+                })
+
+    if append_items:
+        items.extend(append_items)
+    return items
+
+
 def list_all_messages(
     project_slug: str,
     include_compacted: bool = True,

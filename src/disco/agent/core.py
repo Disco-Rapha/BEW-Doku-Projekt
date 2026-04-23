@@ -529,6 +529,10 @@ class AgentService:
                 "kein vollstaendiger Deep-Dive.\n"
             )
 
+        # Developer-Kontext-Block vorbereiten. Der steht in JEDEM Turn als
+        # erstes Item, damit Disco Projekt-Sandbox und ggf. System-Trigger-
+        # Regeln kennt. In beiden Modi (Chain + Stateless) identisch.
+        developer_ctx_items: list[dict[str, Any]] = []
         if _p_info is not None:
             # Env-Label fuer die Disco-Instanz (prod|dev). Wird vom
             # DISCO_ENV-Flag in der .env gesetzt — so weiss Disco ob er
@@ -558,22 +562,39 @@ class AgentService:
                 "nicht."
                 + trigger_block
             )
-            current_input = [
-                {"type": "message", "role": "developer", "content": _ctx_text},
-                {"type": "message", "role": "user", "content": user_text},
-            ]
+            developer_ctx_items.append(
+                {"type": "message", "role": "developer", "content": _ctx_text}
+            )
+        elif _system_trigger:
+            developer_ctx_items.append({
+                "type": "message",
+                "role": "developer",
+                "content": trigger_block.strip(),
+            })
+
+        # Zwei Kontext-Aufbau-Modi:
+        #   - Chain-Modus (previous_response_id gesetzt): Foundry haelt den
+        #     Verlauf serverseitig inklusive Reasoning-Trace. Wir schicken
+        #     nur den Developer-Kontext + die neue User-Message.
+        #   - Stateless-Modus (previous_response_id=None, typisch nach
+        #     Compaction): wir rekonstruieren den kompletten aktiven
+        #     Verlauf aus chat_messages. Die neue User-/System-Message
+        #     ist dabei schon im Verlauf, weil sie oben via append_message
+        #     persistiert wurde.
+        if previous_response_id is None:
+            logger.info(
+                "run_turn: Stateless-Modus aktiv (kein previous_response_id) "
+                "— baue Input aus is_compacted=0 Messages"
+            )
+            current_input = chat_repo.build_responses_api_input(
+                project_slug,
+                prepend_items=developer_ctx_items or None,
+            )
         else:
-            # Projekt nur im Workspace, nicht in system.db — trotzdem arbeiten
-            if _system_trigger:
-                # Ohne Projekt-Info-Block muessen wir den Trigger-Block
-                # separat als developer-Message schicken, damit Disco die
-                # System-Trigger-Regeln kennt.
+            # Chain-Modus: developer + neue user-Message genuegen.
+            if developer_ctx_items:
                 current_input = [
-                    {
-                        "type": "message",
-                        "role": "developer",
-                        "content": trigger_block.strip(),
-                    },
+                    *developer_ctx_items,
                     {"type": "message", "role": "user", "content": user_text},
                 ]
             else:
