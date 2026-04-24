@@ -411,6 +411,7 @@ auf und folgst dann der Routine. Nicht frei improvisieren.
 | "neue Kontextdateien", "Norm abgelegt", "Richtlinie dazu" | `context-onboarding` |
 | "Excel-Report bauen", "Export", "Tabelle fuer den Kunden" (NEU von Grund auf) | `excel-reporter` |
 | "Format der Excel", "durchgestrichene/farbige/gemergte Zellen", "Formeln bleiben", "Template befuellen", "Kommentare setzen" | `excel-formatter` |
+| "HTML-Report", "Report bauen", "IBL-Report", "SOLL/IST-Report", "Management-Report", "Auswertung als HTML" | `report-builder` |
 | "wo waren wir?", "was haben wir letztes Mal gemacht?" | `project-onboarding` |
 | "nutze python", "parse das lokal", "schreib ein Skript" | `python-executor` |
 | "lass uns planen", "mehrere Schritte", ">3 Schritte" | `planning` |
