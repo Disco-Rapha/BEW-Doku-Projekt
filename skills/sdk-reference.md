@@ -107,13 +107,14 @@ Kein Grund fuer `hasattr(result, 'content')`-Abfragen.
 
 ### Kosten-Orientierung (fuer Budget-Limit)
 
-| Modell | Modus | Preis grob |
+| Modell | Modus | Preis (Sweden Central, 2026-04-24) |
 |---|---|---|
-| `prebuilt-layout` | Standard | ~0,010 EUR/Seite |
-| `prebuilt-layout` | HighRes | ~0,015 EUR/Seite |
+| `prebuilt-layout` | Standard | 0,00868 EUR/Seite (8,68 EUR / 1000) |
+| `prebuilt-layout` | HighRes (`ocrHighResolution`) | 0,01389 EUR/Seite (13,89 EUR / 1000) |
 | `prebuilt-read` | Standard | ~0,0015 EUR/Seite |
 
-Genaue Preise: Azure-Pricing pruefen, nicht aus dem Kopf zitieren.
+Layout-Preise aus Azure-Rechnung verifiziert (2026-04-24). Fuer neue
+Regionen/Modelle Azure-Pricing pruefen statt aus dem Kopf zitieren.
 
 ---
 
@@ -360,8 +361,8 @@ drei Engines:
 | Engine | Ziel-Seitentyp | Kosten |
 |---|---|---|
 | `docling-standard` | Text + Tabellen, evtl. Scans (DocLayNet + TableFormer ACCURATE + EasyOCR, MPS) | 0 EUR |
-| `azure-di` | A4-Scans, wenig Text | ~0.01 EUR/Seite |
-| `azure-di-hr` | vector-drawing, Plan-Format, grosse Bilder (ocrHighResolution) | ~0.015 EUR/Seite |
+| `azure-di` | A4-Scans, wenig Text | 0,00868 EUR/Seite (8,68 EUR/1000) |
+| `azure-di-hr` | vector-drawing, Plan-Format, grosse Bilder (ocrHighResolution) | 0,01389 EUR/Seite (13,89 EUR/1000) |
 
 Braucht ein Flow ad hoc Markdown (etwa fuer einen Einzeltest), ruft
 er `extract_markdown(abs_path, engine)` aus `disco.pdf` auf — das

@@ -72,9 +72,10 @@ flow_run({"flow": "pdf_to_markdown"})
 Die Flows sind scope-agnostisch: sie verarbeiten alles in
 `agent_pdf_inventory`, egal ob `kind='source'` oder `kind='context'`.
 Kosten pro Context-PDF typisch `docling-standard` (0 EUR) oder
-`azure-di` (~0.01 EUR/Seite) — keine Rueckfrage beim Nutzer noetig,
-das ist Standard-Workflow. Bei grossen Normen mit Plan-Format kann
-`azure-di-hr` getriggert werden (~0.05 EUR/Seite).
+`azure-di` (~0,00868 EUR/Seite, 8,68 EUR/1000) — keine Rueckfrage beim
+Nutzer noetig, das ist Standard-Workflow. Bei grossen Normen mit
+Plan-Format kann `azure-di-hr` getriggert werden (~0,01389 EUR/Seite,
+13,89 EUR/1000).
 
 **Schritt 3 — Markdown lesen:**
 ```text

@@ -143,7 +143,7 @@ Beispiel (PDF → Markdown ueber den Engine-Dispatcher):
 | **Verarbeitung** | Pro PDF: `extract_markdown(abs_path, engine)` aus `disco.pdf`.     |
 | **Ausgabe**      | `agent_pdf_markdown` (Tabelle, Markdown + source_hash).            |
 | **Extern**       | docling-standard lokal (0 EUR) / azure-di + azure-di-hr Cloud.     |
-| **Budget**       | 0–0.015 EUR/Seite je nach Engine.                                  |
+| **Budget**       | 0–0,01389 EUR/Seite je nach Engine (docling 0, azure-di 0,00868, azure-di-hr 0,01389). |
 | **Laufzeit**     | docling-standard ~1–3 s/Seite auf M1, DI 1–3 s/Seite.              |
 
 ```

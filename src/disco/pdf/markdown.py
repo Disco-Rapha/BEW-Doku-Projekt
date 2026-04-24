@@ -8,8 +8,13 @@ Drei Engines (muessen mit `work_pdf_routing.engine` und dem Routing-Flow
 uebereinstimmen):
 
   docling-standard  — Lokal, 0 EUR, ~10-30s/Seite auf M1/M2/M3 (MPS).
-  azure-di          — Cloud, 0.00130 EUR/Seite (1.30 EUR / 1000), ~1-3s/Seite.
-  azure-di-hr       — Cloud, 0.00651 EUR/Seite (6.51 EUR / 1000), ~1-3s/Seite.
+  azure-di          — Cloud, prebuilt-layout (Standard):
+                      0,00868 EUR/Seite (8,68 EUR / 1000), ~1-3 s/Seite.
+  azure-di-hr       — Cloud, prebuilt-layout + ocrHighResolution:
+                      0,01389 EUR/Seite (13,89 EUR / 1000), ~1-3 s/Seite.
+
+Preise gemaess Azure Document Intelligence Listpreis Sweden Central
+(Stand 2026-04-24, aus User-Rechnung verifiziert).
 
 meta enthaelt immer:
   engine          : gewaehlter Engine-Name
@@ -33,6 +38,13 @@ logger = logging.getLogger(__name__)
 
 
 ENGINES = ("docling-standard", "azure-di", "azure-di-hr")
+
+# Azure Document Intelligence — Listpreise Sweden Central (2026-04-24).
+# prebuilt-layout = 8,68 EUR / 1000 Seiten.
+# prebuilt-layout + ocrHighResolution = 13,89 EUR / 1000 Seiten.
+# Quelle: Azure-Rechnung, vom User am 2026-04-24 bestaetigt.
+_AZURE_DI_LAYOUT_EUR_PER_PAGE = 8.68 / 1000
+_AZURE_DI_LAYOUT_HR_EUR_PER_PAGE = 13.89 / 1000
 
 
 def extract_markdown(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
@@ -70,10 +82,10 @@ def extract_markdown(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
         cost = 0.0
     elif engine == "azure-di":
         md, n_pages = _extract_azure_di(source, high_resolution=False)
-        cost = round(n_pages * (1.30 / 1000), 5)
+        cost = round(n_pages * _AZURE_DI_LAYOUT_EUR_PER_PAGE, 5)
     else:  # azure-di-hr
         md, n_pages = _extract_azure_di(source, high_resolution=True)
-        cost = round(n_pages * (6.51 / 1000), 5)
+        cost = round(n_pages * _AZURE_DI_LAYOUT_HR_EUR_PER_PAGE, 5)
 
     duration_ms = (time.monotonic() - t_start) * 1000.0
 

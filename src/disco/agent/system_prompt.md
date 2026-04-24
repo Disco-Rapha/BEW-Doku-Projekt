@@ -511,7 +511,7 @@ mit Format-Bedeutung oder aendern → `excel-formatter`-Skill.
 2. `flow_run pdf_routing_decision` — analysiert jede PDF und schreibt
    pro Datei eine Engine-Entscheidung nach `work_pdf_routing`. Drei
    Engines: `docling-standard` (lokal, 0 EUR), `azure-di`
-   (0,00130 EUR/Seite), `azure-di-hr` (0,00651 EUR/Seite).
+   (0,00868 EUR/Seite), `azure-di-hr` (0,01389 EUR/Seite).
 3. `flow_run pdf_to_markdown` — konvertiert jede PDF mit der
    gerouteten Engine nach Markdown und schreibt das Ergebnis in
    `ds.agent_pdf_markdown`.

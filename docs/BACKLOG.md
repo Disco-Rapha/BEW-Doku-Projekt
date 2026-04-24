@@ -357,9 +357,10 @@ Kosten verursachen.
      Tokens addieren, bei > X € warnen
 
 2. **Document Intelligence:**
-   - Pro Seite ~0.01 €. Eine 800-Seiten-Norm = 8 €.
+   - Pro Seite 0.00868 € (azure-di) bis 0.01389 € (azure-di-hr).
+     Eine 800-Seiten-Norm = 7-11 €.
    - Risiko: User legt versehentlich 100 PDFs in context/ →
-     Disco jagt alle durch DI → 500+ €
+     Disco jagt alle durch DI → 500-1000 €
    - → Sicherheitsgrenze: max. N Seiten pro Context-Onboarding-Run
      (z.B. 500 Seiten), danach Rückfrage. Oder: max. N PDFs pro
      Run (z.B. 10), Rest manuell bestätigen.
@@ -415,8 +416,9 @@ Müssen vielleicht vorher für bestimmte Parameter gesetzt werden."
 **Was der Code aktuell tut** (`src/disco/pdf/markdown.py`):
 
 - Der Engine-Dispatcher liefert `estimated_cost_eur` im `meta`-Dict
-  (docling-standard = 0, azure-di = 0.01 €/Seite, azure-di-hr =
-  0.015 €/Seite — hardcoded).
+  (docling-standard = 0, azure-di = 0.00868 €/Seite (8,68 €/1000),
+  azure-di-hr = 0.01389 €/Seite (13,89 €/1000) — in Konstanten
+  `_AZURE_DI_LAYOUT_EUR_PER_PAGE` / `_AZURE_DI_LAYOUT_HR_EUR_PER_PAGE`).
 - Der Flow `pdf_to_markdown` ruft `run.add_cost(eur=cost)` fuer jede
   Datei, damit das UI die akkumulierten Kosten anzeigt.
 
