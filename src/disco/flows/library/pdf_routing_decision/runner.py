@@ -325,10 +325,19 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
             f"Plan/Grossbild/Vektorzeichnung → DI-Standard-OCR reicht"
         )
     else:
-        engine = "docling-standard"
+        # INTERIM (2026-04-24, User-Entscheid): Standard-Fallback temporaer
+        # von 'docling-standard' auf 'azure-di' umgestellt, solange die
+        # Docling-Qualitaet nicht ueberzeugt. Die Engine 'docling-standard'
+        # bleibt im System erhalten (ALLOWED_ENGINES, bestehende
+        # work_pdf_routing/agent_pdf_markdown-Eintraege, Rerun-Mode) —
+        # nur neue Routing-Entscheidungen waehlen sie nicht mehr.
+        # Zurueckrollen: einfach diesen else-Block wieder auf
+        # engine = "docling-standard" setzen.
+        engine = "azure-di"
         reason = (
             f"{n_pages} Seiten ohne Scan/Vector-Drawing "
-            f"(text={n_text_pages}, mixed={n_mixed_pages}) → docling-standard"
+            f"(text={n_text_pages}, mixed={n_mixed_pages}) → "
+            f"azure-di (interim, ersetzt docling-standard)"
         )
 
     run.log(

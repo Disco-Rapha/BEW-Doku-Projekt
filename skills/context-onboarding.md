@@ -49,27 +49,38 @@ Ueberspringe KEINEN der folgenden Schritte.**
 
 #### PDF-Dateien — IMMER ueber die Markdown-Pipeline
 
-Fuer Context-PDFs gilt derselbe Weg wie fuer alle PDFs in Disco:
-einmalige Konvertierung nach Markdown, dann ausschliesslich aus
-`agent_pdf_markdown` lesen. Niemals pypdf / DI / Docling direkt.
+Fuer Context-PDFs gilt **derselbe Weg wie fuer alle PDFs in Disco** —
+dieselben Flows, dieselben Tabellen, nur ein anderes `kind`-Tag
+(`'context'` statt `'source'`). Einmalige Konvertierung nach Markdown,
+danach ausschliesslich aus `agent_pdf_markdown` lesen. Niemals pypdf /
+DI / Docling direkt.
 
-**Schritt 1 — Routing + Extraktion (einmalig):**
+**Schritt 1 — Context in die Registry + Inventory spiegeln:**
+```text
+sources_register({"scope": "context"})
+```
+Das scannt `context/` rekursiv, legt Zeilen in `agent_sources` mit
+`kind='context'` an und synchronisiert automatisch die PDF-Eintraege
+nach `agent_pdf_inventory` (mit `kind='context'`). Idempotent — beim
+zweiten Lauf siehst Du nur das Delta.
+
+**Schritt 2 — Routing + Extraktion (einmalig pro PDF):**
 ```text
 flow_run({"flow": "pdf_routing_decision"})
 flow_run({"flow": "pdf_to_markdown"})
 ```
-Das fuellt `agent_pdf_markdown` fuer alle Inventory-Eintraege —
-Context-PDFs inklusive, sobald sie unter `context/` liegen und vom
-Inventory-Flow erfasst sind.
+Die Flows sind scope-agnostisch: sie verarbeiten alles in
+`agent_pdf_inventory`, egal ob `kind='source'` oder `kind='context'`.
+Kosten pro Context-PDF typisch `docling-standard` (0 EUR) oder
+`azure-di` (~0.01 EUR/Seite) — keine Rueckfrage beim Nutzer noetig,
+das ist Standard-Workflow. Bei grossen Normen mit Plan-Format kann
+`azure-di-hr` getriggert werden (~0.05 EUR/Seite).
 
-Kosten: Context-PDFs laufen typisch auf `docling-standard` (0 EUR)
-oder `azure-di` (~0.01 EUR/Seite) — Keine Rueckfrage beim Nutzer
-noetig, das ist Standard-Workflow.
-
-**Schritt 2 — Markdown lesen:**
+**Schritt 3 — Markdown lesen:**
 ```text
 pdf_markdown_read({"rel_path": "context/<datei>.pdf"})
 ```
+Der `rel_path` ist Projekt-Root-relativ (also mit `context/`-Prefix).
 
 Zwei Faelle:
 
@@ -253,10 +264,15 @@ nicht beim Onboarding.
 
 ## Was Du NICHT tun sollst
 
-- **Kein ganzes DI-Extrakt in den Chat-Kontext laden** (zu gross,
+- **Kein ganzes Markdown-Extrakt in den Chat-Kontext laden** (zu gross,
   Token-Limit). Nur die Summary oder gezielte Ausschnitte per
   `fs_read` mit `max_bytes`.
-- **Keine DI-Extraktion fuer Sources** (zu teuer bei 1000+ PDFs).
-  DI ist fuer Context-PDFs (wenige, wichtig, einmalig).
+- **Kein eigener Pipeline-Weg fuer Context-PDFs.** Nicht pypdf / DI /
+  Docling direkt aus run_python. Immer `sources_register(scope='context')`
+  + `pdf_routing_decision` + `pdf_to_markdown` — dieselben Flows wie
+  fuer Sources, nur mit `kind='context'`.
+- **Keine manuelle Engine-Wahl.** Die Routing-Logik entscheidet pro
+  PDF, welche Engine laeuft. Nicht pauschal auf azure-di-hr zwingen,
+  wenn docling reicht.
 - **Kein "Fertig" ohne tatsaechliche Analyse.** Der Manifest-Eintrag
   muss eine echte Zusammenfassung enthalten, nicht nur Dateiname+Groesse.

@@ -79,7 +79,9 @@ Die Entscheidung basiert auf der kalibrierten pdf_classify-Heuristik plus drei n
         → azure-di     (A4-Scan ohne Plan/Grossbild/Vektorzeichnung — Standard-OCR reicht)
 
    5) sonst
-        → docling-standard
+        → azure-di     (INTERIM 2026-04-24: zuvor docling-standard, umgestellt
+                        solange die Docling-Qualitaet nicht ueberzeugt. Alte
+                        docling-Markdown-Eintraege werden NICHT neu extrahiert.)
    ```
 
    Schwellen:
@@ -129,9 +131,11 @@ Tabelle `work_pdf_routing`:
 
 ## Wie erkennst Du, dass es funktioniert hat
 
-- `SELECT engine, COUNT(*) FROM work_pdf_routing GROUP BY engine` zeigt drei Buckets.
+- `SELECT engine, COUNT(*) FROM work_pdf_routing GROUP BY engine` zeigt die Buckets
+  (in Interim-Phase meist nur `azure-di` + `azure-di-hr`; `docling-standard` nur
+  fuer Alt-Eintraege).
 - Stichprobe:
-  - Produktdatenblaetter A4 ohne Scans → `docling-standard`
+  - Produktdatenblaetter A4 ohne Scans → `azure-di` (interim, zuvor `docling-standard`)
   - A4-Scan-Handbuecher (DIN A4 Portrait) ohne Zeichnungen → `azure-di`
   - Technische Zeichnungen mit Zeichnungskopf → `azure-di-hr` (vdrawing oder Plan-Format)
   - Dokumente mit eingeklebten Foto-/Explosions-Seiten → `azure-di-hr`
@@ -141,9 +145,15 @@ Tabelle `work_pdf_routing`:
 - 2026-04-22 — v1: Binary `docling-standard` vs. `azure-di-hr`, Sticky-Rule auf scan/vdrawing.
 - 2026-04-22 — v2: 3-Tier-Routing, `azure-di` als Mittelstufe fuer A4-Scans ohne HR-Bedarf,
   neue Signale `max_page_width_pt` + `n_large_image_pages`.
+- 2026-04-24 — Interim-Switch: Fallback von `docling-standard` auf `azure-di`. Grund:
+  Docling-Qualitaet nicht ueberzeugend. `docling-standard` bleibt als Engine im System
+  (Alt-Eintraege + spaeteres Reaktivieren). Rueckroll = else-Branch im Runner wieder auf
+  `engine = "docling-standard"` setzen.
 
 ## Historie
 
 - 2026-04-22 — v1: Initiale Version des Binary-Routing-Flows. Full-Run Run #5:
   422 → azure-di-hr, 1109 → docling-standard, 1 failed (leere PDF).
 - 2026-04-22 — v2: 3-Tier-Update. Ziel: Reduktion der HR-Seiten, wenn DI-Standard-OCR reicht.
+- 2026-04-24 — Interim: Standard-Fallback `docling-standard` → `azure-di` (kein Schema-
+  Change, nur Entscheidungslogik im Runner). Alte Markdown-Eintraege bleiben unberuehrt.
