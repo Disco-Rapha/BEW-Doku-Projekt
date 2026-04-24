@@ -331,35 +331,72 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
      im Chat + dokumentiertem Export-Pfad.
    - **Vor Prod-Anwendung:** Migration gegen eine rsync-Kopie eines
      echten Prod-Projekts testen, nicht nur gegen frisch-initialisierte.
-8. **Entwicklungs-Pipeline (gilt ab 2026-04-24).** Trunk-Based-Setup mit
-   genau **zwei Branches**: `main` (Prod) und `dev` (Arbeit). Keine
-   Feature-/Hotfix-Branches dazwischen — fuer ein Zwei-Personen-Team
-   (User + Claude) ist das Overhead ohne Nutzen.
+8. **Entwicklungs-Pipeline (gilt ab 2026-04-24, Zyklus-Update 2026-04-24).**
+   Trunk-Based-Setup mit genau **zwei Branches**: `main` (Prod) und `dev`
+   (Arbeit). Keine Feature-/Hotfix-Branches, **keine Pull-Requests auf
+   github.com als Gate** — fuer ein Zwei-Personen-Team (User + Claude)
+   ist der PR-Zyklus Overhead ohne Nutzen. **GitHub ist Backup, nicht
+   Gate.** Claude macht die lokale Versionsverwaltung inklusive Deploy,
+   der User bestaetigt in jedem Zyklus explizit im Chat und pusht bei
+   Gelegenheit zu origin als Remote-Backup.
 
    **Filesystem-Layout — zwei Worktrees desselben Repos:**
    - `~/Claude/BEW Doku Projekt/` → gepinnt auf `dev`. Claudes Arbeitskopie.
    - `~/Claude/BEW Doku Prod/` → gepinnt auf `main`. Prod-Deployment.
 
+   Weil beide Worktrees dasselbe `.git/` teilen, sind Refs (`refs/heads/dev`,
+   `refs/heads/main`) sofort in beiden Worktrees sichtbar, sobald sie lokal
+   aktualisiert werden. Der Deploy-Schritt ist deshalb eine reine
+   Working-Tree-Aktualisierung — kein Netz-Pull noetig.
+
    **Zwei Server laufen parallel (je in eigenem Terminal):**
    - **Dev**: `http://127.0.0.1:8766`, `DISCO_WORKSPACE=~/Disco-dev`,
      gestartet aus `BEW Doku Projekt`, mit `--reload`.
    - **Prod**: `http://127.0.0.1:8765`, `DISCO_WORKSPACE=~/Disco`,
-     gestartet aus `BEW Doku Prod`, **ohne** `--reload` (stabil, nur
-     manueller Restart bei Deploy).
+     gestartet aus `BEW Doku Prod`, **ebenfalls mit `--reload`** — so
+     greift ein Deploy ohne manuellen Server-Restart sofort (uvicorn
+     laedt geaenderte Module nach dem `git reset --hard` automatisch
+     neu; Flow-Subprocesses sind eh frische Python-Starts und ziehen
+     den neuen Code vom Disk).
 
    **Zyklus pro Aenderung:**
    1. Claude committet inkrementell auf `dev` in `BEW Doku Projekt`.
-      **Claude pusht nie selbst** — der User ist die menschliche
-      Review-Instanz und Push-Gate.
-   2. User testet am Dev-Server (:8766) und gibt Feedback.
-   3. Wenn freigegeben: User pusht `dev` via GitHub Desktop.
-   4. User oeffnet PR `dev → main` auf github.com, reviewt nochmal, mergt.
-   5. User: Pull origin im `BEW Doku Prod`-Worktree via GitHub Desktop.
-   6. Prod-Server neu starten → Projekt-DB-Migrationen werden beim
-      ersten Zugriff auf das jeweilige Projekt automatisch angewendet.
+   2. User testet am Dev-Server (:8766) und gibt Feedback im Chat.
+   3. Wenn freigegeben: **Claude fragt** *"Soll ich auf Prod ziehen?"* —
+      Prod wird **nie** ohne explizite Chat-Bestaetigung angefasst.
+   4. Nach "ja" fuehrt Claude den Deploy lokal aus (zwei Commands, kein PR):
+      ```bash
+      # im Dev-Worktree (BEW Doku Projekt):
+      git checkout main && git merge --ff-only dev && git checkout dev
+      # im Prod-Worktree (BEW Doku Prod):
+      git reset --hard main
+      ```
+      `--ff-only` garantiert: Main uebernimmt exakt den Dev-Stand. Waere
+      Main gegen Dev divergiert, bricht der Merge ab und Claude meldet
+      das dem User, statt Geschichte zu ueberschreiben.
+   5. Prod-Server uebernimmt den neuen Code automatisch via uvicorn
+      `--reload`. Projekt-DB-Migrationen werden beim ersten Zugriff auf
+      das jeweilige Projekt angewendet.
+   6. User pusht `dev` + `main` via GitHub Desktop zu origin, **wenn es
+      ihm passt** — als Remote-Backup, nicht als Deploy-Voraussetzung.
+      Nicht blockierend fuer den Zyklus.
 
-   **Rollback:** PR auf github.com reverten → Pull in Prod-Worktree →
-   Prod-Server neu starten. Prod ist dann auf dem Stand vor dem Revert.
+   **Rollback:**
+   ```bash
+   # im Prod-Worktree auf den vorherigen Main-Commit:
+   git reset --hard <commit-hash>
+   # im Dev-Worktree, falls ganz zurueckgenommen werden soll:
+   git checkout main && git reset --hard <commit-hash> && git checkout dev
+   ```
+   Reflog (`git reflog`) zeigt alle Stände der letzten Tage — nichts geht
+   verloren. GitHub-Backup hilft zusaetzlich, wenn lokal etwas schief geht.
+
+   **Safety-Netze:**
+   - Claude fasst den Prod-Worktree **nur mit expliziter Chat-Bestaetigung**
+     an. Kein automatisches Ziehen nach jedem Dev-Commit.
+   - Nur `--ff-only` Merges. Bei Divergenz bricht der Deploy ab.
+   - Claude pusht NICHT zu origin (osxkeychain blockiert Subprocess-
+     Credentials). GitHub-Backup bleibt User-Aufgabe via GitHub Desktop.
 
    **Dev-Workspace (`~/Disco-dev`) ist bewusst getrennt von Prod
    (`~/Disco`)** — Dev-Code darf auf Prod-Daten NICHT rummachen. Fuer
@@ -394,10 +431,10 @@ cd "/Users/BEW/Claude/BEW Doku Projekt" && \
   DISCO_WORKSPACE=~/Disco-dev \
   uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8766 --reload
 
-# Prod-Server (Prod-Arbeitskopie, Port 8765, echtes Workspace, stabil):
+# Prod-Server (Prod-Arbeitskopie, Port 8765, echtes Workspace, Live-Reload):
 cd "/Users/BEW/Claude/BEW Doku Prod" && \
   DISCO_WORKSPACE=~/Disco \
-  uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8765
+  uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
 ## Was als Nächstes kommt
