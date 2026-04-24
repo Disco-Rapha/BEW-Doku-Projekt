@@ -12,6 +12,6 @@ Drei produktive Engines, gewaehlt durch den vorgelagerten Routing-Flow
                          (feine Schriften in Plantitelblocks).
 """
 
-from .markdown import ENGINES, extract_markdown
+from .markdown import ENGINES, EXTRACTOR_VERSION, extract_markdown
 
-__all__ = ["ENGINES", "extract_markdown"]
+__all__ = ["ENGINES", "EXTRACTOR_VERSION", "extract_markdown"]

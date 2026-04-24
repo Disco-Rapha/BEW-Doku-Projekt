@@ -109,9 +109,27 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
             "duration_ms": meta["duration_ms"],
             "run_id": run.run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "extractor_version": meta.get("extractor_version"),
         },
         on_conflict="replace",
     )
+
+    # Page-Offset-Index aktualisieren. DELETE zuerst, damit bei
+    # Re-Extraktion (force_rerun) keine Altdaten zurueckbleiben.
+    run.db.execute(
+        "DELETE FROM ds.agent_pdf_page_offsets WHERE file_id = ?",
+        (file_id,),
+    )
+    offsets = meta.get("page_offsets") or []
+    if offsets:
+        run.db.executemany(
+            "INSERT INTO ds.agent_pdf_page_offsets "
+            "(file_id, page_num, char_start, char_end) VALUES (?, ?, ?, ?)",
+            [
+                (file_id, po["page_num"], po["char_start"], po["char_end"])
+                for po in offsets
+            ],
+        )
 
     cost = float(meta.get("estimated_cost_eur", 0.0))
     if cost > 0:
@@ -120,6 +138,7 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
     run.log(
         f"[markdown] file_id={file_id}, engine={engine}, "
         f"pages={meta['n_pages']}, chars={meta['char_count']}, "
+        f"offsets={len(offsets)}, "
         f"duration={meta['duration_ms']:.0f}ms, "
         f"cost={cost:.4f} EUR"
     )
@@ -130,6 +149,7 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
         "engine": engine,
         "n_pages": meta["n_pages"],
         "char_count": meta["char_count"],
+        "page_offsets_written": len(offsets),
         "duration_ms": meta["duration_ms"],
         "estimated_cost_eur": cost,
     }
