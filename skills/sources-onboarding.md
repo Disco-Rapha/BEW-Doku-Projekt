@@ -1,6 +1,6 @@
 ---
 name: sources-onboarding
-description: sources/ registrieren, Begleit-Metadaten anhaengen, Duplikate erkennen. Pflegt die agent_sources-Registry.
+description: sources/ (und optional context/) registrieren, Begleit-Metadaten anhaengen, Duplikate erkennen. Pflegt die agent_sources-Registry + spiegelt PDFs ins agent_pdf_inventory.
 when_to_use: "neue Quellen geladen", "registriere", "neuer SP-Export", oder wenn sources/ Dateien enthaelt die nicht in agent_sources stehen.
 ---
 
@@ -10,10 +10,12 @@ Der Ordner `sources/` enthaelt **Arbeitsdokumente** — was analysiert,
 bewertet, klassifiziert werden soll. Anders als `context/` (Arbeits-
 grundlagen) ist hier das *Rohmaterial*.
 
-Disco fuehrt eine **Registry** der Quelldateien in der Tabelle
-`agent_sources`. Jede Datei hat einen SHA-256-Hash, den Status
-`'active'`/`'deleted'`, Filesystem-Metadaten und optional Begleit-
-Metadaten.
+Disco fuehrt eine **Registry** in der Tabelle `agent_sources`. Jede
+Datei hat einen SHA-256-Hash, den Status `'active'`/`'deleted'`,
+Filesystem-Metadaten, optional Begleit-Metadaten und ein
+`kind`-Tag (`'source'` oder `'context'`), das die beiden Welten
+sauber trennt — auch wenn sie durch dieselbe Registry + denselben
+PDF-Pipeline-Weg laufen.
 
 ## Wann dieser Skill laeuft
 
@@ -51,7 +53,9 @@ sources_register({"scan_type": "<typ>"})
 ```
 
 Das Tool:
-- Walkt `sources/` rekursiv (ausser `_meta/`)
+- Walkt den gewaehlten Scope-Root rekursiv (ausser `_meta/`).
+  Default `scope='sources'` scannt `sources/`. Mit `scope='context'`
+  scannst Du `context/`, mit `scope='both'` beides nacheinander.
 - Berechnet SHA-256 fuer jede Datei
 - Vergleicht mit `agent_sources`:
   - Pfad unbekannt → **neu**
@@ -59,6 +63,9 @@ Das Tool:
   - Pfad in DB, Datei nicht mehr im FS → **geloescht**
   - Pfad + Hash identisch → **unveraendert**
 - Schreibt einen Eintrag in `agent_source_scans`
+- **Spiegelt PDFs nach `agent_pdf_inventory`** (mit `kind`-Tag), damit
+  die Pipeline-Flows (`pdf_routing_decision`, `pdf_to_markdown`) sie
+  sehen.
 
 ### 4. Ergebnis interpretieren
 
@@ -177,10 +184,12 @@ ORDER BY c.rel_path, s.rel_path;
 - **Dateien nicht selbst loeschen.** `agent_sources.status='deleted'`
   ist ein Soft-Delete, das Tool macht das. Der Benutzer kann Dateien
   im FS selbst loeschen/zurueckholen.
-- **Nicht fuer context/-Dateien verwenden.** `sources_register` scannt
-  nur `sources/`. Fuer `context/` gibt es `context-onboarding`.
 - **Keine Klassifikation beim Scan.** Der Scan registriert nur. DCC-
   oder Gewerks-Klassifikation kommt spaeter ueber Jobs (Phase 2c).
+- **Keinen eigenen Pfad fuer context/ bauen.** Auch Context-Dateien
+  laufen ueber `sources_register` — einfach mit `scope='context'`.
+  Fuer die inhaltliche Analyse + Summary-Pflege danach siehe den
+  `context-onboarding`-Skill.
 
 ## Antwort-Vorlage
 

@@ -306,13 +306,31 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
 
 1. **Secrets niemals committen.** `.env` ist gitignored.
 2. **Schema-Änderungen nur über Migrationen** — system.db: `migrations/NNN_*.sql`,
-   Projekt-DB: `migrations/project/NNN_*.sql`. Bestehende sind immutable.
+   Projekt-DB: `migrations/project/{datastore|workspace}/NNN_*.sql`.
+   Bestehende Migrationen sind immutable.
 3. **Kundendaten niemals in Git.** Alles unter `~/Disco/` bleibt lokal.
 4. **Idempotenz.** Tools, Scans, Imports müssen bei Wiederholung dasselbe
    Ergebnis liefern.
 5. **Nachvollziehbarkeit.** Jeder Scan → `agent_source_scans`, jedes
    Skript → `agent_script_runs`, jeder Chat → `chat_messages`.
 6. **Vor neuen Features fragen:** in welche Phase gehört das?
+7. **Prod-Migrierbarkeit (gilt ab 2026-04-24).** Seit Produktivbetrieb auf
+   `~/Disco/projects/` gelten Bestandsdaten als unveränderlich. Jede
+   Änderung an Schema, Filesystem-Layout, Memory-Format, Flow-Runner-
+   Contract oder Config-Schema MUSS eine Migration mitliefern, die
+   bestehende Projekte ohne Datenverlust überführt. Konkret:
+   - **Neue Tabellen / Spalten:** `CREATE TABLE IF NOT EXISTS` bzw.
+     `ALTER TABLE ADD COLUMN` in einer neuen Migration.
+   - **Umbenennungen / Drops:** 3-Schritt (neu anlegen, Daten kopieren,
+     Code umziehen, altes in einer späteren Migration droppen). **Kein
+     direkter DROP** auf Tabellen mit Prod-Daten.
+   - **FS-Layout-Änderungen:** Migrations-Script (Python, idempotent),
+     das Bestandsprojekte ohne Datenverlust anpasst.
+   - **Harte Cutover verboten** (wie der `data.db` → `datastore.db/workspace.db`-
+     Split am 2026-04-23). Ausnahme nur mit expliziter User-Genehmigung
+     im Chat + dokumentiertem Export-Pfad.
+   - **Vor Prod-Anwendung:** Migration gegen eine rsync-Kopie eines
+     echten Prod-Projekts testen, nicht nur gegen frisch-initialisierte.
 
 ## Häufige Kommandos
 

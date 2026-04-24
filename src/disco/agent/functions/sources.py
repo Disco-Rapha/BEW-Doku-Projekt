@@ -1,13 +1,22 @@
-"""Sources-Registry: rekursiver Scan von sources/ + Begleit-Metadaten + Duplikat-Erkennung.
+"""Sources-Registry: rekursiver Scan von sources/ und/oder context/ + Begleit-Metadaten + Duplikat-Erkennung.
 
 Pattern: "File Registry with Change Detection"
   - sha256-basiert fuer sichere Aenderungserkennung
   - Idempotent: wiederholter Lauf auf unveraendertem Filesystem ergibt 0 Delta
   - Status-Feld 'active'|'deleted' fuer Abgang-Erkennung
+  - `kind`-Tag ('source' vs. 'context') trennt Arbeitsdokumente von
+    Arbeitsgrundlagen in derselben Pipeline
 
 Performance: auf SSD ca. 2-5s fuer 1600 Dateien bei gemischten Groessen.
 Hash wird gecacht per (rel_path, size, mtime) — wenn nichts davon sich
 geaendert hat, ueberspringen wir das erneute Hashen (optimierung).
+
+Architektur-Hinweis:
+  agent_sources.rel_path ist **relativ zum jeweiligen Scope-Root**
+  (zu sources/ bzw. zu context/). Der scope-Agnostische Projekt-Root-
+  Pfad wird beim PDF-Inventory-Sync zusammengebaut (z.B. "sources/foo.pdf"
+  oder "context/norm.pdf"), damit die PDF-Pipeline-Flows einheitliche
+  Pfade sehen.
 """
 
 from __future__ import annotations
@@ -61,25 +70,321 @@ def _is_ignored(rel_path: Path) -> bool:
     return False
 
 
+# Mapping scope → (kind, folder_name_under_project_root)
+_SCOPE_TO_KIND: dict[str, tuple[str, str]] = {
+    "sources": ("source", "sources"),
+    "context": ("context", "context"),
+}
+
+
+def _scan_one_scope(
+    *,
+    conn,
+    scan_id: int,
+    kind: str,
+    scope_root: Path,
+    subpath: str,
+    skip_hash_if_unchanged: bool,
+) -> dict[str, Any]:
+    """Scannt einen Unterbaum (sources/ ODER context/), aktualisiert agent_sources.
+
+    rel_path wird relativ zum `scope_root` gespeichert (wie bisher fuer sources/).
+    Der `kind`-Tag unterscheidet die beiden Welten.
+
+    Returns: {"new": [...], "changed": [...], "deleted": [...], "unchanged": int}
+    """
+    scan_subdir = (scope_root / subpath).resolve() if subpath else scope_root
+    try:
+        scan_subdir.relative_to(scope_root)
+    except ValueError:
+        raise ValueError(
+            f"subpath ausserhalb von {scope_root.name}/: {subpath!r}"
+        )
+
+    # Bestehende aktive/deleted-Eintraege dieses kind-Scopes laden
+    if subpath:
+        like = f"{subpath.rstrip('/')}/%"
+        rows = conn.execute(
+            "SELECT id, rel_path, size_bytes, sha256, mtime, status "
+            "FROM agent_sources "
+            "WHERE kind = ? AND (rel_path LIKE ? OR rel_path = ?)",
+            (kind, like, subpath.rstrip("/")),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, rel_path, size_bytes, sha256, mtime, status "
+            "FROM agent_sources WHERE kind = ?",
+            (kind,),
+        ).fetchall()
+    existing: dict[str, dict] = {r["rel_path"]: dict(r) for r in rows}
+
+    seen_rel_paths: set[str] = set()
+    new_list: list[str] = []
+    changed_list: list[str] = []
+    unchanged_count = 0
+
+    for fs_path in scan_subdir.rglob("*"):
+        if not fs_path.is_file():
+            continue
+        rel = fs_path.relative_to(scope_root)
+        if _is_ignored(rel):
+            continue
+        rel_str = str(rel)
+        seen_rel_paths.add(rel_str)
+
+        try:
+            st = fs_path.stat()
+        except OSError:
+            continue
+        size = st.st_size
+        mtime_iso = _iso_mtime(st.st_mtime)
+        folder = str(rel.parent) if rel.parent != Path(".") else ""
+        ext = rel.suffix.lstrip(".").lower() or None
+
+        prev = existing.get(rel_str)
+
+        need_hash = True
+        if prev and skip_hash_if_unchanged:
+            if prev["size_bytes"] == size and prev["mtime"] == mtime_iso:
+                need_hash = False
+
+        digest = None
+        if need_hash:
+            try:
+                digest = _sha256_file(fs_path)
+            except OSError as exc:
+                conn.execute(
+                    "UPDATE agent_source_scans SET notes = "
+                    "COALESCE(notes, '') || ? WHERE id = ?",
+                    (f"Lesefehler [{kind}] {rel_str}: {exc}\n", scan_id),
+                )
+                continue
+        else:
+            digest = prev["sha256"]
+
+        if not prev:
+            conn.execute(
+                "INSERT INTO agent_sources "
+                "(rel_path, filename, folder, extension, size_bytes, sha256, "
+                " mtime, kind, first_seen_at, last_seen_at, last_changed_at, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), "
+                "        datetime('now'), 'active')",
+                (rel_str, fs_path.name, folder, ext, size, digest, mtime_iso, kind),
+            )
+            new_list.append(rel_str)
+        else:
+            hash_changed = (prev["sha256"] or "") != (digest or "")
+            was_deleted = prev["status"] == "deleted"
+            if hash_changed:
+                conn.execute(
+                    "UPDATE agent_sources SET "
+                    "  size_bytes = ?, sha256 = ?, mtime = ?, "
+                    "  last_seen_at = datetime('now'), "
+                    "  last_changed_at = datetime('now'), "
+                    "  status = 'active', "
+                    "  updated_at = datetime('now') "
+                    "WHERE id = ?",
+                    (size, digest, mtime_iso, prev["id"]),
+                )
+                changed_list.append(rel_str)
+            else:
+                if was_deleted:
+                    conn.execute(
+                        "UPDATE agent_sources SET "
+                        "  status = 'active', last_seen_at = datetime('now'), "
+                        "  last_changed_at = datetime('now'), "
+                        "  updated_at = datetime('now') "
+                        "WHERE id = ?",
+                        (prev["id"],),
+                    )
+                    changed_list.append(rel_str)
+                else:
+                    conn.execute(
+                        "UPDATE agent_sources SET "
+                        "  last_seen_at = datetime('now') "
+                        "WHERE id = ?",
+                        (prev["id"],),
+                    )
+                    unchanged_count += 1
+
+    # Abgang-Erkennung: Eintraege die in DB fuer diesen Scope existieren,
+    # aber nicht mehr im FS — als 'deleted' markieren.
+    # ACHTUNG: Bei subpath nur innerhalb des Subpath, sonst Gefahr dass
+    # wir Dateien als 'deleted' flaggen die im nicht-gescannten Zweig liegen.
+    deleted_list: list[str] = []
+    for rel_str, prev in existing.items():
+        if rel_str in seen_rel_paths:
+            continue
+        if prev["status"] != "active":
+            continue
+        # Wenn subpath gegeben: nur Kandidaten unter diesem subpath
+        if subpath:
+            prefix = subpath.rstrip("/") + "/"
+            if rel_str != subpath.rstrip("/") and not rel_str.startswith(prefix):
+                continue
+        conn.execute(
+            "UPDATE agent_sources SET "
+            "  status = 'deleted', "
+            "  last_changed_at = datetime('now'), "
+            "  updated_at = datetime('now') "
+            "WHERE id = ?",
+            (prev["id"],),
+        )
+        deleted_list.append(rel_str)
+
+    return {
+        "kind": kind,
+        "new": new_list,
+        "changed": changed_list,
+        "deleted": deleted_list,
+        "unchanged": unchanged_count,
+    }
+
+
+def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
+    """Synct agent_sources → agent_pdf_inventory fuer PDFs der angegebenen kinds.
+
+    Baut den Projekt-Root-relativen Pfad ("sources/..." bzw. "context/...") und
+    schreibt Upserts nach agent_pdf_inventory. Auch Deletes werden gespiegelt:
+    wenn eine Source auf status='deleted' gesetzt ist, wird der Inventory-
+    Eintrag entfernt (die Pipeline-Flows sollen sie dann nicht mehr sehen).
+
+    Returns: {"inserted": N, "updated": N, "removed": N}
+    """
+    if not kinds:
+        return {"inserted": 0, "updated": 0, "removed": 0}
+
+    placeholders = ",".join("?" * len(kinds))
+    # 1) PDFs aus agent_sources holen, die 'active' sind
+    src_rows = conn.execute(
+        f"""
+        SELECT id, rel_path, filename, sha256, size_bytes, folder, kind
+        FROM agent_sources
+        WHERE status = 'active'
+          AND kind IN ({placeholders})
+          AND lower(extension) = 'pdf'
+        """,
+        tuple(kinds),
+    ).fetchall()
+
+    inserted = 0
+    updated = 0
+    for r in src_rows:
+        # agent_sources.rel_path ist scope-relativ ("foo.pdf" oder "Elektro/bar.pdf").
+        # Fuer die Inventory brauchen wir den Projekt-Root-relativen Pfad, damit
+        # Path(rel_path) in den Flow-Runnern direkt funktioniert.
+        scope_prefix = "sources" if r["kind"] == "source" else "context"
+        inv_rel_path = f"{scope_prefix}/{r['rel_path']}"
+        file_name = r["filename"]
+        file_name_norm = (file_name or "").strip().lower()
+
+        # Gewerk-Heuristik: erstes Pfad-Segment unter dem scope-Root,
+        # wenn es eins gibt (sonst NULL).
+        folder = r["folder"] or ""
+        gewerk = folder.split("/", 1)[0] if folder else None
+
+        # Upsert via INSERT OR REPLACE auf UNIQUE(rel_path).
+        # Auto-Inkrement-ID bleibt stabil solange rel_path unveraendert bleibt,
+        # aber wir nutzen REPLACE → deshalb ist file_id NICHT stabil, wenn ein
+        # rel_path umbenannt wird. Fuer reine Updates auf gleichem rel_path
+        # ist das ok.
+        #
+        # Wichtig: Wir nutzen ON CONFLICT(rel_path) DO UPDATE, damit wir den
+        # bestehenden file_id (agent_pdf_inventory.id) *nicht* verlieren —
+        # sonst wuerden work_pdf_routing und agent_pdf_markdown ins Leere
+        # referenzieren.
+        cur = conn.execute(
+            """
+            INSERT INTO agent_pdf_inventory
+                (rel_path, file_name, file_name_norm, gewerk, size_bytes, sha256, kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(rel_path) DO UPDATE SET
+                file_name = excluded.file_name,
+                file_name_norm = excluded.file_name_norm,
+                gewerk = excluded.gewerk,
+                size_bytes = excluded.size_bytes,
+                sha256 = excluded.sha256,
+                kind = excluded.kind
+            """,
+            (
+                inv_rel_path,
+                file_name,
+                file_name_norm,
+                gewerk,
+                r["size_bytes"],
+                r["sha256"],
+                r["kind"],
+            ),
+        )
+        if cur.rowcount > 0:
+            # SQLite unterscheidet INSERT vs UPDATE nicht direkt in rowcount
+            # beim UPSERT. Heuristik: existierte vorher schon?
+            # Wir zaehlen grob: inserted vs updated per separatem EXISTS-Check
+            # waere teuer — hier begnuegen wir uns mit "touched".
+            inserted += 1  # spaeter aufteilen, wenn wirklich noetig
+
+    # Geloeschte Sources aus Inventory entfernen (sonst bleiben sie als
+    # "Geister-Eintraege" und Flows wuerden sie wieder anfassen).
+    # Wir matchen ueber den gebauten Inventory-rel_path:
+    # "sources/<rel>" bzw. "context/<rel>" aus agent_sources (status='deleted').
+    deleted_src_rows = conn.execute(
+        f"""
+        SELECT rel_path, kind FROM agent_sources
+        WHERE status = 'deleted'
+          AND kind IN ({placeholders})
+          AND lower(extension) = 'pdf'
+        """,
+        tuple(kinds),
+    ).fetchall()
+
+    removed = 0
+    for r in deleted_src_rows:
+        scope_prefix = "sources" if r["kind"] == "source" else "context"
+        inv_rel_path = f"{scope_prefix}/{r['rel_path']}"
+        cur = conn.execute(
+            "DELETE FROM agent_pdf_inventory WHERE rel_path = ?",
+            (inv_rel_path,),
+        )
+        removed += cur.rowcount
+
+    return {"inserted": inserted, "updated": updated, "removed": removed}
+
+
 @register(
     name="sources_register",
     description=(
-        "Scannt den sources/-Ordner rekursiv und aktualisiert die "
-        "agent_sources-Registry. Erkennt neue, geaenderte und geloeschte Dateien "
-        "ueber sha256-Hash-Vergleich. Idempotent — Wiederholung auf unveraendertem "
-        "Stand liefert 0 Delta. Ordner '_meta' wird ignoriert (dort gehoeren "
-        "Begleit-Metadaten hin, nicht zu scannende Dateien). "
-        "Gibt Statistik + Liste der Delta-Dateien zurueck."
+        "Scannt den gewaehlten Scope (sources/, context/ oder beides) rekursiv "
+        "und aktualisiert die agent_sources-Registry. Erkennt neue, geaenderte "
+        "und geloeschte Dateien ueber sha256-Hash-Vergleich. Idempotent — "
+        "Wiederholung auf unveraendertem Stand liefert 0 Delta. Ordner '_meta' "
+        "wird ignoriert. Nach dem Scan wird agent_pdf_inventory (Input der "
+        "PDF-Pipeline) automatisch synchronisiert — damit laufen Context-PDFs "
+        "durch *dieselben* Flows (pdf_routing_decision, pdf_to_markdown) wie "
+        "Source-PDFs, nur mit kind='context'."
     ),
     parameters={
         "type": "object",
         "properties": {
+            "scope": {
+                "type": "string",
+                "enum": ["sources", "context", "both"],
+                "description": (
+                    "Welcher Unterbaum gescannt wird. "
+                    "'sources' (Default, bisheriges Verhalten) scannt nur "
+                    "sources/ und tagged die Zeilen kind='source'. "
+                    "'context' scannt context/ und tagged kind='context' — "
+                    "Context-PDFs werden dadurch auch ins agent_pdf_inventory "
+                    "gespiegelt und koennen durch die Pipeline laufen. "
+                    "'both' scannt nacheinander beides."
+                ),
+            },
             "subpath": {
                 "type": "string",
                 "description": (
-                    "Optionaler Unterordner unter sources/ (z.B. 'Elektro'), "
-                    "wenn nicht alles neu gescannt werden soll. "
-                    "Leer = ganzer sources/-Baum."
+                    "Optionaler Unterordner unter dem scope-Root "
+                    "(z.B. 'Elektro' bei scope='sources'). "
+                    "Leer = ganzer Baum. Bei scope='both' wirkt subpath in beiden "
+                    "Baeumen gleich — in der Praxis meist leer lassen."
                 ),
             },
             "skip_hash_if_unchanged": {
@@ -97,37 +402,51 @@ def _is_ignored(rel_path: Path) -> bool:
         "required": [],
     },
     returns=(
-        "{scan_id, scan_type, stats: {new, changed, deleted, unchanged, total_active}, "
-        "delta: {new: [...], changed: [...], deleted: [...]}, dauer_s}"
+        "{scan_id, scan_type, scope, per_scope: {source: {...}, context: {...}}, "
+        "stats: {new, changed, deleted, unchanged, total_active}, "
+        "pdf_inventory_sync: {inserted, updated, removed}, dauer_s}"
     ),
 )
 def _sources_register(
     *,
+    scope: str = "sources",
     subpath: str = "",
     skip_hash_if_unchanged: bool = True,
     scan_type: str = "incremental",
 ) -> dict[str, Any]:
     import time
 
-    root = _data_root()
-    sources_root = (root / "sources").resolve()
-    if not sources_root.exists():
+    if scope not in ("sources", "context", "both"):
         raise ValueError(
-            "sources/ Ordner existiert nicht. Lege Quelldateien unter "
-            f"{sources_root} ab oder fuehre 'disco project init' erneut aus."
+            f"scope muss 'sources', 'context' oder 'both' sein, nicht {scope!r}"
         )
-    sources_root.mkdir(parents=True, exist_ok=True)
 
-    scan_subdir = (sources_root / subpath).resolve() if subpath else sources_root
-    try:
-        scan_subdir.relative_to(sources_root)
-    except ValueError:
-        raise ValueError(f"subpath ausserhalb von sources/: {subpath!r}")
+    root = _data_root()
+
+    # Welche Scopes werden gescannt?
+    scopes: list[tuple[str, str]]  # [(scope_name, kind), ...]
+    if scope == "both":
+        scopes = [("sources", "source"), ("context", "context")]
+    else:
+        kind = _SCOPE_TO_KIND[scope][0]
+        scopes = [(scope, kind)]
+
+    # Pre-Flight: scope-Roots existieren?
+    for scope_name, _ in scopes:
+        scope_root = (root / scope_name).resolve()
+        if not scope_root.exists():
+            if scope == "both":
+                # Bei 'both' ist ein fehlender Scope tolerant — ueberspringen.
+                continue
+            raise ValueError(
+                f"{scope_name}/ Ordner existiert nicht: {scope_root}. "
+                "Lege Dateien dort ab oder fuehre 'disco project init' neu aus."
+            )
 
     t_start = time.monotonic()
     conn = db_connect()
 
-    # Scan-Eintrag anlegen
+    # Einen gemeinsamen Scan-Eintrag anlegen
     cur = conn.execute(
         "INSERT INTO agent_source_scans (scan_type) VALUES (?)",
         (scan_type,),
@@ -135,148 +454,49 @@ def _sources_register(
     scan_id = cur.lastrowid
     conn.commit()
 
+    per_scope: dict[str, dict[str, Any]] = {}
     try:
-        # Bestehende aktive Eintraege laden (fuer Diff)
-        # Key = rel_path, Value = dict mit bisherigen Werten
-        existing: dict[str, dict] = {}
-        # Wenn subpath gegeben: nur die Sub-Eintraege laden
-        if subpath:
-            like = f"{subpath.rstrip('/')}/%"
-            rows = conn.execute(
-                "SELECT id, rel_path, size_bytes, sha256, mtime, status "
-                "FROM agent_sources WHERE rel_path LIKE ? OR rel_path = ?",
-                (like, subpath.rstrip("/")),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, rel_path, size_bytes, sha256, mtime, status "
-                "FROM agent_sources"
-            ).fetchall()
-        for r in rows:
-            existing[r["rel_path"]] = dict(r)
-
-        seen_rel_paths: set[str] = set()
-        new_list: list[str] = []
-        changed_list: list[str] = []
-        unchanged_count = 0
-
-        # Filesystem abgehen
-        for fs_path in scan_subdir.rglob("*"):
-            if not fs_path.is_file():
+        for scope_name, kind in scopes:
+            scope_root = (root / scope_name).resolve()
+            if not scope_root.exists():
+                per_scope[kind] = {
+                    "kind": kind,
+                    "new": [], "changed": [], "deleted": [], "unchanged": 0,
+                    "skipped_reason": f"{scope_name}/ nicht vorhanden",
+                }
                 continue
-            rel = fs_path.relative_to(sources_root)
-            if _is_ignored(rel):
-                continue
-            rel_str = str(rel)
-            seen_rel_paths.add(rel_str)
+            scope_root.mkdir(parents=True, exist_ok=True)
+            result = _scan_one_scope(
+                conn=conn,
+                scan_id=scan_id,
+                kind=kind,
+                scope_root=scope_root,
+                subpath=subpath,
+                skip_hash_if_unchanged=skip_hash_if_unchanged,
+            )
+            per_scope[kind] = result
 
-            try:
-                st = fs_path.stat()
-            except OSError:
-                continue
-            size = st.st_size
-            mtime_iso = _iso_mtime(st.st_mtime)
-            folder = str(rel.parent) if rel.parent != Path(".") else ""
-            ext = rel.suffix.lstrip(".").lower() or None
+        # PDF-Inventory-Sync fuer alle angefassten kinds
+        touched_kinds = [r.get("kind") for r in per_scope.values() if r.get("kind")]
+        inventory_stats = _sync_pdf_inventory(conn, touched_kinds)
 
-            prev = existing.get(rel_str)
+        # Aggregierte Statistik
+        total_new = sum(len(r["new"]) for r in per_scope.values())
+        total_changed = sum(len(r["changed"]) for r in per_scope.values())
+        total_deleted = sum(len(r["deleted"]) for r in per_scope.values())
+        total_unchanged = sum(r["unchanged"] for r in per_scope.values())
 
-            # Hashing: nur wenn unbekannt oder sich (size, mtime) geaendert hat
-            need_hash = True
-            if prev and skip_hash_if_unchanged:
-                if prev["size_bytes"] == size and prev["mtime"] == mtime_iso:
-                    need_hash = False
-
-            digest = None
-            if need_hash:
-                try:
-                    digest = _sha256_file(fs_path)
-                except OSError as exc:
-                    # Datei nicht lesbar — als Warning, aber weitermachen
-                    conn.execute(
-                        "UPDATE agent_source_scans SET notes = "
-                        "COALESCE(notes, '') || ? WHERE id = ?",
-                        (f"Lesefehler {rel_str}: {exc}\n", scan_id),
-                    )
-                    continue
-            else:
-                digest = prev["sha256"]
-
-            if not prev:
-                # NEU
-                conn.execute(
-                    "INSERT INTO agent_sources "
-                    "(rel_path, filename, folder, extension, size_bytes, sha256, "
-                    " mtime, first_seen_at, last_seen_at, last_changed_at, status) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), "
-                    "        datetime('now'), 'active')",
-                    (rel_str, fs_path.name, folder, ext, size, digest, mtime_iso),
-                )
-                new_list.append(rel_str)
-            else:
-                # Bekannt — Hash-Diff bestimmt "changed"
-                hash_changed = (prev["sha256"] or "") != (digest or "")
-                was_deleted = prev["status"] == "deleted"
-                if hash_changed:
-                    conn.execute(
-                        "UPDATE agent_sources SET "
-                        "  size_bytes = ?, sha256 = ?, mtime = ?, "
-                        "  last_seen_at = datetime('now'), "
-                        "  last_changed_at = datetime('now'), "
-                        "  status = 'active', "
-                        "  updated_at = datetime('now') "
-                        "WHERE id = ?",
-                        (size, digest, mtime_iso, prev["id"]),
-                    )
-                    changed_list.append(rel_str)
-                else:
-                    # Unveraendert — nur last_seen_at pflegen
-                    # (und ggf. status 'deleted' → 'active' wenn Datei wieder auftaucht)
-                    if was_deleted:
-                        conn.execute(
-                            "UPDATE agent_sources SET "
-                            "  status = 'active', last_seen_at = datetime('now'), "
-                            "  last_changed_at = datetime('now'), "
-                            "  updated_at = datetime('now') "
-                            "WHERE id = ?",
-                            (prev["id"],),
-                        )
-                        changed_list.append(rel_str)  # zaehlt auch als "changed" (reaktiviert)
-                    else:
-                        conn.execute(
-                            "UPDATE agent_sources SET "
-                            "  last_seen_at = datetime('now') "
-                            "WHERE id = ?",
-                            (prev["id"],),
-                        )
-                        unchanged_count += 1
-
-        # Dateien, die in DB aber nicht mehr im FS → status='deleted'
-        deleted_list: list[str] = []
-        for rel_str, prev in existing.items():
-            if rel_str not in seen_rel_paths and prev["status"] == "active":
-                conn.execute(
-                    "UPDATE agent_sources SET "
-                    "  status = 'deleted', "
-                    "  last_changed_at = datetime('now'), "
-                    "  updated_at = datetime('now') "
-                    "WHERE id = ?",
-                    (prev["id"],),
-                )
-                deleted_list.append(rel_str)
-
-        # Scan-Eintrag finalisieren
         elapsed = time.monotonic() - t_start
         total_active = conn.execute(
             "SELECT COUNT(*) FROM agent_sources WHERE status = 'active'"
         ).fetchone()[0]
+
         conn.execute(
             "UPDATE agent_source_scans SET "
             "  finished_at = datetime('now'), "
             "  n_new = ?, n_changed = ?, n_deleted = ?, n_unchanged = ? "
             "WHERE id = ?",
-            (len(new_list), len(changed_list), len(deleted_list),
-             unchanged_count, scan_id),
+            (total_new, total_changed, total_deleted, total_unchanged, scan_id),
         )
         conn.commit()
 
@@ -291,27 +511,38 @@ def _sources_register(
             "truncated": len(lst) > n,
         }
 
+    per_scope_preview: dict[str, Any] = {}
+    for kind_name, r in per_scope.items():
+        if "skipped_reason" in r:
+            per_scope_preview[kind_name] = {"skipped_reason": r["skipped_reason"]}
+            continue
+        per_scope_preview[kind_name] = {
+            "new": _preview(r["new"]),
+            "changed": _preview(r["changed"]),
+            "deleted": _preview(r["deleted"]),
+            "unchanged": r["unchanged"],
+        }
+
     return {
         "scan_id": scan_id,
         "scan_type": scan_type,
+        "scope": scope,
         "scan_subpath": subpath or "(root)",
         "dauer_s": round(elapsed, 2),
+        "per_scope": per_scope_preview,
         "stats": {
-            "new": len(new_list),
-            "changed": len(changed_list),
-            "deleted": len(deleted_list),
-            "unchanged": unchanged_count,
+            "new": total_new,
+            "changed": total_changed,
+            "deleted": total_deleted,
+            "unchanged": total_unchanged,
             "total_active_in_registry": total_active,
         },
-        "delta": {
-            "new": _preview(new_list),
-            "changed": _preview(changed_list),
-            "deleted": _preview(deleted_list),
-        },
+        "pdf_inventory_sync": inventory_stats,
         "hint": (
             "Details pro Datei per SQL: "
-            "SELECT rel_path, size_bytes, extension, status, last_changed_at "
-            "FROM agent_sources ORDER BY last_changed_at DESC LIMIT 50"
+            "SELECT rel_path, kind, size_bytes, extension, status, last_changed_at "
+            "FROM agent_sources ORDER BY last_changed_at DESC LIMIT 50. "
+            "PDF-Inventory: SELECT rel_path, kind FROM agent_pdf_inventory ORDER BY id DESC LIMIT 20."
         ),
     }
 
