@@ -331,6 +331,40 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
      im Chat + dokumentiertem Export-Pfad.
    - **Vor Prod-Anwendung:** Migration gegen eine rsync-Kopie eines
      echten Prod-Projekts testen, nicht nur gegen frisch-initialisierte.
+8. **Entwicklungs-Pipeline (gilt ab 2026-04-24).** Trunk-Based-Setup mit
+   genau **zwei Branches**: `main` (Prod) und `dev` (Arbeit). Keine
+   Feature-/Hotfix-Branches dazwischen — fuer ein Zwei-Personen-Team
+   (User + Claude) ist das Overhead ohne Nutzen.
+
+   **Filesystem-Layout — zwei Worktrees desselben Repos:**
+   - `~/Claude/BEW Doku Projekt/` → gepinnt auf `dev`. Claudes Arbeitskopie.
+   - `~/Claude/BEW Doku Prod/` → gepinnt auf `main`. Prod-Deployment.
+
+   **Zwei Server laufen parallel (je in eigenem Terminal):**
+   - **Dev**: `http://127.0.0.1:8766`, `DISCO_WORKSPACE=~/Disco-dev`,
+     gestartet aus `BEW Doku Projekt`, mit `--reload`.
+   - **Prod**: `http://127.0.0.1:8765`, `DISCO_WORKSPACE=~/Disco`,
+     gestartet aus `BEW Doku Prod`, **ohne** `--reload` (stabil, nur
+     manueller Restart bei Deploy).
+
+   **Zyklus pro Aenderung:**
+   1. Claude committet inkrementell auf `dev` in `BEW Doku Projekt`.
+      **Claude pusht nie selbst** — der User ist die menschliche
+      Review-Instanz und Push-Gate.
+   2. User testet am Dev-Server (:8766) und gibt Feedback.
+   3. Wenn freigegeben: User pusht `dev` via GitHub Desktop.
+   4. User oeffnet PR `dev → main` auf github.com, reviewt nochmal, mergt.
+   5. User: Pull origin im `BEW Doku Prod`-Worktree via GitHub Desktop.
+   6. Prod-Server neu starten → Projekt-DB-Migrationen werden beim
+      ersten Zugriff auf das jeweilige Projekt automatisch angewendet.
+
+   **Rollback:** PR auf github.com reverten → Pull in Prod-Worktree →
+   Prod-Server neu starten. Prod ist dann auf dem Stand vor dem Revert.
+
+   **Dev-Workspace (`~/Disco-dev`) ist bewusst getrennt von Prod
+   (`~/Disco`)** — Dev-Code darf auf Prod-Daten NICHT rummachen. Fuer
+   realistische Tests kopieren wir bei Bedarf ein echtes Prod-Projekt
+   per `scripts/mirror_prod_project.sh <slug>` ins Dev-Workspace.
 
 ## Häufige Kommandos
 
@@ -355,8 +389,15 @@ disco flow cancel <run_id> --project <slug> [--force]  # Cancel-Signal
 disco flow items <run_id> --project <slug>             # Items mit Output
 disco flow logs <run_id> --project <slug> [--tail N]   # Run-Logs
 
-# Server (eigenes Terminal, --reload für Live-Updates):
-uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8000 --reload
+# Dev-Server (Claude-Arbeitskopie, Port 8766, eigener Workspace, Live-Reload):
+cd "/Users/BEW/Claude/BEW Doku Projekt" && \
+  DISCO_WORKSPACE=~/Disco-dev \
+  uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8766 --reload
+
+# Prod-Server (Prod-Arbeitskopie, Port 8765, echtes Workspace, stabil):
+cd "/Users/BEW/Claude/BEW Doku Prod" && \
+  DISCO_WORKSPACE=~/Disco \
+  uv run uvicorn disco.api.main:app --host 127.0.0.1 --port 8765
 ```
 
 ## Was als Nächstes kommt
