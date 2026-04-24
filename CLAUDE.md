@@ -364,22 +364,32 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
    2. User testet am Dev-Server (:8766) und gibt Feedback im Chat.
    3. Wenn freigegeben: **Claude fragt** *"Soll ich auf Prod ziehen?"* —
       Prod wird **nie** ohne explizite Chat-Bestaetigung angefasst.
-   4. Nach "ja" fuehrt Claude den Deploy lokal aus (zwei Commands, kein PR):
+   4. Nach "ja" fuehrt Claude den Deploy lokal aus — **ein Command im
+      Prod-Worktree, kein PR**:
       ```bash
-      # im Dev-Worktree (BEW Doku Projekt):
-      git checkout main && git merge --ff-only dev && git checkout dev
-      # im Prod-Worktree (BEW Doku Prod):
-      git reset --hard main
+      cd "/Users/BEW/Claude/BEW Doku Prod" && git merge --ff-only dev
       ```
-      `--ff-only` garantiert: Main uebernimmt exakt den Dev-Stand. Waere
-      Main gegen Dev divergiert, bricht der Merge ab und Claude meldet
-      das dem User, statt Geschichte zu ueberschreiben.
+      Da `main` im Prod-Worktree bereits ausgecheckt ist (und wegen
+      Worktree-Lock nirgends sonst parallel ausgecheckt werden kann),
+      wandert mit diesem einen Merge sowohl der `main`-Ref als auch der
+      Working-Tree auf den Dev-Stand. `--ff-only` garantiert: Main
+      uebernimmt exakt den Dev-Stand. Waere Main gegen Dev divergiert,
+      bricht der Merge ab und Claude meldet das dem User, statt
+      Geschichte zu ueberschreiben.
    5. Prod-Server uebernimmt den neuen Code automatisch via uvicorn
       `--reload`. Projekt-DB-Migrationen werden beim ersten Zugriff auf
       das jeweilige Projekt angewendet.
    6. User pusht `dev` + `main` via GitHub Desktop zu origin, **wenn es
       ihm passt** — als Remote-Backup, nicht als Deploy-Voraussetzung.
       Nicht blockierend fuer den Zyklus.
+
+   **GitHub-Backup: kein PR-Merge mehr.** Der User pusht jetzt direkt
+   beide Branches, statt PRs zu mergen. Grund: wenn `origin/main` einen
+   Merge-Commit aus einem PR bekommt, divergiert es von der linearen
+   lokalen `main`-History nach unseren ff-Deploys. Einmalige Bereinigung
+   nach Umstellung: `git push --force-with-lease origin main` (in GitHub
+   Desktop "Force push"). Danach pusht man normal ohne Force, weil alles
+   ff bleibt.
 
    **Rollback:**
    ```bash
