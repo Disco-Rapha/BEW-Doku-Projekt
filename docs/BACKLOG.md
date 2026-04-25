@@ -1050,3 +1050,41 @@ Verbesserungen am Run-Strip oben im Chat:
    der Seite. Aktuell muss man zum Flow-Detailview scrollen.
 
 Quelle: User-Feedback waehrend Pipeline-Fulltest 2026-04-25.
+
+---
+
+## Office-Formate in die Extraction-Pipeline (Prioritaet: hoch)
+
+Vergessen: **PowerPoint (.pptx)** und **Word (.docx)** muessen auch
+durch die Extraction-Pipeline. Heute wuerden sie:
+- in `agent_sources` registriert (extension wird gespeichert)
+- aber im `extraction_routing_decision`-Flow als `file_kind='other'` →
+  Routing-Engine `'skip'` → keine Extraktion, kein Suchindex
+
+Heisst: Word- und PowerPoint-Dateien sind heute fuer Disco unsichtbar.
+
+### Was zu tun ist
+
+**Engines:**
+- `docx-python-docx` — mit [python-docx](https://github.com/python-openxml/python-docx) (MIT). Ueberschriften, Absaetze, Tabellen, Listen → Markdown.
+- `pptx-python-pptx` — mit [python-pptx](https://github.com/scanny/python-pptx) (MIT). Pro Slide ein Markdown-Block: Titel + Body-Text + Notes + Tabellen.
+- Ggf. ein DOCX-Konverter ueber **mammoth** (MIT) als 2. Engine fuer komplexeres Markup.
+
+**Schema:**
+- Erweiterung `disco/docs/__init__.py`:
+  - `_KIND_BY_EXT` um `'docx': 'office'`, `'pptx': 'office'`
+  - oder `'docx': 'docx'`, `'pptx': 'pptx'` als eigene Kinds
+  - `ENGINES_BY_KIND` entsprechend erweitern
+- Routing in `disco/docs/routing.py`: `_decide_office()` (oder pro Format)
+- Neue Module `disco/docs/docx.py`, `disco/docs/pptx.py` analog zu `excel.py` / `dwg.py`
+- INDEXABLE_EXTENSIONS in `search.py` um `.docx`, `.pptx` erweitern, in `_FROM_DOC_MARKDOWN_EXTS` (lesen aus agent_doc_markdown)
+
+**Unit-Modell:**
+- DOCX: pro Section (Heading-1) ein unit, oder ganzes Dokument als unit_label='document'
+- PPTX: pro Slide ein unit (label = Slide-Titel oder "slide-N")
+
+**Cost:** lokal, 0 EUR. Bei DOCX mit eingebetteten Bildern spaeter ggf. Bilder per VLM-Engine extrahieren (Phase 2).
+
+**Auswirkung auf bestehende Projekte:** keine breaking changes. Bestand-Files mit `file_kind='other'` werden bei naechstem Routing-Run als `docx` / `pptx` neu klassifiziert.
+
+User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir total vergessen :D Die muessen auch noch in die Pipeline."*
