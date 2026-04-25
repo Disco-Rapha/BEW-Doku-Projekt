@@ -1019,3 +1019,34 @@ müssen, wie wir wissen ob alle dateien registriert, geroutet,
 extrahiert und indexiert sind. Ich weiß nicht ob das demnächst
 einfach eine Hintergrundaktivität werden sollte, oder ob es ein
 Ampel-System gibt oder sowas."*
+
+---
+
+## Flow-UI im Chat-Fenster (DONE 2026-04-25)
+
+*Erledigt: Commits 829fd65 + 6200002 + 0e04dc9 + 77f71ea. Alle vier Punkte umgesetzt — auffaelligeres Strip, finished-Runs bleiben mit Status-Badge + X-Button, Klick auf ganze Zeile, Runs im Flow-Detail nach oben. Plus Bonus: schnelle Runs (<3s) per recent_finished-API eingefangen, done-with-failures als Pseudo-Status (orange).*
+
+Beobachtungen aus dem Pipeline-Fulltest 2026-04-25 — kleine UX-
+Verbesserungen am Run-Strip oben im Chat:
+
+1. **Auffaelligkeit erhoehen** — die Run-Indikatoren oben im Chat-
+   Fenster sind heute leise. Wenn ein Flow laeuft, soll man das mit
+   einem Blick sehen (Hintergrund, Animation, Farbe).
+
+2. **Nach Ende sichtbar bleiben** — heute verschwindet ein Run aus
+   dem Strip, sobald er fertig ist. Soll: mit finalem Status (done /
+   failed / cancelled) **oben stehen bleiben, bis der User es weg-
+   klickt** (X-Button). So merkt man auch ueber Lange Pausen, dass
+   ein Flow durchgelaufen ist.
+
+3. **Klick auf Run-Indikator** soll:
+   - falls man nicht im richtigen Projekt ist: ins Projekt des
+     Flows springen, dann
+   - den Run selbst im Viewer oeffnen (gleiche View wie wenn man
+     im Flow → Liste-aller-Runs auf den Run klickt).
+
+4. **Run-Liste im Viewer (Flow-Detailansicht)** — die Runs eines
+   Flows sollen **oben** stehen (neueste zuerst), nicht unten am Ende
+   der Seite. Aktuell muss man zum Flow-Detailview scrollen.
+
+Quelle: User-Feedback waehrend Pipeline-Fulltest 2026-04-25.
