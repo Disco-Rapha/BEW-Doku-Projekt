@@ -134,9 +134,14 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
 
     # Provenance-Header voranstellen, dann unit_offsets entsprechend
     # nach hinten verschieben.
+    # WICHTIG: rel_path im Provenance-Header (und in agent_doc_markdown)
+    # ist relativ zum Projekt-Root (mit sources/ bzw. context/ als
+    # Praefix), nicht relativ zum Rollen-Wurzelordner. Das macht den
+    # Wert mit Filesystem-Pfad joinbar (Search, Viewer, doc_markdown_read).
+    fs_rel_path_str = str(fs_rel_path)
     provenance = build_provenance_header(
         file_id=file_id,
-        rel_path=rel_path,
+        rel_path=fs_rel_path_str,
         file_kind=file_kind,
         engine=engine,
         extracted_at=extracted_at,
@@ -175,12 +180,12 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
     if imported_tables:
         meta_json_obj["imported_tables"] = imported_tables
 
-    # In agent_doc_markdown schreiben
+    # In agent_doc_markdown schreiben — rel_path mit Praefix
     run.db.insert_row(
         "ds.agent_doc_markdown",
         {
             "file_id": file_id,
-            "rel_path": rel_path,
+            "rel_path": fs_rel_path_str,
             "engine": engine,
             "file_kind": file_kind,
             "md_content": md,
