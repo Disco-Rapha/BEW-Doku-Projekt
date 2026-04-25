@@ -1200,3 +1200,55 @@ sichtbar fuer alle Projekte, schreib-zugreifbar via dedizierte Tools.
 User-Quote (2026-04-25): *"einen public folder, in dem disco flows,
 Reports und exports ablegen kann. Der Ordner kann von allen Projekte
 gesehen und bearbeitet werden"*
+
+---
+
+## Run-Strip Bugs (Prioritaet: niedrig)
+
+Beobachtet 2026-04-25 nach den Run-Strip-Updates (Commits 829fd65,
+6200002, 0e04dc9, 77f71ea):
+
+### Bug 1: gleicher Run wird doppelt angezeigt
+
+Beobachtet: `#3 extraction_routing_decision` erscheint zweimal im
+Strip (einmal mit slug-Badge `bew-rsd-lager-halle`, einmal ohne).
+
+Vermutete Ursache: derselbe Run-Eintrag liegt sowohl in
+`state._runStripFinished` (lokal, localStorage-persisted) als auch in
+`data.recent_finished` (Backend-Antwort). `_runStripAddFinished` hat
+einen Dedup-Lookup ueber `${project_slug}:${id}`, aber wenn das
+project_slug-Feld in einer der zwei Quellen fehlt oder anders
+formatiert ist (z.B. leer vs. richtiger slug), wird der Lookup nicht
+matchen und der Eintrag landet zweimal.
+
+**Fix-Ansatz**: 
+- Dedup robuster machen: nicht nur Key vergleichen, sondern bei leerem
+  slug auf `flow_name + id` fallback
+- Im Backend sicherstellen, dass `project_slug` in `recent_finished`
+  immer gefuellt ist (heute haben wir das via Slug-Resolution, sollte
+  klappen — Logging im Backend bei NULL)
+
+### Bug 2: Counter springt nicht auf 100% (1720/1721 bleibt)
+
+Beobachtet: Run mit `done · 1 failed`, total=1721 zeigt Counter
+`1720/1721 (100%)` statt `1721/1721 (100%)`.
+
+Ursache: ich hatte den **pct** auf `processed/total` umgestellt
+(Commit 77f71ea), aber das **Template** rendert weiter `${done}/${total}`
+— die linke Zahl ist also weiterhin `done_items`, nicht
+`processed_items`. Inkonsistent: 100% Prozentsatz aber 1720/1721
+absolut.
+
+**Fix**: in `runStripRenderRow` Template-String anpassen:
+```js
+// alt:
+<span class="run-counts">${done}/${total} (${pct}%)${failedStr}</span>
+// neu:
+<span class="run-counts">${processed}/${total} (${pct}%)${failedStr}</span>
+```
+
+Zwei Zeilen Code, keine API-Aenderung.
+
+User-Quote (2026-04-25): *"Es werden zwei Flows doppelt angezeigt und
+1720 / 1721 das haette auf 1721 / 1721 springen sollen, wenn der flow
+durch ist. Der failed soll ja mitgezaehlt werden."*
