@@ -223,11 +223,12 @@ a:hover { text-decoration: underline; }
 }
 .run-row:last-child { border-bottom: none; }
 .run-row:hover { background: var(--panel2); }
-.run-row.status-running   { background: rgba(74,222,128,0.10); border-left-color: var(--green); }
-.run-row.status-paused    { background: rgba(250,204,21,0.12); border-left-color: var(--yellow); }
-.run-row.status-failed    { background: rgba(239,68,68,0.14);  border-left-color: var(--red); }
-.run-row.status-done      { background: rgba(74,222,128,0.06); border-left-color: var(--green); }
-.run-row.status-cancelled { background: rgba(160,160,160,0.08); border-left-color: var(--text-dim); }
+.run-row.status-running              { background: rgba(74,222,128,0.10); border-left-color: var(--green); }
+.run-row.status-paused               { background: rgba(250,204,21,0.12); border-left-color: var(--yellow); }
+.run-row.status-failed               { background: rgba(239,68,68,0.14);  border-left-color: var(--red); }
+.run-row.status-done                 { background: rgba(74,222,128,0.06); border-left-color: var(--green); }
+.run-row.status-done-with-failures   { background: rgba(250,168,63,0.14); border-left-color: #fa9c3c; }
+.run-row.status-cancelled            { background: rgba(160,160,160,0.08); border-left-color: var(--text-dim); }
 .run-row.is-finished      { opacity: 0.92; }
 .run-row.is-finished .run-bar { display: none; }   /* keine Progress-Bar mehr */
 .run-dot {
@@ -238,10 +239,11 @@ a:hover { text-decoration: underline; }
   background: var(--green);
   animation: run-pulse 2s ease-in-out infinite;
 }
-.run-row.status-paused    .run-dot { background: var(--yellow); }
-.run-row.status-failed    .run-dot { background: var(--red); }
-.run-row.status-done      .run-dot { background: var(--green); }
-.run-row.status-cancelled .run-dot { background: var(--text-dim); }
+.run-row.status-paused              .run-dot { background: var(--yellow); }
+.run-row.status-failed              .run-dot { background: var(--red); }
+.run-row.status-done                .run-dot { background: var(--green); }
+.run-row.status-done-with-failures  .run-dot { background: #fa9c3c; }
+.run-row.status-cancelled           .run-dot { background: var(--text-dim); }
 .run-row .run-end-label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
   font-weight: 600;
@@ -249,9 +251,10 @@ a:hover { text-decoration: underline; }
   background: rgba(0,0,0,0.25); color: var(--text-bright);
   margin-left: 2px;
 }
-.run-row.status-done      .run-end-label { color: var(--green); }
-.run-row.status-failed    .run-end-label { color: var(--red); }
-.run-row.status-cancelled .run-end-label { color: var(--text-dim); }
+.run-row.status-done               .run-end-label { color: var(--green); }
+.run-row.status-done-with-failures .run-end-label { color: #fa9c3c; }
+.run-row.status-failed             .run-end-label { color: var(--red); }
+.run-row.status-cancelled          .run-end-label { color: var(--text-dim); }
 @keyframes run-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0.0); }
   50%      { box-shadow: 0 0 0 5px rgba(74,222,128,0.30); }
@@ -3084,34 +3087,26 @@ async function runStripPoll() {
   }
   if (!data || !Array.isArray(data.runs)) return;
 
-  // Status-Wechsel-Erkennung: alles was im letzten Snapshot war, aber nicht mehr
-  // in der aktiven Liste, ist fertig geworden → in den Finished-Stripe oben
-  // aufnehmen (bleibt sichtbar bis der User wegklickt).
+  // Status-Wechsel-Erkennung Variante A: alles was im letzten Snapshot war,
+  // aber nicht mehr in der aktiven Liste, ist fertig geworden → in den
+  // Finished-Stripe aufnehmen.
   const nowKeys = new Set(data.runs.map(r => `${r.project_slug}:${r.id}`));
   for (const [key, prev] of state._runStripLastRuns.entries()) {
     if (!nowKeys.has(key)) {
       runStripFetchFinal(prev).then(finalRun => {
         if (!finalRun) return;
-        const fkey = `${finalRun.project_slug}:${finalRun.id}`;
-        if (state._runStripDismissed.has(fkey)) return;
-        // Update / einfuegen
-        const existing = state._runStripFinished.findIndex(
-          x => `${x.run.project_slug}:${x.run.id}` === fkey,
-        );
-        const entry = {
-          run: finalRun,
-          ended_at: new Date().toISOString(),
-        };
-        if (existing >= 0) state._runStripFinished[existing] = entry;
-        else state._runStripFinished.unshift(entry);   // neueste oben
-        _runStripSaveFinished();
-        // Strip neu rendern (faellt unten ohnehin, aber sofort sichtbar)
-        runStripRender(Array.from(state._runStripLastRuns.values()).filter(
-          r => `${r.project_slug}:${r.id}` !== key
-        ));
+        _runStripAddFinished(finalRun);
       });
       state._runStripPending.delete(key);
     }
+  }
+
+  // Variante B: schnelle Runs (<3s) wurden NIE in active gesehen — Backend
+  // liefert jetzt zusaetzlich `recent_finished` (Endstatus innerhalb 15min).
+  // Wir uebernehmen die in die Finished-Liste, soweit nicht schon dismissed.
+  const recent = Array.isArray(data.recent_finished) ? data.recent_finished : [];
+  for (const finalRun of recent) {
+    _runStripAddFinished(finalRun);
   }
 
   // Neuen Snapshot merken
@@ -3122,6 +3117,24 @@ async function runStripPoll() {
   state._runStripLastRuns = newMap;
 
   runStripRender(data.runs);
+}
+
+function _runStripAddFinished(finalRun) {
+  const fkey = `${finalRun.project_slug}:${finalRun.id}`;
+  if (state._runStripDismissed.has(fkey)) return;
+  const existing = state._runStripFinished.findIndex(
+    x => `${x.run.project_slug}:${x.run.id}` === fkey,
+  );
+  const entry = {
+    run: finalRun,
+    ended_at: finalRun.finished_at || new Date().toISOString(),
+  };
+  if (existing >= 0) {
+    state._runStripFinished[existing] = entry;
+  } else {
+    state._runStripFinished.unshift(entry);   // neueste oben
+  }
+  _runStripSaveFinished();
 }
 
 function runStripDismissFinished(key) {
@@ -3166,10 +3179,16 @@ function runStripRenderRow(r, opts) {
   opts = opts || {};
   const isFinished = !!opts.isFinished;
   const key = `${r.project_slug}:${r.id}`;
-  const status = r.status || (isFinished ? 'done' : 'running');
+  const rawStatus = r.status || (isFinished ? 'done' : 'running');
   const total = r.total_items || 0;
   const done = r.done_items || 0;
   const failed = r.failed_items || 0;
+  // Pseudo-Status: 'done' aber failed_items > 0 → eigene visuelle Klasse.
+  // Hilft, dass User Runs mit kaputten Items nicht mit "alles ok" verwechselt.
+  const status = (rawStatus === 'done' && failed > 0) ? 'done-with-failures' : rawStatus;
+  const labelText = (rawStatus === 'done' && failed > 0)
+    ? `done · ${failed} failed`
+    : rawStatus;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   const runtime = _runStripElapsed(r.started_at || r.created_at);
   const cost = (r.total_cost_eur || 0).toFixed(2);
@@ -3188,7 +3207,7 @@ function runStripRenderRow(r, opts) {
 
   const failedStr = failed > 0 ? `<span class="run-failed">· ${failed} failed</span>` : '';
   const endLabel = isFinished
-    ? `<span class="run-end-label">${escHtml(status)}</span>`
+    ? `<span class="run-end-label">${escHtml(labelText)}</span>`
     : '';
 
   // Finished: einzige Aktion ist X-Button (wegklicken). Aktive Runs:
