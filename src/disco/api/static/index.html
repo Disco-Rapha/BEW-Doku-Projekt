@@ -3205,7 +3205,12 @@ function runStripRenderRow(r, opts) {
     ? `${cost} / ${budget.toFixed(2)} €`
     : `${cost} €`;
 
-  const failedStr = failed > 0 ? `<span class="run-failed">· ${failed} failed</span>` : '';
+  // Failed-Counter wird nur bei AKTIVEN Runs in der Progress-Spalte gezeigt
+  // (da gibt's noch kein Status-Badge). Bei finished steht 'done · N failed'
+  // bereits als run-end-label im Header — Doppelung vermeiden.
+  const failedStr = (!isFinished && failed > 0)
+    ? `<span class="run-failed">· ${failed} failed</span>`
+    : '';
   const endLabel = isFinished
     ? `<span class="run-end-label">${escHtml(labelText)}</span>`
     : '';
