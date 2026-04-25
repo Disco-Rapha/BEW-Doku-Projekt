@@ -924,6 +924,8 @@ _MIME_BY_EXT = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".svg": "image/svg+xml",
+    ".dxf": "image/vnd.dxf",
+    ".dwg": "image/vnd.dwg",
 }
 
 
@@ -952,6 +954,96 @@ async def api_workspace_file(slug: str, path: str):
             status_code=413,
         )
     return FileResponse(str(target), media_type=mime, filename=target.name)
+
+
+# ---------------------------------------------------------------------------
+# DXF-Bereitstellung fuer den DWG-Viewer im UI
+# ---------------------------------------------------------------------------
+#
+# Liefert eine Datei garantiert als DXF aus.
+#   - .dxf → direkt
+#   - .dwg → via ezdxf.addons.odafc + ODA File Converter, gecached
+#            unter <projekt>/.disco/dxf-cache/<sha256>.dxf
+#
+# Der Viewer (dxf-viewer, MIT, https://github.com/vagran/dxf-viewer) liest
+# DXF — DWG-Konvertierung passiert hier serverseitig, transparent fuer
+# das Frontend.
+
+
+import hashlib
+
+_DXF_CACHE_SUBDIR = ".disco/dxf-cache"
+
+
+def _dxf_cache_path(root: Path, source: Path) -> Path:
+    """Cache-Pfad fuer eine DWG-Datei. Hash inkl. mtime → automatischer
+    Cache-Bust bei Datei-Aenderung."""
+    stat = source.stat()
+    h = hashlib.sha256()
+    h.update(str(source).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(stat.st_size).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(int(stat.st_mtime)).encode("utf-8"))
+    digest = h.hexdigest()[:32]
+    return root / _DXF_CACHE_SUBDIR / f"{digest}.dxf"
+
+
+@app.get("/api/workspace/projects/{slug}/file/dxf")
+async def api_workspace_file_as_dxf(slug: str, path: str):
+    """Liefert die Datei als DXF aus.
+
+    .dxf wird direkt durchgereicht; .dwg wird via ezdxf.addons.odafc
+    nach DXF konvertiert (Cache unter `.disco/dxf-cache/`).
+    Voraussetzung fuer DWG: ODA File Converter installiert.
+    """
+    from fastapi.responses import FileResponse, PlainTextResponse
+
+    try:
+        root = _resolve_project_root(slug)
+        target = _safe_path_in_root(root, path)
+    except (ValueError, FileNotFoundError) as exc:
+        return PlainTextResponse(str(exc), status_code=404)
+
+    suffix = target.suffix.lower()
+    if suffix == ".dxf":
+        return FileResponse(
+            str(target),
+            media_type="image/vnd.dxf",
+            filename=target.name,
+        )
+
+    if suffix != ".dwg":
+        return PlainTextResponse(
+            f"Format {suffix!r} kann nicht als DXF geliefert werden.",
+            status_code=415,
+        )
+
+    cache_path = _dxf_cache_path(root, target)
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            from ezdxf.addons import odafc
+        except ImportError:
+            return PlainTextResponse(
+                "ezdxf.addons.odafc nicht verfuegbar — `uv add ezdxf` ausfuehren.",
+                status_code=500,
+            )
+        try:
+            odafc.convert(str(target), str(cache_path))
+        except Exception as exc:
+            return PlainTextResponse(
+                f"DWG-Konvertierung fehlgeschlagen — meist fehlt der "
+                f"ODA File Converter. Siehe docs/dwg-setup.md. "
+                f"Original-Fehler: {exc}",
+                status_code=500,
+            )
+
+    return FileResponse(
+        str(cache_path),
+        media_type="image/vnd.dxf",
+        filename=target.stem + ".dxf",
+    )
 
 
 _DB_CHOICES = {"workspace", "datastore"}
