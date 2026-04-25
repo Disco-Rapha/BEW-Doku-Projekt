@@ -1133,3 +1133,70 @@ in `agent_source_relations` mit groesserer "Praeferenz" existiert:
 
 User-Quote (2026-04-25): *"Extraction machen wir nur auf kanonische
 dateien. Das sollte disco wissen."*
+
+---
+
+## Public-Workspace fuer Cross-Projekt-Reuse (Prioritaet: mittel)
+
+Heute ist jedes Projekt streng sandboxed (contextvars-basierte
+Mandantentrennung in `disco.agent.context`). Disco kann nicht
+zwischen Projekten zugreifen. Das ist sicher, verhindert aber
+Cross-Projekt-Reuse.
+
+**Idee:** ein **Public-Workspace** auf gleicher Ebene wie `projects/`,
+sichtbar fuer alle Projekte, schreib-zugreifbar via dedizierte Tools.
+
+```
+~/Disco/                       (analog ~/Disco-dev/)
+├── system.db
+├── _public/                   ← NEU
+│   ├── flows/                 — geteilte Flow-Definitionen
+│   ├── reports/               — projekt-uebergreifende Reports (z.B. Cross-Projekt-Stats)
+│   ├── exports/               — fertige Lieferungen, Templates
+│   └── data.db                — eigene SQLite fuer geteilte Lookup-Tabellen
+└── projects/
+    └── <slug>/
+```
+
+### Use-Cases
+
+- **Geteilte Flow-Library** — DCC-Klassifikations-Flow einmal entwickeln, in allen Projekten nutzen. Heute muesste man pro Projekt forken.
+- **Cross-Projekt-Reports** — Dashboard ueber alle Projekte (PDF-Anzahl, Routing-Verteilung, Cost). Heute schwer.
+- **Standard-Templates** — HTML-Report-Skelette, Excel-Vorlagen, DCC-Referenzlisten.
+- **Norm-Bibliothek** — eine `VGB_S_831.pdf` reicht im Public, kein Duplikat in 10 Projekten.
+
+### Architektur-Optionen
+
+**Option A — Spezial-Pfad im Filesystem-Sandbox:**
+- `fs_*`-Tools erkennen `_public/...` und erlauben Cross-Projekt-Zugriff
+- Pro: minimal-invasiv, vorhandene Tools bleiben
+- Con: leicht versehentlich Cross-Read; keine klare Eigentuemer-Markierung
+
+**Option B — Eigene Public-Tools (mein Favorit):**
+- Neue Tools `fs_public_list/read/write`, `sqlite_public_query/write`
+- Klare Trennung im Tool-Inventar — Disco entscheidet bewusst "ich lege das ins Public"
+- System-Prompt-Regel: vor Public-Write Bestaetigung beim User holen
+- Con: Tool-Anzahl waechst (heute 49, dann ~55)
+
+**Option C — Public als Pseudo-Projekt mit Sondermodus:**
+- `~/Disco/projects/_public/` als reservierter Slug
+- Switch-Tool `use_public_workspace()`: hebt die Sandbox temporaer auf
+- Pro: konsistent zur Projekt-Logik
+- Con: User-Confusion; Sandbox-Aufhebung kontraintuitiv
+
+### Sicherheits-Design (egal welche Option)
+
+- **Schreibzugriff erfordert explizite Geste** — nicht aus Versehen ins Public schreiben
+- **Audit-Trail** — agent_script_runs/agent_tool_calls protokollieren Public-Operationen besonders
+- **Egress-Policy unveraendert** — Public ist immer noch lokal, kein neuer Cloud-Endpoint
+- **Symlink-Schutz** — Public-Dateien duerfen nicht aus dem Public-Tree rauszeigen
+
+### Migration / Stufung
+
+1. **Stufe 1**: read-only Public-Workspace, nur Disco kann lesen, der User kuratiert per File-Manager. Reicht fuer geteilte Templates + Norm-Bibliothek.
+2. **Stufe 2**: `fs_public_write` + Schutz-Konvention im System-Prompt. Disco kann selbst Reports/Exports ablegen.
+3. **Stufe 3**: shared `_public/data.db` mit Lookup-Tabellen, in Projekten via `ATTACH DATABASE` lesbar (analog `ds`).
+
+User-Quote (2026-04-25): *"einen public folder, in dem disco flows,
+Reports und exports ablegen kann. Der Ordner kann von allen Projekte
+gesehen und bearbeitet werden"*
