@@ -1022,20 +1022,21 @@ async def api_workspace_file_as_dxf(slug: str, path: str):
     cache_path = _dxf_cache_path(root, target)
     if not cache_path.exists():
         cache_path.parent.mkdir(parents=True, exist_ok=True)
+        from disco.docs._dwg_libredwg import (
+            LibreDwgNotInstalled,
+            convert_dwg_to_dxf,
+        )
         try:
-            from ezdxf.addons import odafc
-        except ImportError:
+            convert_dwg_to_dxf(target, cache_path)
+        except LibreDwgNotInstalled as exc:
             return PlainTextResponse(
-                "ezdxf.addons.odafc nicht verfuegbar — `uv add ezdxf` ausfuehren.",
+                f"libredwg ist nicht installiert. {exc}",
                 status_code=500,
             )
-        try:
-            odafc.convert(str(target), str(cache_path))
         except Exception as exc:
             return PlainTextResponse(
-                f"DWG-Konvertierung fehlgeschlagen — meist fehlt der "
-                f"ODA File Converter. Siehe docs/dwg-setup.md. "
-                f"Original-Fehler: {exc}",
+                f"DWG-Konvertierung via libredwg fehlgeschlagen. "
+                f"Siehe docs/dwg-setup.md. Original-Fehler: {exc}",
                 status_code=500,
             )
 

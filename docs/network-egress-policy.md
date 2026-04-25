@@ -32,7 +32,7 @@ diskutiert und sind bewusst lokal eingerichtet:
 | `dxf-viewer` JS-Library | esm.sh CDN | gebundlet unter `src/disco/api/static/lib/dxf-viewer.bundle.mjs`, ueber `/static/lib/...` ausgeliefert |
 | `marked.js`, `pdf.js`, SheetJS, PapaParse, DOMPurify, highlight.js | CDN (cdn.jsdelivr.net etc.) | aktuell teils ueber CDN — **TODO**: in einer Folge-Iteration ebenfalls lokal bundeln |
 | Docling-Modelle (DocLayNet, TableFormer, EasyOCR) | Hugging Face Hub | Modelle werden beim ersten Lauf gecached; danach offline |
-| ODA File Converter | – | lokales CLI-Tool, kein Netzwerk |
+| **DWG-Konverter** | (alt) closed-source ODA File Converter | **libredwg** (GNU/GPL-3, OSS) — lokal gebaut via `scripts/install-libredwg.sh`, installiert in `~/.local/libredwg/`, kein Netzwerk im Betrieb |
 | ezdxf, openpyxl, PyMuPDF, pypdf, Pillow | – | Python-Pakete im venv, kein Netzwerk |
 
 ## Prod-spezifische Verschaerfung
@@ -77,3 +77,4 @@ auftauchen. Wenn doch: das ist ein Bug, **bitte sofort melden** und nicht
 | Datum | Aenderung | Genehmigt durch |
 |---|---|---|
 | 2026-04-25 | Initiale Fassung. dxf-viewer lokal gebundlet (vorher esm.sh). | User-Anweisung im Chat |
+| 2026-04-25 | DWG-Konverter ODA File Converter (closed) → libredwg (GPL-3, OSS), lokal in `~/.local/libredwg/`. Keine neue Egress-Verbindung. | User-Anweisung im Chat |

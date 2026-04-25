@@ -1,8 +1,9 @@
 """DWG/DXF-Extractor — ezdxf basierter Markdown-Renderer.
 
 Engine:
-  - dwg-ezdxf-local — DXF direkt, DWG via ezdxf.addons.odafc (ODA File
-                      Converter muss installiert sein, einmalige Einrichtung)
+  - dwg-ezdxf-local — DXF direkt, DWG via libredwg `dwg2dxf` + Sanitizer.
+                      LibreDWG ist GPL-3 und wird als externes CLI-Tool
+                      per Subprocess aufgerufen ("mere aggregation").
 
 Output-Format:
   ## Schriftfeld
@@ -16,21 +17,17 @@ Output-Format:
   - "T1 - 630 kVA"
   - ...
 
-  ### Layer BEMASSUNG (62)
-  ...
-
 Strategie:
-  - Schriftfeld = INSERT mit ATTRIBs > 5 (heuristisch)
+  - Schriftfeld = INSERT mit ATTRIBs > 3 (heuristisch)
   - Texte = TEXT/MTEXT-Entities, gruppiert nach Layer
   - Bemassungs-Texte aus DIMENSION-Entities mit dim_text
-  - TABLE-Entities (selten) als Markdown-Tabelle
+  - DWG-Pfad: libredwg dwg2dxf → DXF-Sanitizer → ezdxf.recover
+  - DXF-Pfad: direkt ezdxf
 
 Setup:
-  Fuer DWG-Dateien wird ODA File Converter benoetigt. Auf macOS:
-    1. ODAFileConverter.dmg von https://www.opendesign.com/guestfiles/oda_file_converter
-       herunterladen und installieren.
-    2. Pfad in $PATH oder via env var ODAFC_EXEC setzen.
-  Fuer DXF-Dateien (Text-Format) ist kein zusaetzliches Setup noetig.
+  - DXF allein: nichts noetig (ezdxf builtin).
+  - DWG: libredwg installieren via `bash scripts/install-libredwg.sh`.
+    Siehe docs/dwg-setup.md.
 """
 from __future__ import annotations
 
@@ -57,22 +54,30 @@ def extract(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
         raise ValueError(f"Unbekannte DWG-Engine: {engine!r}")
 
     import ezdxf
+    from ezdxf import recover
 
     suffix = path.suffix.lower()
     if suffix == ".dwg":
+        # DWG → DXF via libredwg, dann Sanitizer fuer ezdxf-Strict-Quirks
+        from . import _dwg_libredwg as _lib
+        import tempfile
+
+        tmp_dir = Path(tempfile.gettempdir()) / "disco-dwg-extract"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        # Eindeutiger Tmp-Name pro Source (Hash-frei reicht hier)
+        tmp_dxf = tmp_dir / f"{path.stem}.{abs(hash(str(path))) & 0xFFFFFFFF:08x}.dxf"
         try:
-            from ezdxf.addons import odafc
-        except ImportError as exc:  # pragma: no cover
-            raise RuntimeError(
-                "ezdxf.addons.odafc nicht verfuegbar. "
-                "`uv add ezdxf` ausfuehren."
-            ) from exc
+            _lib.convert_dwg_to_dxf(path, tmp_dxf)
+        except _lib.LibreDwgNotInstalled as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        # Sanitize gegen Sort-Handle-Bug
+        cleaned_dxf = _lib.sanitize_libredwg_dxf(tmp_dxf)
         try:
-            doc = odafc.readfile(str(path))
+            doc, audit = recover.readfile(str(cleaned_dxf))
         except Exception as exc:
             raise RuntimeError(
-                f"DWG-Lesen fehlgeschlagen — meist fehlt ODA File Converter. "
-                f"Siehe Setup-Hinweis in disco/docs/dwg.py. "
+                f"DXF-Read nach LibreDWG-Konvertierung fehlgeschlagen. "
                 f"Original-Fehler: {exc}"
             ) from exc
     elif suffix == ".dxf":
