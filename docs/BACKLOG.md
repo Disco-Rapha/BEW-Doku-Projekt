@@ -1252,3 +1252,60 @@ Zwei Zeilen Code, keine API-Aenderung.
 User-Quote (2026-04-25): *"Es werden zwei Flows doppelt angezeigt und
 1720 / 1721 das haette auf 1721 / 1721 springen sollen, wenn der flow
 durch ist. Der failed soll ja mitgezaehlt werden."*
+
+---
+
+## Cost-Tracking fuer GPT-5.1-Vision-Aufrufe (Prioritaet: hoch)
+
+Heute: `disco/docs/image.py` setzt `estimated_cost_eur = 0.0`
+hardcoded und speichert nur die Token-Counts in `meta_json`. Damit
+zeigen `agent_flow_runs.total_cost_eur` und der Run-Strip fuer
+Bild-Engines immer 0,00 €, obwohl jeder Vision-Call Foundry-Tokens
+verbraucht.
+
+Bestand-Beispiel (pipeline-fulltest, 3 Bilder):
+- ~3 151 prompt + 708 completion = **3 859 Tokens**, aber 0 EUR
+  ausgewiesen.
+
+### Was zu tun ist
+
+1. **Pricing-Modul**: `disco/pricing.py` mit zentraler Definition pro
+   Foundry-Modell. Beispiel-Struktur:
+   ```python
+   FOUNDRY_PRICING_EUR_PER_1M_TOKENS = {
+       "gpt-5.1": {"input": ..., "cached_input": ..., "output": ...},
+       "gpt-5":   {...},
+   }
+   ```
+   Mit Audit-Datum + EUR/USD-Wechselkurs-Annahme im Modul-Doc.
+2. **In `image.py`** Cost berechnen:
+   ```python
+   cost = (prompt_tokens * P["input"] + completion_tokens * P["output"]) / 1_000_000
+   meta["estimated_cost_eur"] = round(cost, 5)
+   ```
+3. **Cached-Input-Tokens beruecksichtigen**: Foundry liefert in der
+   Usage `cached_tokens`. Cached zaehlt zu reduziertem Preis. Bei
+   wiederholtem Vision-Call auf identisches System-Prompt-Praefix
+   greift der Cache stark.
+4. **System-Prompt-Cache nutzen** (Backlog-Querverweis): wenn wir
+   Foundry-Cache-Hits drueben haben, koennen wir die System-Prompt-
+   Bytes als Cache-Praefix markieren — drastische Cost-Reduktion bei
+   Bulk-Vision-Laeufen ueber 100+ Bilder.
+
+### Auswirkung auf andere Engines
+
+- `pdf-azure-di` / `pdf-azure-di-hr`: rechnen heute korrekt mit
+  `_AZURE_DI_LAYOUT_EUR_PER_PAGE` (= 8,68 / 13,89 EUR pro 1000 p).
+- `pdf-docling-standard` / `excel-*` / `dwg-*`: 0 EUR ist korrekt
+  (lokal, keine Cloud).
+- `image-gpt5-vision`: hier sind wir schief.
+
+### Folge: Bestand korrigieren?
+
+Pro betroffenem Run koennten wir nachtraeglich aus `meta_json`
+(prompt_tokens / completion_tokens) den EUR-Betrag rechnen und in
+`agent_flow_runs.total_cost_eur` per Update korrigieren. Klein, aber
+historische Daten stimmen wieder.
+
+User-Quote (2026-04-25): *"tracken wir eigentlich schon was uns der
+gpt aufruf mit den bildern kostet im flow?"*
