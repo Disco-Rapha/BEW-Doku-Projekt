@@ -201,38 +201,60 @@ a:hover { text-decoration: underline; }
 }
 #btn-compact.urgent:hover { background: #eab308; border-color: #eab308; }
 
-/* ============= Run-Streifen (aktive Flow-Runs) ============= */
+/* ============= Run-Streifen (aktive + beendete Flow-Runs) ============= */
 #run-strip {
-  display: none;   /* JS blendet ein, sobald ein Run aktiv ist */
+  display: none;   /* JS blendet ein, sobald ein Run aktiv oder als Endstatus
+                      sichtbar ist */
   flex-direction: column;
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 2px solid var(--accent);   /* auffaelliger als nur 1px-border */
   flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
 }
 #run-strip.has-runs { display: flex; }
 .run-row {
   display: flex; align-items: center; gap: 10px;
-  padding: 6px 14px;
+  padding: 9px 14px;            /* prominentere Hoehe als vorher (6px) */
   font-size: 12px;
   border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;   /* farbiger Status-Streifen links */
+  cursor: pointer;
+  transition: background 0.12s;
 }
 .run-row:last-child { border-bottom: none; }
-.run-row.status-running { background: rgba(74,222,128,0.06); }
-.run-row.status-paused  { background: rgba(250,204,21,0.08); }
-.run-row.status-failed  { background: rgba(239,68,68,0.10); }
+.run-row:hover { background: var(--panel2); }
+.run-row.status-running   { background: rgba(74,222,128,0.10); border-left-color: var(--green); }
+.run-row.status-paused    { background: rgba(250,204,21,0.12); border-left-color: var(--yellow); }
+.run-row.status-failed    { background: rgba(239,68,68,0.14);  border-left-color: var(--red); }
+.run-row.status-done      { background: rgba(74,222,128,0.06); border-left-color: var(--green); }
+.run-row.status-cancelled { background: rgba(160,160,160,0.08); border-left-color: var(--text-dim); }
+.run-row.is-finished      { opacity: 0.92; }
+.run-row.is-finished .run-bar { display: none; }   /* keine Progress-Bar mehr */
 .run-dot {
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 9px; height: 9px; border-radius: 50%;
   flex-shrink: 0;
 }
 .run-row.status-running .run-dot {
   background: var(--green);
   animation: run-pulse 2s ease-in-out infinite;
 }
-.run-row.status-paused  .run-dot { background: var(--yellow); }
-.run-row.status-failed  .run-dot { background: var(--red); }
+.run-row.status-paused    .run-dot { background: var(--yellow); }
+.run-row.status-failed    .run-dot { background: var(--red); }
+.run-row.status-done      .run-dot { background: var(--green); }
+.run-row.status-cancelled .run-dot { background: var(--text-dim); }
+.run-row .run-end-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  font-weight: 600;
+  padding: 1px 6px; border-radius: 3px;
+  background: rgba(0,0,0,0.25); color: var(--text-bright);
+  margin-left: 2px;
+}
+.run-row.status-done      .run-end-label { color: var(--green); }
+.run-row.status-failed    .run-end-label { color: var(--red); }
+.run-row.status-cancelled .run-end-label { color: var(--text-dim); }
 @keyframes run-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0.0); }
-  50%      { box-shadow: 0 0 0 5px rgba(74,222,128,0.25); }
+  50%      { box-shadow: 0 0 0 5px rgba(74,222,128,0.30); }
 }
 .run-id {
   font-family: var(--mono); color: var(--text-dim);
@@ -2797,10 +2819,10 @@ async function renderFlowDetails() {
       </div>
       <div class="flow-section">
         <div class="flow-controls">${startBtn}</div>
-        <h3>README.md</h3>
-        ${readmeHtml}
         <h3>Letzte Runs (${(d.recent_runs||[]).length})</h3>
         ${runsTable}
+        <h3>README.md</h3>
+        ${readmeHtml}
       </div>
     `);
   } catch (e) {
@@ -3015,10 +3037,38 @@ function closeFlowView() {
 state._runStripPoll = null;       // setInterval handle
 state._runStripLastRuns = new Map();  // key = "slug:id" → last snapshot fuer Status-Wechsel-Erkennung
 state._runStripPending = new Set();   // "slug:id" — User hat Pause/Cancel geklickt, UI sperren
+// Beendete Runs (done/failed/cancelled) bleiben oben sichtbar, bis der User
+// sie per X-Button wegklickt. Persistiert in localStorage damit ein
+// Browser-Reload sie nicht verschluckt.
+state._runStripFinished = [];          // [{run, ended_at}]
+state._runStripDismissed = new Set();  // Keys, die der User schon weggeklickt hat
+const RUN_STRIP_FINISHED_KEY = 'disco_run_strip_finished_v1';
+const RUN_STRIP_FINISHED_TTL_MS = 24 * 60 * 60 * 1000;   // 24h, danach fallen sie raus
 
 const RUN_STRIP_POLL_MS = 3000;
 
+function _runStripLoadFinished() {
+  try {
+    const raw = localStorage.getItem(RUN_STRIP_FINISHED_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data)) return;
+    const cutoff = Date.now() - RUN_STRIP_FINISHED_TTL_MS;
+    state._runStripFinished = data.filter(item => {
+      const t = Date.parse(item.ended_at || '');
+      return Number.isFinite(t) && t >= cutoff;
+    });
+  } catch (_e) { /* ignore */ }
+}
+
+function _runStripSaveFinished() {
+  try {
+    localStorage.setItem(RUN_STRIP_FINISHED_KEY, JSON.stringify(state._runStripFinished));
+  } catch (_e) { /* z.B. quota exceeded — ignorieren */ }
+}
+
 function runStripInit() {
+  _runStripLoadFinished();
   // Sofort einmal fetchen (sonst Blinken), dann Intervall.
   runStripPoll();
   if (state._runStripPoll) clearInterval(state._runStripPoll);
@@ -3035,13 +3085,30 @@ async function runStripPoll() {
   if (!data || !Array.isArray(data.runs)) return;
 
   // Status-Wechsel-Erkennung: alles was im letzten Snapshot war, aber nicht mehr
-  // in der aktiven Liste, ist fertig geworden → Toast.
+  // in der aktiven Liste, ist fertig geworden → in den Finished-Stripe oben
+  // aufnehmen (bleibt sichtbar bis der User wegklickt).
   const nowKeys = new Set(data.runs.map(r => `${r.project_slug}:${r.id}`));
   for (const [key, prev] of state._runStripLastRuns.entries()) {
     if (!nowKeys.has(key)) {
-      // Dieser Run ist verschwunden = Endstatus erreicht. Final-Snapshot holen.
       runStripFetchFinal(prev).then(finalRun => {
-        if (finalRun) runStripToast(finalRun);
+        if (!finalRun) return;
+        const fkey = `${finalRun.project_slug}:${finalRun.id}`;
+        if (state._runStripDismissed.has(fkey)) return;
+        // Update / einfuegen
+        const existing = state._runStripFinished.findIndex(
+          x => `${x.run.project_slug}:${x.run.id}` === fkey,
+        );
+        const entry = {
+          run: finalRun,
+          ended_at: new Date().toISOString(),
+        };
+        if (existing >= 0) state._runStripFinished[existing] = entry;
+        else state._runStripFinished.unshift(entry);   // neueste oben
+        _runStripSaveFinished();
+        // Strip neu rendern (faellt unten ohnehin, aber sofort sichtbar)
+        runStripRender(Array.from(state._runStripLastRuns.values()).filter(
+          r => `${r.project_slug}:${r.id}` !== key
+        ));
       });
       state._runStripPending.delete(key);
     }
@@ -3057,6 +3124,16 @@ async function runStripPoll() {
   runStripRender(data.runs);
 }
 
+function runStripDismissFinished(key) {
+  state._runStripDismissed.add(key);
+  state._runStripFinished = state._runStripFinished.filter(
+    x => `${x.run.project_slug}:${x.run.id}` !== key,
+  );
+  _runStripSaveFinished();
+  // Aktive Runs beibehalten — neu rendern
+  runStripRender(Array.from(state._runStripLastRuns.values()));
+}
+
 async function runStripFetchFinal(prev) {
   // prev ist ein Run aus dem letzten aktiven Snapshot. Wir holen seinen
   // finalen Status (done/failed/cancelled) einmalig fuer den Toast.
@@ -3070,18 +3147,26 @@ async function runStripFetchFinal(prev) {
 function runStripRender(runs) {
   const strip = document.getElementById('run-strip');
   if (!strip) return;
-  if (!runs.length) {
+  const finished = state._runStripFinished || [];
+  if (!runs.length && !finished.length) {
     strip.classList.remove('has-runs');
     strip.innerHTML = '';
     return;
   }
   strip.classList.add('has-runs');
-  strip.innerHTML = runs.map(runStripRenderRow).join('');
+  // Aktive zuerst, dann beendete (User-Reihenfolge: gerade laufende > vergangene)
+  const activeHtml = runs.map(runStripRenderRow).join('');
+  const finishedHtml = finished.map(item =>
+    runStripRenderRow(item.run, { isFinished: true })
+  ).join('');
+  strip.innerHTML = activeHtml + finishedHtml;
 }
 
-function runStripRenderRow(r) {
+function runStripRenderRow(r, opts) {
+  opts = opts || {};
+  const isFinished = !!opts.isFinished;
   const key = `${r.project_slug}:${r.id}`;
-  const status = r.status || 'running';
+  const status = r.status || (isFinished ? 'done' : 'running');
   const total = r.total_items || 0;
   const done = r.done_items || 0;
   const failed = r.failed_items || 0;
@@ -3102,12 +3187,30 @@ function runStripRenderRow(r) {
     : `${cost} €`;
 
   const failedStr = failed > 0 ? `<span class="run-failed">· ${failed} failed</span>` : '';
+  const endLabel = isFinished
+    ? `<span class="run-end-label">${escHtml(status)}</span>`
+    : '';
 
+  // Finished: einzige Aktion ist X-Button (wegklicken). Aktive Runs:
+  // Pause + Cancel.
+  const actionsHtml = isFinished
+    ? `<button class="run-btn run-btn-danger" onclick="event.stopPropagation(); runStripDismissFinished('${escAttr(key)}')"
+              title="Status-Eintrag wegklicken">✕</button>`
+    : `<button class="run-btn" onclick="event.stopPropagation(); ${pauseAction}" ${disabled}
+              title="${status === 'paused' ? 'Worker fortsetzen' : 'Worker pausieren — aktueller Item laeuft noch zu Ende'}">${pauseLabel}</button>
+       <button class="run-btn run-btn-danger" onclick="event.stopPropagation(); runStripCancel('${escAttr(r.project_slug)}', ${r.id})" ${disabled}
+              title="Run abbrechen — Done-Items bleiben">✕ Cancel</button>`;
+
+  // Klick auf die ganze Zeile → Run im Viewer oeffnen (Projekt wird
+  // automatisch gewechselt). Buttons stoppen das via event.stopPropagation.
   return `
-    <div class="run-row status-${escAttr(status)}" data-key="${escAttr(key)}">
+    <div class="run-row status-${escAttr(status)} ${isFinished ? 'is-finished' : ''}"
+         data-key="${escAttr(key)}"
+         onclick="runStripOpenDetails('${escAttr(r.project_slug)}', ${r.id})"
+         title="Klicken: Projekt wechseln + Run im Viewer oeffnen">
       <span class="run-dot"></span>
-      <span class="run-id" onclick="runStripOpenDetails('${escAttr(r.project_slug)}', ${r.id})"
-            title="Details im Viewer oeffnen">#${r.id}</span>
+      <span class="run-id">#${r.id}</span>
+      ${endLabel}
       <span class="run-flow" title="${escAttr(r.flow_name)}">${escHtml(r.flow_name)}</span>
       <span class="run-project" title="Projekt: ${escAttr(r.project_name || r.project_slug)}">${escHtml(r.project_slug)}</span>
       <span class="run-progress">
@@ -3115,15 +3218,10 @@ function runStripRenderRow(r) {
         <span class="run-counts">${done}/${total} (${pct}%)${failedStr}</span>
       </span>
       <span class="run-meta">
-        <span title="Laufzeit seit Start">⏱ ${runtime}</span>
+        <span title="Laufzeit ${isFinished ? 'gesamt' : 'seit Start'}">⏱ ${runtime}</span>
         <span class="run-cost ${overBudget ? 'over-budget' : ''}" title="${budget != null ? 'Budget: ' + budget.toFixed(2) + ' €' : 'Kein Budget gesetzt'}">💶 ${budgetStr}</span>
       </span>
-      <span class="run-actions">
-        <button class="run-btn" onclick="${pauseAction}" ${disabled}
-                title="${status === 'paused' ? 'Worker fortsetzen' : 'Worker pausieren — aktueller Item laeuft noch zu Ende'}">${pauseLabel}</button>
-        <button class="run-btn run-btn-danger" onclick="runStripCancel('${escAttr(r.project_slug)}', ${r.id})" ${disabled}
-                title="Run abbrechen — Done-Items bleiben">✕ Cancel</button>
-      </span>
+      <span class="run-actions">${actionsHtml}</span>
     </div>
   `;
 }
