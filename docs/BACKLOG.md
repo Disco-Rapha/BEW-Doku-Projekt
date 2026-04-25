@@ -1088,3 +1088,48 @@ Heisst: Word- und PowerPoint-Dateien sind heute fuer Disco unsichtbar.
 **Auswirkung auf bestehende Projekte:** keine breaking changes. Bestand-Files mit `file_kind='other'` werden bei naechstem Routing-Run als `docx` / `pptx` neu klassifiziert.
 
 User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir total vergessen :D Die muessen auch noch in die Pipeline."*
+
+---
+
+## Extraction nur auf kanonische Dateien (Prioritaet: hoch)
+
+Heute extrahiert die Pipeline **alle** aktiven `agent_sources`-Eintraege —
+auch Duplikate (gleicher Hash, anderer Pfad), abgeloeste Vorgaenger
+(`replaces`/`replaced-by`-Relation) und Format-Konversionen
+(`format-conversion-of`). Das verschwendet Cost und macht den Suchindex
+mehrdeutig.
+
+**Soll-Zustand:** Extraction laeuft nur auf den **kanonischen** Repraesentanten.
+Disco weiss das und der Routing-Flow filtert entsprechend.
+
+### Was "kanonisch" konkret heisst
+
+Eine Datei ist kanonisch, wenn fuer ihren Inhalt kein anderer Eintrag
+in `agent_source_relations` mit groesserer "Praeferenz" existiert:
+
+- **NICHT** `duplicate-of` einer anderen aktiven Datei (dann ist die andere kanonisch)
+- **NICHT** `replaces`-Source eines anderen Eintrags (dann ist die neuere kanonisch)
+- **NICHT** `format-conversion-of` (z.B. PDF aus DWG konvertiert — wenn die Original-DWG da ist, ist das DWG kanonisch)
+- Status `active`
+
+### Was zu tun ist
+
+1. **Routing-Filter**: Im `extraction_routing_decision`-Item-Loader Sub-Query
+   gegen `agent_source_relations` einbauen, nicht-kanonische Files skippen.
+2. **System-Prompt**: Disco-Regel dass er bei Pipeline-Vorschlaegen auf die
+   Kanonik-Logik hinweist ("ich extrahiere nur die kanonischen N Dateien
+   von M registrierten").
+3. **Heuristik fuer "neueste Revision"**: bei `replaces`-Ketten den Endknoten
+   nehmen. Bei `format-conversion-of` Mehrfachkanten klar definieren
+   (z.B. DWG-Original > PDF-Plot > JPEG-Screenshot).
+4. **Pipeline-Vollstaendigkeits-Sicht** (V1, anderer Backlog-Eintrag) muss
+   das beruecksichtigen: "registriert" vs "kanonisch" vs "extrahiert".
+
+### Auswirkung
+
+- Spart Cost (Schaetzung: 20-40% bei Projekten mit Revisions-Historie)
+- Sauberer Suchindex (keine doppelten Treffer auf identischem Inhalt)
+- Reasoning-Sicherheit (keine Verwirrung welche Version "die richtige" ist)
+
+User-Quote (2026-04-25): *"Extraction machen wir nur auf kanonische
+dateien. Das sollte disco wissen."*
