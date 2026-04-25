@@ -2236,13 +2236,13 @@ function renderImage(url) {
 }
 
 // ----- DXF / DWG via dxf-viewer ----------------------------------------
-// Lib: vagran/dxf-viewer (npm: dxf-viewer)
-// Lizenz: MPL-2.0 (Mozilla Public License 2.0) — fuer reine
-//   Embedded-via-CDN-Nutzung problemlos, nur Aenderungen an der Lib
-//   selbst muessten dann unter MPL veroeffentlicht werden. Wir nutzen
-//   sie ungemodded.
-// Lazy-Import von esm.sh, damit Three.js + dxf-viewer (~600 KB) nur
-// geladen werden wenn ein DWG/DXF tatsaechlich geoeffnet wird.
+// Lib: vagran/dxf-viewer (npm: dxf-viewer@1.0.47), inkl. three.js inline
+// Lizenz: MPL-2.0 (Mozilla Public License 2.0) — Lib wird ungemodded
+//   ausgeliefert, damit ist die MPL-Pflicht erfuellt.
+// Bundle: lokal unter /static/lib/dxf-viewer.bundle.mjs (~1,2 MB).
+//   Bewusst KEIN externes CDN — siehe docs/network-egress-policy.md.
+// Lazy-Import, damit nur geladen wenn ein DWG/DXF tatsaechlich geoeffnet
+// wird.
 state._dxfViewer = null;
 
 async function renderDxfFile(path, ext) {
@@ -2271,7 +2271,7 @@ async function renderDxfFile(path, ext) {
   // dxf-viewer von esm.sh laden (MIT, vagran/dxf-viewer)
   let DxfViewer;
   try {
-    const mod = await import('https://esm.sh/dxf-viewer@1.0.47?bundle');
+    const mod = await import('/static/lib/dxf-viewer.bundle.mjs');
     DxfViewer = mod.DxfViewer;
     if (!DxfViewer) throw new Error('DxfViewer-Export nicht gefunden');
   } catch (e) {

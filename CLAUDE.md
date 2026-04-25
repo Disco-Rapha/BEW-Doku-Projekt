@@ -413,6 +413,18 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
    realistische Tests kopieren wir bei Bedarf ein echtes Prod-Projekt
    per `scripts/mirror_prod_project.sh <slug>` ins Dev-Workspace.
 
+9. **Network-Egress strikt kontrolliert (gilt ab 2026-04-25).** Disco
+   ist lokal-first. Externe Verbindungen gibt es ausschliesslich zu
+   einer abschliessend aufgelisteten Menge (Azure Foundry / Sweden
+   Central, Azure DI / Sweden Central) — siehe
+   `docs/network-egress-policy.md`. **Neue externe Verbindungen
+   (Cloud-API, NPM-Registry, CDN, Tracker, Telemetrie) werden vor der
+   Implementierung im Chat begruendet und genehmigt**, dann in der
+   Egress-Tabelle ergaenzt. Insbesondere in Prod werden keine neuen
+   Verbindungen ungeplant hinzugefuegt — auch nicht "nur kurz fuer
+   einen Test". JS-Libraries werden lokal gebundlet (siehe
+   `src/disco/api/static/lib/`), kein CDN-Direkt-Import.
+
 ## Häufige Kommandos
 
 ```bash
