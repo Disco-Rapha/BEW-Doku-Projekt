@@ -924,6 +924,8 @@ _MIME_BY_EXT = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".svg": "image/svg+xml",
+    ".dxf": "image/vnd.dxf",
+    ".dwg": "image/vnd.dwg",
 }
 
 
@@ -952,6 +954,97 @@ async def api_workspace_file(slug: str, path: str):
             status_code=413,
         )
     return FileResponse(str(target), media_type=mime, filename=target.name)
+
+
+# ---------------------------------------------------------------------------
+# DXF-Bereitstellung fuer den DWG-Viewer im UI
+# ---------------------------------------------------------------------------
+#
+# Liefert eine Datei garantiert als DXF aus.
+#   - .dxf → direkt
+#   - .dwg → via ezdxf.addons.odafc + ODA File Converter, gecached
+#            unter <projekt>/.disco/dxf-cache/<sha256>.dxf
+#
+# Der Viewer (dxf-viewer, MIT, https://github.com/vagran/dxf-viewer) liest
+# DXF — DWG-Konvertierung passiert hier serverseitig, transparent fuer
+# das Frontend.
+
+
+import hashlib
+
+_DXF_CACHE_SUBDIR = ".disco/dxf-cache"
+
+
+def _dxf_cache_path(root: Path, source: Path) -> Path:
+    """Cache-Pfad fuer eine DWG-Datei. Hash inkl. mtime → automatischer
+    Cache-Bust bei Datei-Aenderung."""
+    stat = source.stat()
+    h = hashlib.sha256()
+    h.update(str(source).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(stat.st_size).encode("utf-8"))
+    h.update(b"|")
+    h.update(str(int(stat.st_mtime)).encode("utf-8"))
+    digest = h.hexdigest()[:32]
+    return root / _DXF_CACHE_SUBDIR / f"{digest}.dxf"
+
+
+@app.get("/api/workspace/projects/{slug}/file/dxf")
+async def api_workspace_file_as_dxf(slug: str, path: str):
+    """Liefert die Datei als DXF aus.
+
+    .dxf wird direkt durchgereicht; .dwg wird via ezdxf.addons.odafc
+    nach DXF konvertiert (Cache unter `.disco/dxf-cache/`).
+    Voraussetzung fuer DWG: ODA File Converter installiert.
+    """
+    from fastapi.responses import FileResponse, PlainTextResponse
+
+    try:
+        root = _resolve_project_root(slug)
+        target = _safe_path_in_root(root, path)
+    except (ValueError, FileNotFoundError) as exc:
+        return PlainTextResponse(str(exc), status_code=404)
+
+    suffix = target.suffix.lower()
+    if suffix == ".dxf":
+        return FileResponse(
+            str(target),
+            media_type="image/vnd.dxf",
+            filename=target.name,
+        )
+
+    if suffix != ".dwg":
+        return PlainTextResponse(
+            f"Format {suffix!r} kann nicht als DXF geliefert werden.",
+            status_code=415,
+        )
+
+    cache_path = _dxf_cache_path(root, target)
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        from disco.docs._dwg_libredwg import (
+            LibreDwgNotInstalled,
+            convert_dwg_to_dxf,
+        )
+        try:
+            convert_dwg_to_dxf(target, cache_path)
+        except LibreDwgNotInstalled as exc:
+            return PlainTextResponse(
+                f"libredwg ist nicht installiert. {exc}",
+                status_code=500,
+            )
+        except Exception as exc:
+            return PlainTextResponse(
+                f"DWG-Konvertierung via libredwg fehlgeschlagen. "
+                f"Siehe docs/dwg-setup.md. Original-Fehler: {exc}",
+                status_code=500,
+            )
+
+    return FileResponse(
+        str(cache_path),
+        media_type="image/vnd.dxf",
+        filename=target.stem + ".dxf",
+    )
 
 
 _DB_CHOICES = {"workspace", "datastore"}
@@ -1324,22 +1417,39 @@ async def api_run_pause(slug: str, run_id: int):
     return _run_info_to_dict(run)
 
 
+_RECENT_FINISHED_WINDOW_MIN = 15  # Minuten — done/failed/cancelled-Runs in
+                                  # diesem Fenster landen mit im Strip, damit
+                                  # schnelle Runs (<3s) durchs Polling-Raster
+                                  # nicht durchfallen.
+
+
 @app.get("/api/workspace/active-runs")
 async def api_active_runs():
-    """Alle aktiven Runs (running/paused) projekt-uebergreifend.
+    """Alle aktiven + kuerzlich beendete Runs projekt-uebergreifend.
 
-    Versorgt den Run-Streifen im Chat-Header. 3-Sekunden-Polling-freundlich:
-    pro Projekt-DB eine kurze Query auf `agent_flow_runs WHERE status IN (...)`.
-    Projekte ohne workspace.db oder unlesbare DBs werden still uebersprungen.
+    - `runs`: aktive Runs (running/paused).
+    - `recent_finished`: Runs mit Endstatus (done/failed/cancelled) aus den
+      letzten 15 Minuten. Verhindert dass schnelle Runs durchs 3-Sekunden-
+      Polling-Raster fallen, ohne dass das Frontend die Status-Detektion
+      aufwendiger machen muss.
+
+    Versorgt den Run-Streifen im Chat-Header.
     """
+    from datetime import datetime, timedelta, timezone
     from ..flows import service as flow_service
     from ..workspace import list_workspace_projects
 
     runs_out: list[dict] = []
+    recent_finished_out: list[dict] = []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=_RECENT_FINISHED_WINDOW_MIN)
+    cutoff_iso = cutoff.isoformat()
+
     try:
         projects = list_workspace_projects()
     except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"Projekt-Liste: {exc}", "runs": [], "total": 0}
+        return {"error": f"Projekt-Liste: {exc}", "runs": [], "total": 0,
+                "recent_finished": []}
 
     for proj in projects:
         if not proj.get("has_workspace_db"):
@@ -1349,9 +1459,13 @@ async def api_active_runs():
         try:
             running = flow_service.list_runs(project_root, status="running", limit=50)
             paused = flow_service.list_runs(project_root, status="paused", limit=50)
+            done_recent = flow_service.list_runs(project_root, status="done", limit=30)
+            failed_recent = flow_service.list_runs(project_root, status="failed", limit=30)
+            cancelled_recent = flow_service.list_runs(project_root, status="cancelled", limit=30)
         except Exception:
             # Projekt-DB nicht lesbar (z.B. Migrationen fehlen) — skip
             continue
+
         for run in [*running, *paused]:
             runs_out.append({
                 **_run_info_to_dict(run),
@@ -1359,9 +1473,33 @@ async def api_active_runs():
                 "project_name": proj.get("name") or slug,
             })
 
+        for run in [*done_recent, *failed_recent, *cancelled_recent]:
+            d = _run_info_to_dict(run)
+            ended = d.get("finished_at") or d.get("created_at") or ""
+            # Filter aufs Zeitfenster (DB-Format: 'YYYY-MM-DD HH:MM:SS' UTC)
+            ended_norm = ended.replace(" ", "T") if ended else ""
+            if ended_norm and not ended_norm.endswith("+00:00") and not ended_norm.endswith("Z"):
+                ended_norm = ended_norm + "+00:00"
+            if ended_norm < cutoff_iso:
+                continue
+            recent_finished_out.append({
+                **d,
+                "project_slug": slug,
+                "project_name": proj.get("name") or slug,
+            })
+
     # Neueste zuerst (ueber Projekte hinweg)
     runs_out.sort(key=lambda r: (r.get("started_at") or r.get("created_at") or ""), reverse=True)
-    return {"runs": runs_out, "total": len(runs_out)}
+    recent_finished_out.sort(
+        key=lambda r: (r.get("finished_at") or r.get("created_at") or ""),
+        reverse=True,
+    )
+    return {
+        "runs": runs_out,
+        "total": len(runs_out),
+        "recent_finished": recent_finished_out,
+        "recent_finished_window_min": _RECENT_FINISHED_WINDOW_MIN,
+    }
 
 
 @app.post("/api/workspace/projects/{slug}/runs/{run_id}/cancel")

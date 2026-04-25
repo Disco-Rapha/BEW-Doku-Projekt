@@ -120,19 +120,52 @@ das Token-Limit und der Turn crasht. `pdf_markdown_read` nutzt
 standardmaessig eine 50-KB-Kappung und setzt `truncated=true`, um
 das zu verhindern.
 
-#### Excel/CSV — Struktur + IMMER DB-Import bei Lookup-Tabellen
+#### Excel/CSV — Default: IMMER importieren
+
+Excel/CSV in `context/` sollen automatisch als SQL-Tabellen verfuegbar
+sein, weil sie typischerweise Lookup-Daten sind (DCC-Listen, KKS-Hierar-
+chien, Norm-Matrizen). Heuristik bewusst hart:
 
 ```text
 xlsx_inspect({"path": "context/<datei>.xlsx"})
 ```
 
-Wenn es eine Lookup-Tabelle ist (klare Spalten, strukturierte Daten):
-- **Direkt importieren** (nicht nur vorschlagen), Zieltabelle
-  `context_<sprechender_name>`.
-- Pro Sheet einzeln importieren wenn die Sheets verschiedene
-  Themen abdecken.
-- Nach dem Import: `sqlite_query` mit `LIMIT 5` um dem Nutzer
-  eine Stichprobe zu zeigen.
+**Standard:** importieren, ohne Rueckfrage. Zieltabelle:
+
+- bei einem Sheet:    `context_<file_slug>`
+- bei mehreren Sheets: `context_<file_slug>__<sheet_slug>`
+
+(Slug = lowercase, Sonderzeichen → `_`, max 50 Zeichen.)
+
+```text
+import_xlsx_to_table({
+  "path": "context/<datei>.xlsx",
+  "sheet": "<Sheet-Name oder leer>",
+  "table": "context_<sprechender_name>"
+})
+```
+
+**Abbruch + Rueckfrage NUR bei:**
+
+- Mehrfach-Header (Zeile 1 UND Zeile 2 sehen beide nach Header aus)
+- Merged Cells in der Header-Zeile
+- Pivot-Layout (Spalten = Kategorien, Zeilen = Werte)
+- Weniger als 3 Datenzeilen (Schema unklar)
+
+Bei Abbruch: kurz beschreiben was Du gesehen hast, und den Nutzer
+fragen, ob die Datei trotzdem importiert werden soll (z.B. "alles als
+TEXT in eine Spalte") — oder ob sie nur als Markdown-Inhalt indiziert
+werden soll.
+
+**Nach dem Import:**
+- `sqlite_query` mit `LIMIT 5` als Stichprobe an den Nutzer.
+- Manifest-Eintrag pflegen (siehe naechster Abschnitt) — **mit
+  Tabellen-Name + Spalten + Zeilenanzahl**, damit spaetere Flows die
+  Lookup-Tabelle direkt finden.
+
+**Bei Hash-Aenderung (Update einer bestehenden context-Excel):**
+Alte Tabelle DROP + neu CREATE. Manifest-Eintrag aktualisieren. Damit
+DCC-Listen-Updates etc. sauber durchlaufen.
 
 #### Markdown/TXT (< 50 KB)
 
@@ -216,7 +249,9 @@ anfuegen (append):
 - **Projektziel-Bezug:** <1 Satz>
 - **Detail-Summary:** .disco/context-summaries/<datei>.md
 - **DI-Extrakt:** .disco/context-extracts/<datei>.md (bei PDFs)
-- **In DB:** <context_<name> (N Zeilen)> (bei Lookup-Tabellen)
+- **Lookup-Tabelle:** `context_<name>` (N Zeilen × M Spalten:
+  `col_x`, `col_y`, ...) (bei Excel/CSV — Verwendung in Flows
+  per JOIN auf eine der Spalten)
 - **Stand:** <YYYY-MM-DD>
 ```
 

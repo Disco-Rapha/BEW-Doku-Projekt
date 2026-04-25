@@ -974,3 +974,79 @@ Kosmetisch, nicht funktional.
 ---
 
 *Letzte Aktualisierung: 2026-04-22*
+
+---
+
+## Pipeline-Vollstaendigkeits-Sicht (Prioritaet: hoch)
+
+Heute zerfaellt der Pipeline-Status auf vier Tabellen:
+
+- `ds.agent_sources` — registriert
+- `work_extraction_routing` — Engine entschieden
+- `ds.agent_doc_markdown` — extrahiert
+- `ds.agent_search_docs` — im FTS-Index
+
+Der User hat keinen einfachen Weg zu sehen "ist alles durchgelaufen?".
+Bei vielen Files (>100) wird das schnell unuebersichtlich.
+
+**Drei Ausbaustufen, kann inkrementell:**
+
+1. **Status-View pro Datei (V1, niedriger Aufwand)** — eine SQL-View
+   ueber die vier Tabellen, zeigt pro Datei vier Boolean-Spalten:
+   ```
+   rel_path | registered | routed | extracted | indexed | last_step_at
+   ```
+   Disco kann das per `sqlite_query` jederzeit zeigen, UI-seitig als
+   Ampel-Spalte in der Sidebar denkbar. Genau bei kleinen-bis-mittleren
+   Projekten ausreichend.
+
+2. **Lifecycle-Tabelle (V2, wenn V1 zu viele LEFT JOINs hat)** — eine
+   zentrale `agent_pipeline_status` mit einer Zeile pro Datei, Status
+   explizit gespeichert. Plus: bessere Filter wie "alle deren
+   Extraction aelter als die letzte Source-Hash-Aenderung". Kostet
+   Migration + Sync-Logik in jedem Pipeline-Schritt.
+
+3. **Hintergrund-Sync (V3, optional)** — `sources_register` triggert
+   automatisch `routing` + `extraction` + `indexing` als Flow-Chain.
+   "Self-healing" Pipeline. Caveat: weniger Kontrolle, hoehere Cloud-
+   Kosten ohne explizites Go vom User.
+
+**Empfehlung:** mit (1) starten. Bei Bedarf (2) drauflegen, (3) als
+opt-in fuer Standard-Workflows.
+
+User-Quote (2026-04-25): *"Wir werden uns darüber Gedanken machen
+müssen, wie wir wissen ob alle dateien registriert, geroutet,
+extrahiert und indexiert sind. Ich weiß nicht ob das demnächst
+einfach eine Hintergrundaktivität werden sollte, oder ob es ein
+Ampel-System gibt oder sowas."*
+
+---
+
+## Flow-UI im Chat-Fenster (DONE 2026-04-25)
+
+*Erledigt: Commits 829fd65 + 6200002 + 0e04dc9 + 77f71ea. Alle vier Punkte umgesetzt — auffaelligeres Strip, finished-Runs bleiben mit Status-Badge + X-Button, Klick auf ganze Zeile, Runs im Flow-Detail nach oben. Plus Bonus: schnelle Runs (<3s) per recent_finished-API eingefangen, done-with-failures als Pseudo-Status (orange).*
+
+Beobachtungen aus dem Pipeline-Fulltest 2026-04-25 — kleine UX-
+Verbesserungen am Run-Strip oben im Chat:
+
+1. **Auffaelligkeit erhoehen** — die Run-Indikatoren oben im Chat-
+   Fenster sind heute leise. Wenn ein Flow laeuft, soll man das mit
+   einem Blick sehen (Hintergrund, Animation, Farbe).
+
+2. **Nach Ende sichtbar bleiben** — heute verschwindet ein Run aus
+   dem Strip, sobald er fertig ist. Soll: mit finalem Status (done /
+   failed / cancelled) **oben stehen bleiben, bis der User es weg-
+   klickt** (X-Button). So merkt man auch ueber Lange Pausen, dass
+   ein Flow durchgelaufen ist.
+
+3. **Klick auf Run-Indikator** soll:
+   - falls man nicht im richtigen Projekt ist: ins Projekt des
+     Flows springen, dann
+   - den Run selbst im Viewer oeffnen (gleiche View wie wenn man
+     im Flow → Liste-aller-Runs auf den Run klickt).
+
+4. **Run-Liste im Viewer (Flow-Detailansicht)** — die Runs eines
+   Flows sollen **oben** stehen (neueste zuerst), nicht unten am Ende
+   der Seite. Aktuell muss man zum Flow-Detailview scrollen.
+
+Quelle: User-Feedback waehrend Pipeline-Fulltest 2026-04-25.

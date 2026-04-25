@@ -384,7 +384,7 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
         "Wiederholung auf unveraendertem Stand liefert 0 Delta. Ordner '_meta' "
         "wird ignoriert. Nach dem Scan wird agent_pdf_inventory (Input der "
         "PDF-Pipeline) automatisch synchronisiert — damit laufen Context-PDFs "
-        "durch *dieselben* Flows (pdf_routing_decision, pdf_to_markdown) wie "
+        "durch *dieselben* Flows (extraction_routing_decision, extraction) wie "
         "Source-PDFs, nur mit kind='context'."
     ),
     parameters={
@@ -587,8 +587,8 @@ def _build_sources_hint(inventory_stats: dict[str, Any]) -> str:
             base + " "
             f"PDF-Inventar: {total} Datei(en) bereit fuer die Pipeline "
             "(source + context zusammen). Naechster Schritt: "
-            "`flow_run pdf_routing_decision` starten, danach "
-            "`flow_run pdf_to_markdown` — dem Benutzer aktiv vorschlagen, "
+            "`flow_run extraction_routing_decision` starten, danach "
+            "`flow_run extraction` — dem Benutzer aktiv vorschlagen, "
             "nicht offen 'was moechtest Du als Naechstes' fragen."
         )
     return (
