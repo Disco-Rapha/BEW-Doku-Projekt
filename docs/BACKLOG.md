@@ -974,3 +974,48 @@ Kosmetisch, nicht funktional.
 ---
 
 *Letzte Aktualisierung: 2026-04-22*
+
+---
+
+## Pipeline-Vollstaendigkeits-Sicht (Prioritaet: hoch)
+
+Heute zerfaellt der Pipeline-Status auf vier Tabellen:
+
+- `ds.agent_sources` — registriert
+- `work_extraction_routing` — Engine entschieden
+- `ds.agent_doc_markdown` — extrahiert
+- `ds.agent_search_docs` — im FTS-Index
+
+Der User hat keinen einfachen Weg zu sehen "ist alles durchgelaufen?".
+Bei vielen Files (>100) wird das schnell unuebersichtlich.
+
+**Drei Ausbaustufen, kann inkrementell:**
+
+1. **Status-View pro Datei (V1, niedriger Aufwand)** — eine SQL-View
+   ueber die vier Tabellen, zeigt pro Datei vier Boolean-Spalten:
+   ```
+   rel_path | registered | routed | extracted | indexed | last_step_at
+   ```
+   Disco kann das per `sqlite_query` jederzeit zeigen, UI-seitig als
+   Ampel-Spalte in der Sidebar denkbar. Genau bei kleinen-bis-mittleren
+   Projekten ausreichend.
+
+2. **Lifecycle-Tabelle (V2, wenn V1 zu viele LEFT JOINs hat)** — eine
+   zentrale `agent_pipeline_status` mit einer Zeile pro Datei, Status
+   explizit gespeichert. Plus: bessere Filter wie "alle deren
+   Extraction aelter als die letzte Source-Hash-Aenderung". Kostet
+   Migration + Sync-Logik in jedem Pipeline-Schritt.
+
+3. **Hintergrund-Sync (V3, optional)** — `sources_register` triggert
+   automatisch `routing` + `extraction` + `indexing` als Flow-Chain.
+   "Self-healing" Pipeline. Caveat: weniger Kontrolle, hoehere Cloud-
+   Kosten ohne explizites Go vom User.
+
+**Empfehlung:** mit (1) starten. Bei Bedarf (2) drauflegen, (3) als
+opt-in fuer Standard-Workflows.
+
+User-Quote (2026-04-25): *"Wir werden uns darüber Gedanken machen
+müssen, wie wir wissen ob alle dateien registriert, geroutet,
+extrahiert und indexiert sind. Ich weiß nicht ob das demnächst
+einfach eine Hintergrundaktivität werden sollte, oder ob es ein
+Ampel-System gibt oder sowas."*

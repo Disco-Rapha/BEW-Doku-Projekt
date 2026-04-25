@@ -116,9 +116,14 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
             f"Erwartet {sorted(all_known_engines())}."
         )
 
-    abs_path = (run.project_root / rel_path).resolve()
+    # rel_path in agent_sources ist relativ zum Rollen-Wurzelordner
+    # (sources/ bzw. context/), NICHT zum Projekt-Root. Praefix
+    # entsprechend der file_role voranstellen.
+    role_prefix = "context" if file_role == "context" else "sources"
+    fs_rel_path = Path(role_prefix) / rel_path
+    abs_path = (run.project_root / fs_rel_path).resolve()
     if not abs_path.is_file():
-        raise FileNotFoundError(f"Datei nicht gefunden: {rel_path}")
+        raise FileNotFoundError(f"Datei nicht gefunden: {fs_rel_path}")
 
     t0 = time.monotonic()
     md_body, meta = dispatch_extract(abs_path, engine)

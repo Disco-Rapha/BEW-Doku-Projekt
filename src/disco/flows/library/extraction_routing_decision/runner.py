@@ -94,9 +94,14 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
     rel_path = str(row["rel_path"])
     file_role = str(row.get("file_role") or "source")
 
-    abs_path = (run.project_root / rel_path).resolve()
+    # rel_path in agent_sources ist relativ zum Rollen-Wurzelordner
+    # (sources/ bzw. context/), NICHT zum Projekt-Root. Praefix
+    # entsprechend der file_role voranstellen.
+    role_prefix = "context" if file_role == "context" else "sources"
+    fs_rel_path = Path(role_prefix) / rel_path
+    abs_path = (run.project_root / fs_rel_path).resolve()
     if not abs_path.is_file():
-        raise FileNotFoundError(f"Datei nicht gefunden: {rel_path}")
+        raise FileNotFoundError(f"Datei nicht gefunden: {fs_rel_path}")
 
     t0 = time.monotonic()
     decision = decide(rel_path=rel_path, abs_path=abs_path, file_role=file_role)
