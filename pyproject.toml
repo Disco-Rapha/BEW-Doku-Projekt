@@ -38,6 +38,7 @@ dependencies = [
     # Lokale Schaetzung neuer Messages; Ground-Truth kommt weiter aus
     # usage.input_tokens der Foundry-Response.
     "tiktoken>=0.7",
+    "ezdxf>=1.4.3",
 ]
 
 [build-system]

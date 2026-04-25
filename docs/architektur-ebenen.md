@@ -303,7 +303,7 @@ Kompakte Übersicht, wer wie an welche Datenebene kommt:
 |---|---|---|---|
 | 0 — Source-Connector | nein (Connector-Code, heute: User-Hand) | indirekt über Ebene 1 | Connector-Provider |
 | 1 — Provenance | nein (nur über Registry-Tools) | `sqlite_query` über `ds.*` | Source-/Enrichment-Provider, Registry-Tools |
-| 2 — Content | nein (nur über Pipelines) | `pdf_markdown_read`, `search_index`, `ds.*` | Flows (`pdf_to_markdown`, `build_search_index`) |
+| 2 — Content | nein (nur über Pipelines) | `doc_markdown_read`, `search_index`, `ds.*` | Flows (`extraction`, `build_search_index`) |
 | 3 — Knowledge / Workspace | `sqlite_write` im Namespace + `fs_write` für `exports/` | `sqlite_query`, `fs_read` | Agent + Flows |
 
 ---
@@ -319,9 +319,10 @@ Referenzblock:
    `work_*`/`agent_*`/`context_*`-Namespace). Ebene 0 ist heute
    passiv (User-Drop), bleibt aber konzeptuell präsent.
 2. **Binaries nicht in den Chat-Kontext lesen.** Inhalt von
-   registrierten Dateien kommt aus Ebene 2 (`pdf_markdown_read`,
-   `search_index`), nicht aus `fs_read` auf `.pdf`. `fs_read` ist für
-   Memory-, Manifest-, Script- und Textdateien.
+   registrierten Dateien kommt aus Ebene 2 (`doc_markdown_read`,
+   `search_index`), nicht aus `fs_read` auf `.pdf`/`.xlsx`/`.dwg`/
+   `.jpg`. `fs_read` ist für Memory-, Manifest-, Script- und
+   Textdateien.
 3. **Provenance nicht mit SQL verbiegen.** Einträge in
    `ds.agent_sources`, `ds.agent_source_metadata`,
    `ds.agent_source_relations` ändert der Agent **nie** direkt — nur
@@ -417,7 +418,7 @@ OS-State und Datenebenen migrieren über getrennte Schemata:
 
 # Teil C — Stand und Roadmap
 
-## Stand 2026-04-25 (Stufe 1 erreicht)
+## Stand 2026-04-25 (Stufe 1 erreicht + Pipeline-Generalisierung)
 
 - DB-Split `datastore.db` ↔ `workspace.db` umgesetzt, ATTACH-Setup im
   Agent-Loop (`ds.*`-Präfix für read-only-Zugriff auf Ebene 1+2).
@@ -425,9 +426,20 @@ OS-State und Datenebenen migrieren über getrennte Schemata:
   `datastore.db`, Reasoning-Tabellen + Lifecycle-State in
   `workspace.db`.
 - FTS5-Suchindex (Phase 0 von Ebene 2) live: `build_search_index` +
-  `search_index`.
-- PDF-Pipeline (`pdf_routing_decision` + `pdf_to_markdown`) befüllt
-  Ebene 2 mit drei Engines (docling-standard / azure-di / azure-di-hr).
+  `search_index`. Alle Formate werden indiziert (PDF, MD/TXT, Excel,
+  DWG, Bild) — Excel/DWG/Bild lesen aus `agent_doc_markdown`,
+  PDF/MD/TXT vom Filesystem direkt.
+- **Generische Extraction-Pipeline** befüllt Ebene 2:
+  - `extraction_routing_decision` (Engine pro Datei)
+  - `extraction` (Engine-Dispatch nach `disco.docs.*`)
+  - Output: `agent_doc_markdown` + `agent_doc_unit_offsets`
+  - Sieben Engines aktiv: pdf-azure-di, pdf-azure-di-hr,
+    pdf-docling-standard, excel-openpyxl, excel-table-import,
+    dwg-ezdxf-local, image-gpt5-vision.
+  - Provenance-Header pro Markdown-Output (rel_path + folder
+    + extracted_at).
+  - Bei `excel-table-import` werden Sheets zusätzlich als
+    SQL-Tabellen in `workspace.db` angelegt (`context_<slug>`).
 - Connector-Schicht (Ebene 0) **konzeptuell** dokumentiert, aber
   technisch trivial: einziger Provider ist `filesystem-drop`.
 

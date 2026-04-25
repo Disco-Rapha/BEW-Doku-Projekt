@@ -44,7 +44,28 @@ logger = logging.getLogger(__name__)
 INDEXER_VERSION = "v1"
 
 # Dateitypen, die wir indizieren. Alles andere wird still uebersprungen.
-INDEXABLE_EXTENSIONS = {".pdf", ".md", ".markdown", ".txt"}
+# - pdf/md/markdown/txt: direkter Filesystem-Pfad (Legacy-Logik via pypdf)
+# - xlsx/dwg/jpg/...: aus `agent_doc_markdown` lesen (extraction-Flow muss
+#   vorher gelaufen sein, sonst wird die Datei als 'no-extract' geskippt)
+INDEXABLE_EXTENSIONS = {
+    # PDF + Memory-Dateien (Filesystem-direkt)
+    ".pdf", ".md", ".markdown", ".txt",
+    # Excel
+    ".xlsx", ".xlsm", ".xls",
+    # CAD
+    ".dwg", ".dxf",
+    # Bilder
+    ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".gif",
+}
+
+# Welche Extensions liest der Indexer aus agent_doc_markdown statt direkt
+# vom Filesystem? Faustregel: alles, was die Extraction-Pipeline behandelt
+# (ausser PDF — fuer PDF gibt es heute noch den pypdf-Fallback).
+_FROM_DOC_MARKDOWN_EXTS = {
+    ".xlsx", ".xlsm", ".xls",
+    ".dwg", ".dxf",
+    ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".gif",
+}
 
 # Oberes Limit pro Seite — wenn ein PDF eine extrem lange Seite hat
 # (z.B. grosser Anhang ohne Seitenumbruch), schuetzt uns das vor
@@ -586,14 +607,84 @@ def _hash_and_size(path: Path) -> tuple[str, int]:
 
 
 def _extract_chunks(path: Path, ext: str) -> list[dict[str, Any]]:
-    """Liefert eine Liste {page_num, heading, text} pro Chunk."""
+    """Liefert eine Liste {page_num, heading, text} pro Chunk.
+
+    Pfade:
+      - Excel/DWG/Bild → aus agent_doc_markdown (extraction-Flow erforderlich)
+      - PDF → pypdf-Fallback (Filesystem-direkt)
+      - MD/TXT → direkt aus Datei
+    """
+    ext_dot = "." + ext.lstrip(".")
+    if ext_dot in _FROM_DOC_MARKDOWN_EXTS:
+        chunks = _extract_chunks_from_doc_markdown(path)
+        if chunks is None:
+            raise ValueError(
+                f"Datei nicht in agent_doc_markdown: {path.name}. "
+                f"Bitte zuerst den Flow `extraction` laufen lassen."
+            )
+        return chunks
     if ext == "pdf":
+        # PDF nutzt heute weiterhin pypdf direkt — Migration auf
+        # agent_doc_markdown ist Folge-Schritt.
         return _extract_pdf_chunks(path)
     if ext in {"md", "markdown"}:
         return _extract_markdown_chunks(path)
     if ext == "txt":
         return _extract_text_chunks(path)
     raise ValueError(f"Nicht unterstuetzte Endung: .{ext}")
+
+
+def _extract_chunks_from_doc_markdown(path: Path) -> list[dict[str, Any]] | None:
+    """Liest Chunks aus `agent_doc_markdown` (datastore.db) via rel_path.
+
+    Pro unit_offset → ein Chunk. Heading aus unit_label.
+    Returns None, wenn die Datei nicht in agent_doc_markdown ist.
+    """
+    rel = _rel_to_data(path)
+    from ..context import get_datastore_db_path
+
+    db_path = get_datastore_db_path()
+    if db_path is None or not db_path.exists():
+        return None
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(str(db_path))
+    try:
+        conn.row_factory = _sqlite3.Row
+        doc = conn.execute(
+            "SELECT file_id, md_content, n_units FROM agent_doc_markdown WHERE rel_path = ?",
+            (rel,),
+        ).fetchone()
+        if not doc:
+            return None
+        md = doc["md_content"] or ""
+        offsets = conn.execute(
+            "SELECT unit_num, unit_label, char_start, char_end "
+            "FROM agent_doc_unit_offsets "
+            "WHERE file_id = ? ORDER BY unit_num",
+            (doc["file_id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    chunks: list[dict[str, Any]] = []
+    if offsets:
+        for o in offsets:
+            unit_num = int(o["unit_num"])
+            unit_label = o["unit_label"] or f"u{unit_num}"
+            text = md[int(o["char_start"]):int(o["char_end"])].strip()
+            chunks.append({
+                "page_num": unit_num,
+                "heading": unit_label,
+                "text": text,
+            })
+    else:
+        # Kein Unit-Index → ganzes Dokument als ein Chunk
+        chunks.append({
+            "page_num": 1,
+            "heading": "",
+            "text": md.strip(),
+        })
+    return chunks
 
 
 def _extract_pdf_chunks(path: Path) -> list[dict[str, Any]]:
