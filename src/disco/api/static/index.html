@@ -3183,13 +3183,17 @@ function runStripRenderRow(r, opts) {
   const total = r.total_items || 0;
   const done = r.done_items || 0;
   const failed = r.failed_items || 0;
+  const skipped = r.skipped_items || 0;
+  // Fortschritt = wie weit der Run ist, NICHT wieviele erfolgreich.
+  // Done + Failed + Skipped sind alle "verarbeitet" — nur Pending fehlt.
+  const processed = done + failed + skipped;
   // Pseudo-Status: 'done' aber failed_items > 0 → eigene visuelle Klasse.
   // Hilft, dass User Runs mit kaputten Items nicht mit "alles ok" verwechselt.
   const status = (rawStatus === 'done' && failed > 0) ? 'done-with-failures' : rawStatus;
   const labelText = (rawStatus === 'done' && failed > 0)
     ? `done · ${failed} failed`
     : rawStatus;
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
   const runtime = _runStripElapsed(r.started_at || r.created_at);
   const cost = (r.total_cost_eur || 0).toFixed(2);
   const budget = (r.config && r.config.budget_eur) ? Number(r.config.budget_eur) : null;
@@ -3205,12 +3209,11 @@ function runStripRenderRow(r, opts) {
     ? `${cost} / ${budget.toFixed(2)} €`
     : `${cost} €`;
 
-  // Failed-Counter wird nur bei AKTIVEN Runs in der Progress-Spalte gezeigt
-  // (da gibt's noch kein Status-Badge). Bei finished steht 'done · N failed'
-  // bereits als run-end-label im Header — Doppelung vermeiden.
-  const failedStr = (!isFinished && failed > 0)
-    ? `<span class="run-failed">· ${failed} failed</span>`
-    : '';
+  // Counter zeigt nur Fortschritt (verarbeitet/total). Failed-Anzahl steht
+  // entweder als Status-Badge bei finished-Runs oder waere bei aktiven
+  // Runs hier irritierend ("warum ist der Counter rot?"). Lieber sauberer
+  // Fortschrittszaehler ohne Doppelung.
+  const failedStr = '';
   const endLabel = isFinished
     ? `<span class="run-end-label">${escHtml(labelText)}</span>`
     : '';
