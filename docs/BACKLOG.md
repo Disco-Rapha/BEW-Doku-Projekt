@@ -1131,6 +1131,29 @@ in `agent_source_relations` mit groesserer "Praeferenz" existiert:
 - Sauberer Suchindex (keine doppelten Treffer auf identischem Inhalt)
 - Reasoning-Sicherheit (keine Verwirrung welche Version "die richtige" ist)
 
+### Begriffsklaerung (2026-04-26)
+
+Drei Counts pro Projekt — alle nuetzlich, leicht zu verwechseln:
+
+| Begriff | Definition | SQL |
+|---|---|---|
+| **registered** | aktive Eintraege in `agent_sources` | `COUNT(*) WHERE status='active'` |
+| **unique** / **distinct** | Anzahl eindeutiger sha256-Hashes | `COUNT(DISTINCT sha256)` |
+| **kanonisch** | bevorzugter Repraesentant nach Konsolidierung von Duplikaten + Versionen + Format-Konversionen | gefiltert ueber `agent_source_relations` |
+
+**Heute (Stand 2026-04-26):** `sources_detect_duplicates` schreibt nur
+`kind='duplicate-of'` (sha256-Gruppen). `replaces` und
+`format-conversion-of` sind im Schema vorgesehen, werden aber von keinem
+Tool gefuellt. Damit ist heute **kanonisch == unique-by-hash**, eine
+echte Konsolidierung ueber Versionen passiert nicht.
+
+Auswirkung auf den Filter: heute reicht ein Filter auf `duplicate-of`
+um den 80%-Effekt zu erreichen (siehe rea-denox: 5963 → 1883 Files,
+68% Reduktion). Sobald `replaces`/`format-conversion-of` gefuellt
+werden, wird der Filter strenger und reduziert nochmal.
+
+---
+
 User-Quote (2026-04-25): *"Extraction machen wir nur auf kanonische
 dateien. Das sollte disco wissen."*
 
