@@ -10,6 +10,13 @@ Context-Dateien sind **Arbeitsgrundlagen** — Normen, Kataloge,
 Richtlinien, Referenztabellen. Disco muss sie **inhaltlich verstehen**
 um sie bei der Arbeit gezielt nachschlagen zu koennen.
 
+**`context/` wird klein und scharf gehalten** — nur das, was zur
+konkreten Bearbeitung des Projekts wirklich gebraucht wird (anders
+als `sources/`, das gross sein darf). Wenn Du unsicher bist, ob
+eine Datei nach context/ gehoert: lieber zurueckfragen als rein-
+laden. Faustregel: prefer weniger und scharf statt mehr und unscharf.
+Spaeter nachladen ist jederzeit moeglich.
+
 ## Voraussetzung: Projektziel muss bekannt sein
 
 Bevor Du context/ analysierst, pruefe ob README.md ein Projektziel
