@@ -2052,3 +2052,140 @@ User-Quote (2026-04-27): *"Die gesamte extraction pipeline von
 registrierung bis hin zum fertigen suchindex funktioniert
 grundsetzlich, ist aber grade extrem! muehsam. Da muessen wir
 ran ..."*
+
+
+## File-Internal-Metadata bei Registrierung extrahieren (Prioritaet: hoch)
+
+**Beobachtung 2026-04-27**: PDFs, Excels, DWGs, JPEGs tragen
+**reichhaltige Metadaten in der Datei selbst** — Author, Creator-
+App, Erstell-/Aenderungsdatum, Custom-Properties (z.B. KKS-Tags
+im DWG-Schriftfeld), EXIF-GPS bei Fotos. Diese Daten sind:
+
+- **kostenlos** (lokal mit pypdf/openpyxl/ezdxf/Pillow lesbar — kein Cloud-Call)
+- **portable** (bleiben beim Kopieren erhalten — anders als FS-mtime)
+- **bleibend** (im File-Bytestream, vom Filesystem unabhaengig)
+
+**Heutige Disco-Nutzung: praktisch nichts.** Disco kennt nur
+sha256, Groesse und Pfad. Ein riesiger ungenutzter Datenkanal.
+
+### Stichprobe aus lager-halle (live, 2026-04-27)
+
+**PDF (`/Info` + XMP):**
+```
+Anleitung zur Nutzung.pdf:
+  /Author        = Anastasia Schmitke
+  /CreationDate  = 2024-11-19 09:40:35 +01:00
+  /ModDate       = 2025-01-07 12:53:15 +01:00
+  /Creator       = Microsoft® Word für Microsoft 365
+  /Producer      = Microsoft® Word für Microsoft 365
+
+BE0497 Fachbauleitererklärung.pdf:
+  /Producer      = Foxit PhantomPDF Printer 9.3.0  ← Hinweis: Print-Output
+  /PXCViewerInfo = PDF-XChange Viewer 2.5.322       ← jemand hat annotiert
+  /CreationDate  = 2021-11-19  /ModDate = 2025-11-25 ← 4 Jahre alt, kuerzlich
+                                                       editiert
+```
+
+**Excel (DocProps `core.xml`):**
+```
+U-Wert-BE0497a-BTL50200.xlsx:
+  creator        = openpyxl     ← KEIN User! Programmatisch erzeugt
+  created        = 2025-06-20   modified = 2025-06-20
+```
+
+**DWG (`$HEADER`-Section):**
+```
+BE0497-5-OP-LA-XX-00100.dwg:
+  $ACADVER       = AC1024       ← AutoCAD 2010-Format
+  $TDCREATE      = JulianDate   $TDUPDATE = JulianDate
+  $DWGCODEPAGE   = ANSI_1252
+```
+
+**JPEG (EXIF — bei Fotos voll, bei Skizzen leer):**
+```
+1b.jpg: nur Resolution-Tags  (Skizze, kein Foto)
+echtes-Baustellenfoto.jpg: Make, Model, DateTime, GPSLatitude,
+                            GPSLongitude, Orientation, ISO, ...
+```
+
+### Warum das wichtig ist (Use-Cases)
+
+| Metadatum | Use-Case | Welcher anderer Backlog-Eintrag profitiert |
+|---|---|---|
+| `/ModDate` ueber Stamm-Stem | Versions-Erkennung ohne Filename-Heuristik | "replaces / format-conversion-of" Stufe 4 |
+| `/Producer = "AutoCAD"` | DWG → PDF Plot erkennen | "format-conversion-of" Stufe 2 |
+| `/CreationDate` (alt) | Lifecycle-Score (alte Dokumente weniger relevant) | "Relevance-Score / Document-Scoring" |
+| Excel `creator = openpyxl` | Auto-Erkennung Begleit-Excel vs. User-Excel | "Pipeline-UX" Routing |
+| DWG `$ACADVER` | LibreDWG-Kompatibilitaet vorab pruefen (Failrate-Reduktion) | "Stabilitaets-Bugs" Section 4 |
+| DWG `$CUSTOMPROPERTY` | KKS-Tags direkt aus Schriftfeld, ohne OCR | "Objekt-Inhalt-Modell" |
+| `/Author`, `lastModifiedBy` | Provenance-Header in Markdown, Verantwortliche tracken | "Provenance" |
+| EXIF `GPS` | Foto-Dokumentation auf Anlagenplan verorten | (neu) |
+| EXIF `DateTime` | Baustellen-Fortschritt zeitlich ordnen | (neu) |
+| `/Producer = "PDF-XChange Viewer"` | Annotations-Hinweis: Datei wurde manuell bearbeitet | (neu — Provenance) |
+
+### DB-Schema-Vorschlag
+
+Erweitere `agent_sources` mit "first-class"-Spalten fuer haeufig
+abgefragte Felder + JSON-Spalte fuer den Rest:
+
+```sql
+ALTER TABLE agent_sources ADD COLUMN file_author TEXT;
+ALTER TABLE agent_sources ADD COLUMN file_creation_date TEXT;  -- ISO 8601
+ALTER TABLE agent_sources ADD COLUMN file_modification_date TEXT;  -- ISO 8601
+ALTER TABLE agent_sources ADD COLUMN file_creator_app TEXT;    -- z.B. "Microsoft Word"
+ALTER TABLE agent_sources ADD COLUMN file_producer_app TEXT;   -- z.B. "Foxit PhantomPDF"
+ALTER TABLE agent_sources ADD COLUMN file_title TEXT;
+ALTER TABLE agent_sources ADD COLUMN file_format_version TEXT; -- z.B. "AC1024", "PDF-1.4"
+ALTER TABLE agent_sources ADD COLUMN file_metadata_json TEXT;  -- Rest als JSON (XMP, EXIF, $CUSTOM)
+```
+
+Vorteile:
+- Common Queries (Author, Datum, App) gehen ueber Spalten — schnell, indizierbar
+- Spezial-Felder (z.B. EXIF-GPS, PDF-XMP-Document-ID) bleiben in JSON erreichbar via `json_extract()`
+- Rueckwaertskompatibel: bestehende Spalten bleiben unangetastet
+
+### Implementierungs-Reihenfolge
+
+1. **Migration** datastore/010 mit den Spalten + JSON. Idempotent
+   via `CREATE TABLE IF NOT EXISTS` und `ALTER TABLE ADD COLUMN`
+   in einer Transaktion.
+
+2. **Extractor-Modul** `src/disco/sources/file_metadata.py`:
+   ```python
+   def extract_file_metadata(abs_path: Path, file_kind: str) -> dict:
+       """Liefert dict mit den first-class-Feldern + 'extra'-JSON."""
+       if file_kind == 'pdf': return _extract_pdf(abs_path)
+       if file_kind == 'excel': return _extract_excel(abs_path)
+       if file_kind == 'dwg': return _extract_dwg(abs_path)
+       if file_kind == 'image': return _extract_image(abs_path)
+       return {}
+   ```
+   Pro Engine eine Funktion. Errors silent (best-effort, blockiert
+   Registrierung nicht).
+
+3. **Hook in `sources_register`**: bei jedem neuen/geaenderten
+   File auch `extract_file_metadata` aufrufen, Ergebnis in
+   `agent_sources` schreiben. Bei Re-Register (sha256 unveraendert)
+   nicht erneut extrahieren.
+
+4. **Backfill-Script** `scripts/backfill_file_metadata.py` fuer
+   Bestandsprojekte: liest alle `agent_sources`-Eintraege mit
+   `file_author IS NULL`, extrahiert Metadata, schreibt zurueck.
+   Idempotent.
+
+5. **Verfuegbar machen** in:
+   - `doc_markdown_read`: Provenance-Header mit Author/Datum
+   - `search_index`: Filter nach `file_author`, `file_creator_app`
+   - Web-UI Explorer: Tooltip mit Metadaten beim Hover
+
+6. **Routing-Decision-Erweiterung**: `_decide_dwg` prueft `$ACADVER`
+   — bei AC1032+ Fallback auf eine andere Engine oder direkt skippen
+   (LibreDWG-SIGABRT vermeiden).
+
+7. **`format-conversion-of`-Detection** Stufe 2 (siehe entsprechender
+   Backlog): nutzt `/Producer` und `/Creator` aus den jetzt
+   verfuegbaren Spalten.
+
+User-Quote (2026-04-27): *"Da sind ja viele wichtige Daten dabei,
+die wir gleich bei der registrierung mit extrahieren koennten.
+Die sollten dann auch verfuegbar sein."*
