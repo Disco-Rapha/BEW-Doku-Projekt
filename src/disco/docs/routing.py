@@ -1,14 +1,15 @@
 """Generische Routing-Logik fuer den extraction_routing_decision-Flow.
 
 Entscheidet pro Datei (egal welches Format) eine Engine. Heuristiken sind
-pro file_kind organisiert; PDF nutzt die bewaehrte 3-Tier-Logik aus dem
-alten pdf_routing_decision-Runner.
+pro file_kind organisiert; PDF nutzt die bewaehrte 3-Tier-Logik (Sticky-
+Rules + PyMuPDF-Seitenanalyse).
 
 Output: (engine, reason, heuristics_dict)
 """
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,142 @@ from . import file_kind_from_path
 logger = logging.getLogger(__name__)
 
 ROUTER_VERSION = "router-v3.0"
+
+
+# ---------------------------------------------------------------------------
+# PDF-Seitenanalyse (PyMuPDF) + Page-Kind-Klassifikation
+# ---------------------------------------------------------------------------
+#
+# Hier von disco.flows.library.pdf_routing_decision.runner reinkopiert,
+# damit die Analyse-Logik nicht mehr von einem (zwischenzeitlich entfernten)
+# Flow-Modul abhaengt. Nur PageStats / analyze_page / decide_kind werden
+# verwendet — alle drei sind reine Funktionen, keine Flow-Lifecycle-Sachen.
+
+
+@dataclass
+class PageStats:
+    chars: int
+    n_paths: int
+    text_coverage: float
+    vector_coverage: float
+    image_coverage: float
+    n_images: int
+    width_pt: float
+    kind: str
+
+
+def analyze_page(page) -> PageStats:
+    """Ermittle Basis-Signale und Seiten-kind fuer eine Seite (PyMuPDF)."""
+    rect = page.rect
+    page_area = float(rect.width * rect.height) if rect.width and rect.height else 0.0
+
+    text = page.get_text("text") or ""
+    chars = len(text)
+
+    text_area = 0.0
+    try:
+        blocks = page.get_text("blocks") or []
+    except Exception:
+        blocks = []
+    for b in blocks:
+        if len(b) >= 5 and isinstance(b[4], str) and b[4].strip():
+            x0, y0, x1, y1 = b[0], b[1], b[2], b[3]
+            text_area += max(0.0, float(x1 - x0) * float(y1 - y0))
+
+    n_paths = 0
+    vector_area = 0.0
+    try:
+        drawings = page.get_drawings() or []
+    except Exception:
+        drawings = []
+    for d in drawings:
+        items = d.get("items") or []
+        n_paths += len(items)
+        rect_d = d.get("rect")
+        if rect_d is not None:
+            vector_area += float(rect_d.width * rect_d.height)
+
+    image_area = 0.0
+    n_images = 0
+    try:
+        images = page.get_images(full=True) or []
+    except Exception:
+        images = []
+    for img in images:
+        xref = img[0]
+        try:
+            r = page.get_image_bbox(xref)
+        except Exception:
+            continue
+        n_images += 1
+        image_area += float(r.width * r.height)
+
+    if page_area > 0:
+        text_coverage = min(text_area / page_area, 1.0)
+        vector_coverage = min(vector_area / page_area, 1.0)
+        image_coverage = min(image_area / page_area, 1.0)
+    else:
+        text_coverage = vector_coverage = image_coverage = 0.0
+
+    kind = decide_kind(
+        chars=chars,
+        n_paths=n_paths,
+        text_coverage=text_coverage,
+        vector_coverage=vector_coverage,
+        image_coverage=image_coverage,
+        n_images=n_images,
+    )
+
+    return PageStats(
+        chars=chars,
+        n_paths=n_paths,
+        text_coverage=text_coverage,
+        vector_coverage=vector_coverage,
+        image_coverage=image_coverage,
+        n_images=n_images,
+        width_pt=float(rect.width) if rect.width else 0.0,
+        kind=kind,
+    )
+
+
+def decide_kind(
+    chars: int,
+    n_paths: int,
+    text_coverage: float,
+    vector_coverage: float,
+    image_coverage: float,
+    n_images: int,
+) -> str:
+    """Seiten-kind-Hierarchie: empty | scan | vector-drawing | mixed | text."""
+    # 1) empty
+    if chars < 20 and n_paths == 0 and image_coverage < 0.10:
+        return "empty"
+    # 2) klassischer Scan
+    if chars < 50 and image_coverage > 0.50:
+        return "scan"
+    # 3) Scan mit OCR-Layer
+    if (
+        (vector_coverage + image_coverage) > 0.50
+        and text_coverage < 0.40
+        and chars < 3500
+    ):
+        return "scan"
+    # 4) Text-Dominanz
+    if chars >= 1000 and text_coverage >= 0.30:
+        has_heavy_graphics = (
+            vector_coverage > 0.25
+            or image_coverage > 0.15
+            or n_paths > 50
+            or n_images > 1
+        )
+        return "mixed" if has_heavy_graphics else "text"
+    # 5) Vektorzeichnung
+    if vector_coverage > 0.40 and chars < 500:
+        return "vector-drawing"
+    # 6) Rest
+    if chars >= 100 and vector_coverage > 0.10:
+        return "mixed"
+    return "text"
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +210,6 @@ _LARGE_IMAGE_MIN_COVERAGE = 0.60
 def _decide_pdf(abs_path: Path) -> tuple[str, str, dict[str, Any]]:
     """3-Tier-Routing aus PyMuPDF-Seitenanalyse."""
     import fitz  # PyMuPDF
-    from disco.flows.library.pdf_routing_decision.runner import analyze_page
 
     doc = fitz.open(abs_path)
     stats = [analyze_page(p) for p in doc]

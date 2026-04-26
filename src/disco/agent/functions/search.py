@@ -2,22 +2,34 @@
 
 Zwei Tools:
 
-- `build_search_index` — indiziert Dateien unter sources/ und context/
-  seitenweise (PDFs) bzw. komplett (Markdown/Text). Idempotent ueber
-  sha256-Hash: unveraenderte Dateien werden uebersprungen. Bei Aenderung
-  werden die alten Chunks geloescht und neu geschrieben.
+- `build_search_index` — indiziert Dateien unter sources/ und context/.
+  PDF, Excel, DWG, Bild lesen die bereits extrahierten Markdowns aus
+  `agent_doc_markdown` (Voraussetzung: extraction-Flow muss vorher
+  gelaufen sein). Markdown/TXT werden direkt vom Filesystem gelesen.
+  Idempotent ueber sha256-Hash + indexer_version: unveraenderte
+  Dateien werden uebersprungen, wenn auch die Indexer-Version passt.
 
 - `search_documents` — FTS5-Query mit BM25-Ranking, optional gefiltert
   nach kind (sources/context/...). Liefert pro Treffer Snippet, Score,
   Dokumentpfad, Seitenzahl.
 
-Granularitaet: ein Chunk = eine Seite (PDF) oder die ganze Datei
-(Markdown/TXT). Jeder Chunk bekommt eine Kontext-Praeambel mit
-Dateiname, Seitenzahl und naechstgelegener Ueberschrift — das pusht
-das BM25-Ranking ohne Extra-Infrastruktur.
+Granularitaet: ein Chunk = eine Unit aus `agent_doc_unit_offsets`
+(z.B. PDF-Seite, Excel-Sheet, DWG-Layer, Bild). Lange Units werden an
+Absatz-/Zeilen-Grenzen weiter gesplittet, damit kein Chunk groesser
+als MAX_CHARS_PER_CHUNK wird — schuetzt vor FTS5-Performance-Abfall
+bei riesigen Posting-Listen. Jeder Chunk bekommt eine Kontext-
+Praeambel mit Dateiname, Seitenzahl und naechstgelegener Ueberschrift,
+was das BM25-Ranking ohne Extra-Infrastruktur stabilisiert.
 
 Phase 1 (Embeddings via sqlite-vec) wird spaeter parallele Vektoren
 auf dieselben Chunks legen; die Struktur hier bleibt identisch.
+
+Versions-Historie:
+  v1 (vor 2026-04-26): PDF via pypdf-Fallback, max 30k chars/chunk.
+                       Hatte Hang-Probleme bei pypdf-Schrott (CID-
+                       Encoding) → pathologische FTS5-Posting-Listen.
+  v2 (ab 2026-04-26):  PDF via agent_doc_markdown, max 8k chars/chunk
+                       mit Newline-Splitting bei langen Units.
 """
 
 from __future__ import annotations
@@ -41,12 +53,12 @@ logger = logging.getLogger(__name__)
 # Konstanten
 # ---------------------------------------------------------------------------
 
-INDEXER_VERSION = "v1"
+INDEXER_VERSION = "v2"
 
 # Dateitypen, die wir indizieren. Alles andere wird still uebersprungen.
-# - pdf/md/markdown/txt: direkter Filesystem-Pfad (Legacy-Logik via pypdf)
-# - xlsx/dwg/jpg/...: aus `agent_doc_markdown` lesen (extraction-Flow muss
-#   vorher gelaufen sein, sonst wird die Datei als 'no-extract' geskippt)
+# - md/markdown/txt: direkter Filesystem-Pfad (kleine, einfache Files)
+# - pdf/xlsx/dwg/jpg/...: aus `agent_doc_markdown` lesen (extraction-Flow
+#   muss vorher gelaufen sein, sonst Fehler "no-extract")
 INDEXABLE_EXTENSIONS = {
     # PDF + Memory-Dateien (Filesystem-direkt)
     ".pdf", ".md", ".markdown", ".txt",
@@ -59,18 +71,20 @@ INDEXABLE_EXTENSIONS = {
 }
 
 # Welche Extensions liest der Indexer aus agent_doc_markdown statt direkt
-# vom Filesystem? Faustregel: alles, was die Extraction-Pipeline behandelt
-# (ausser PDF — fuer PDF gibt es heute noch den pypdf-Fallback).
+# vom Filesystem? Faustregel: alles, was die Extraction-Pipeline behandelt.
+# Ab v2: PDF ist hier drin (war frueher pypdf-Fallback, jetzt agent_doc_markdown).
 _FROM_DOC_MARKDOWN_EXTS = {
+    ".pdf",
     ".xlsx", ".xlsm", ".xls",
     ".dwg", ".dxf",
     ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".gif",
 }
 
-# Oberes Limit pro Seite — wenn ein PDF eine extrem lange Seite hat
-# (z.B. grosser Anhang ohne Seitenumbruch), schuetzt uns das vor
-# FTS5-Index-Explosion. Truncation wird im Chunk vermerkt.
-MAX_CHARS_PER_CHUNK = 30_000
+# Oberes Limit pro Chunk. War in v1 30k — fuehrte bei pypdf-Schrott (CID-
+# Encoding, Tabellen ohne Whitespace) zu pathologischen FTS5-Posting-Listen
+# und damit zum Sync-Hang. v2 nutzt 8k mit Splitting an Newline-Grenzen,
+# weil 94% der Azure-DI-extrahierten Units sowieso unter 5k liegen.
+MAX_CHARS_PER_CHUNK = 8_000
 
 # Default-Wurzeln, wenn der Aufrufer nichts vorgibt.
 DEFAULT_ROOTS = ("sources", "context")
@@ -223,12 +237,20 @@ def _build_search_index(
 
             # Bestehenden Eintrag suchen
             existing = conn.execute(
-                "SELECT id, sha256, n_chunks FROM agent_search_docs "
+                "SELECT id, sha256, n_chunks, indexer_version FROM agent_search_docs "
                 "WHERE rel_path = ?",
                 (rel,),
             ).fetchone()
 
-            if existing and existing["sha256"] == digest and not force_reindex:
+            # Skip wenn: gleicher Hash UND gleiche Indexer-Version. Ein
+            # Versions-Mismatch (z.B. v1 → v2) loest Re-Index aus, damit
+            # alte Chunks aus alten Code-Pfaden ersetzt werden.
+            if (
+                existing
+                and existing["sha256"] == digest
+                and existing["indexer_version"] == INDEXER_VERSION
+                and not force_reindex
+            ):
                 skipped.append({
                     "path": rel,
                     "reason": "unchanged",
@@ -610,8 +632,8 @@ def _extract_chunks(path: Path, ext: str) -> list[dict[str, Any]]:
     """Liefert eine Liste {page_num, heading, text} pro Chunk.
 
     Pfade:
-      - Excel/DWG/Bild → aus agent_doc_markdown (extraction-Flow erforderlich)
-      - PDF → pypdf-Fallback (Filesystem-direkt)
+      - PDF/Excel/DWG/Bild → aus `agent_doc_markdown` (extraction-Flow
+        erforderlich; sonst Fehler)
       - MD/TXT → direkt aus Datei
     """
     ext_dot = "." + ext.lstrip(".")
@@ -623,10 +645,6 @@ def _extract_chunks(path: Path, ext: str) -> list[dict[str, Any]]:
                 f"Bitte zuerst den Flow `extraction` laufen lassen."
             )
         return chunks
-    if ext == "pdf":
-        # PDF nutzt heute weiterhin pypdf direkt — Migration auf
-        # agent_doc_markdown ist Folge-Schritt.
-        return _extract_pdf_chunks(path)
     if ext in {"md", "markdown"}:
         return _extract_markdown_chunks(path)
     if ext == "txt":
@@ -672,52 +690,102 @@ def _extract_chunks_from_doc_markdown(path: Path) -> list[dict[str, Any]] | None
             unit_num = int(o["unit_num"])
             unit_label = o["unit_label"] or f"u{unit_num}"
             text = md[int(o["char_start"]):int(o["char_end"])].strip()
-            chunks.append({
-                "page_num": unit_num,
-                "heading": unit_label,
-                "text": text,
-            })
+            if not text:
+                # Leere Unit (z.B. PDF-Seite ohne Text): trotzdem als
+                # Platzhalter aufnehmen, damit total_pages stimmt.
+                chunks.append({
+                    "page_num": unit_num,
+                    "heading": unit_label,
+                    "text": "",
+                })
+                continue
+            chunks.extend(_split_long_unit_text(
+                text=text,
+                base_page_num=unit_num,
+                base_heading=unit_label,
+                max_chars=MAX_CHARS_PER_CHUNK,
+            ))
     else:
-        # Kein Unit-Index → ganzes Dokument als ein Chunk
-        chunks.append({
-            "page_num": 1,
-            "heading": "",
-            "text": md.strip(),
-        })
+        # Kein Unit-Index → ganzes Dokument als (potenziell mehrere) Chunks
+        chunks.extend(_split_long_unit_text(
+            text=md.strip(),
+            base_page_num=1,
+            base_heading="",
+            max_chars=MAX_CHARS_PER_CHUNK,
+        ))
     return chunks
 
 
-def _extract_pdf_chunks(path: Path) -> list[dict[str, Any]]:
-    try:
-        from pypdf import PdfReader
-    except ImportError as exc:
-        raise RuntimeError("pypdf fehlt — `uv sync` laufen lassen.") from exc
+def _split_long_unit_text(
+    *,
+    text: str,
+    base_page_num: int,
+    base_heading: str,
+    max_chars: int,
+) -> list[dict[str, Any]]:
+    """Splittet eine Unit (Seite/Sheet/...) wenn sie laenger als max_chars ist.
 
-    reader = PdfReader(str(path))
-    chunks: list[dict[str, Any]] = []
-    for i, page in enumerate(reader.pages, start=1):
-        try:
-            text = page.extract_text() or ""
-        except Exception as exc:
-            logger.warning("PDF-Seite %d Extraktion fehlgeschlagen (%s): %s",
-                           i, path.name, exc)
-            text = ""
-        text = text.strip()
-        if not text:
-            # Leere Seiten trotzdem als Chunk aufnehmen, damit doc.total_pages
-            # stimmt. Der FTS-Index ignoriert sie natuerlich effektiv.
-            chunks.append({
-                "page_num": i,
-                "heading": "",
-                "text": "",
-            })
-            continue
-        heading = _first_line_as_heading(text)
-        chunks.append({
-            "page_num": i,
-            "heading": heading,
+    Bevorzugte Trenn-Reihenfolge:
+      1. Doppelter Newline (Absatz-Grenze) — bewahrt logische Bloecke
+      2. Einfacher Newline — bewahrt Zeilen
+      3. Hartes Cut bei max_chars
+
+    Sub-Chunks bekommen alle dieselbe page_num — die Differenzierung
+    passiert im heading via " (part N)" Suffix. Die FTS5-Tabelle erlaubt
+    mehrere Rows pro page_num (page_num ist UNINDEXED), daher kein
+    Schema-Konflikt.
+    """
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [{
+            "page_num": base_page_num,
+            "heading": base_heading,
             "text": text,
+        }]
+
+    chunks: list[dict[str, Any]] = []
+    remaining = text
+    sub_idx = 1
+    # Mindest-Cut-Position: damit der Cut nicht super frueh passiert
+    # (sonst werden die Chunks unnoetig klein).
+    min_cut = max_chars // 2
+
+    while remaining:
+        if len(remaining) <= max_chars:
+            chunks.append({
+                "page_num": base_page_num,
+                "heading": (
+                    f"{base_heading} (part {sub_idx})"
+                    if sub_idx > 1 else base_heading
+                ),
+                "text": remaining,
+            })
+            break
+
+        # 1. Absatz-Grenze suchen
+        cut = remaining.rfind("\n\n", min_cut, max_chars)
+        if cut < 0:
+            # 2. Einzel-Newline-Grenze
+            cut = remaining.rfind("\n", min_cut, max_chars)
+        if cut < 0:
+            # 3. Whitespace-Grenze (Wort-Boundary)
+            cut = remaining.rfind(" ", min_cut, max_chars)
+        if cut < 0:
+            # 4. Letzter Ausweg: harter Cut
+            cut = max_chars
+
+        chunks.append({
+            "page_num": base_page_num,
+            "heading": (
+                f"{base_heading} (part {sub_idx})"
+                if sub_idx > 1 else base_heading
+            ),
+            "text": remaining[:cut].rstrip(),
         })
+        remaining = remaining[cut:].lstrip()
+        sub_idx += 1
+
     return chunks
 
 
@@ -743,19 +811,6 @@ def _extract_text_chunks(path: Path) -> list[dict[str, Any]]:
         "heading": "",
         "text": text.strip(),
     }]
-
-
-def _first_line_as_heading(text: str) -> str:
-    """Heuristik fuer PDF-Seite: die erste nicht-leere Zeile, wenn sie
-    kurz genug ist (< 120 Zeichen), sonst leer."""
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if len(line) > 120:
-            return ""
-        return line
-    return ""
 
 
 # ---------------------------------------------------------------------------

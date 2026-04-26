@@ -1050,3 +1050,722 @@ Verbesserungen am Run-Strip oben im Chat:
    der Seite. Aktuell muss man zum Flow-Detailview scrollen.
 
 Quelle: User-Feedback waehrend Pipeline-Fulltest 2026-04-25.
+
+---
+
+## Office-Formate in die Extraction-Pipeline (Prioritaet: hoch)
+
+Vergessen: **PowerPoint (.pptx)** und **Word (.docx)** muessen auch
+durch die Extraction-Pipeline. Heute wuerden sie:
+- in `agent_sources` registriert (extension wird gespeichert)
+- aber im `extraction_routing_decision`-Flow als `file_kind='other'` →
+  Routing-Engine `'skip'` → keine Extraktion, kein Suchindex
+
+Heisst: Word- und PowerPoint-Dateien sind heute fuer Disco unsichtbar.
+
+### Was zu tun ist
+
+**Engines:**
+- `docx-python-docx` — mit [python-docx](https://github.com/python-openxml/python-docx) (MIT). Ueberschriften, Absaetze, Tabellen, Listen → Markdown.
+- `pptx-python-pptx` — mit [python-pptx](https://github.com/scanny/python-pptx) (MIT). Pro Slide ein Markdown-Block: Titel + Body-Text + Notes + Tabellen.
+- Ggf. ein DOCX-Konverter ueber **mammoth** (MIT) als 2. Engine fuer komplexeres Markup.
+
+**Schema:**
+- Erweiterung `disco/docs/__init__.py`:
+  - `_KIND_BY_EXT` um `'docx': 'office'`, `'pptx': 'office'`
+  - oder `'docx': 'docx'`, `'pptx': 'pptx'` als eigene Kinds
+  - `ENGINES_BY_KIND` entsprechend erweitern
+- Routing in `disco/docs/routing.py`: `_decide_office()` (oder pro Format)
+- Neue Module `disco/docs/docx.py`, `disco/docs/pptx.py` analog zu `excel.py` / `dwg.py`
+- INDEXABLE_EXTENSIONS in `search.py` um `.docx`, `.pptx` erweitern, in `_FROM_DOC_MARKDOWN_EXTS` (lesen aus agent_doc_markdown)
+
+**Unit-Modell:**
+- DOCX: pro Section (Heading-1) ein unit, oder ganzes Dokument als unit_label='document'
+- PPTX: pro Slide ein unit (label = Slide-Titel oder "slide-N")
+
+**Cost:** lokal, 0 EUR. Bei DOCX mit eingebetteten Bildern spaeter ggf. Bilder per VLM-Engine extrahieren (Phase 2).
+
+**Auswirkung auf bestehende Projekte:** keine breaking changes. Bestand-Files mit `file_kind='other'` werden bei naechstem Routing-Run als `docx` / `pptx` neu klassifiziert.
+
+User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir total vergessen :D Die muessen auch noch in die Pipeline."*
+
+---
+
+## Extraction nur auf kanonische Dateien (Prioritaet: hoch)
+
+Heute extrahiert die Pipeline **alle** aktiven `agent_sources`-Eintraege —
+auch Duplikate (gleicher Hash, anderer Pfad), abgeloeste Vorgaenger
+(`replaces`/`replaced-by`-Relation) und Format-Konversionen
+(`format-conversion-of`). Das verschwendet Cost und macht den Suchindex
+mehrdeutig.
+
+**Soll-Zustand:** Extraction laeuft nur auf den **kanonischen** Repraesentanten.
+Disco weiss das und der Routing-Flow filtert entsprechend.
+
+### Was "kanonisch" konkret heisst
+
+Eine Datei ist kanonisch, wenn fuer ihren Inhalt kein anderer Eintrag
+in `agent_source_relations` mit groesserer "Praeferenz" existiert:
+
+- **NICHT** `duplicate-of` einer anderen aktiven Datei (dann ist die andere kanonisch)
+- **NICHT** `replaces`-Source eines anderen Eintrags (dann ist die neuere kanonisch)
+- **NICHT** `format-conversion-of` (z.B. PDF aus DWG konvertiert — wenn die Original-DWG da ist, ist das DWG kanonisch)
+- Status `active`
+
+### Was zu tun ist
+
+1. **Routing-Filter**: Im `extraction_routing_decision`-Item-Loader Sub-Query
+   gegen `agent_source_relations` einbauen, nicht-kanonische Files skippen.
+2. **System-Prompt**: Disco-Regel dass er bei Pipeline-Vorschlaegen auf die
+   Kanonik-Logik hinweist ("ich extrahiere nur die kanonischen N Dateien
+   von M registrierten").
+3. **Heuristik fuer "neueste Revision"**: bei `replaces`-Ketten den Endknoten
+   nehmen. Bei `format-conversion-of` Mehrfachkanten klar definieren
+   (z.B. DWG-Original > PDF-Plot > JPEG-Screenshot).
+4. **Pipeline-Vollstaendigkeits-Sicht** (V1, anderer Backlog-Eintrag) muss
+   das beruecksichtigen: "registriert" vs "kanonisch" vs "extrahiert".
+
+### Auswirkung
+
+- Spart Cost (Schaetzung: 20-40% bei Projekten mit Revisions-Historie)
+- Sauberer Suchindex (keine doppelten Treffer auf identischem Inhalt)
+- Reasoning-Sicherheit (keine Verwirrung welche Version "die richtige" ist)
+
+### Begriffsklaerung (2026-04-26)
+
+Drei Counts pro Projekt — alle nuetzlich, leicht zu verwechseln:
+
+| Begriff | Definition | SQL |
+|---|---|---|
+| **registered** | aktive Eintraege in `agent_sources` | `COUNT(*) WHERE status='active'` |
+| **unique** / **distinct** | Anzahl eindeutiger sha256-Hashes | `COUNT(DISTINCT sha256)` |
+| **kanonisch** | bevorzugter Repraesentant nach Konsolidierung von Duplikaten + Versionen + Format-Konversionen | gefiltert ueber `agent_source_relations` |
+
+**Heute (Stand 2026-04-26):** `sources_detect_duplicates` schreibt nur
+`kind='duplicate-of'` (sha256-Gruppen). `replaces` und
+`format-conversion-of` sind im Schema vorgesehen, werden aber von keinem
+Tool gefuellt. Damit ist heute **kanonisch == unique-by-hash**, eine
+echte Konsolidierung ueber Versionen passiert nicht.
+
+Auswirkung auf den Filter: heute reicht ein Filter auf `duplicate-of`
+um den 80%-Effekt zu erreichen (siehe rea-denox: 5963 → 1883 Files,
+68% Reduktion). Sobald `replaces`/`format-conversion-of` gefuellt
+werden, wird der Filter strenger und reduziert nochmal.
+
+---
+
+User-Quote (2026-04-25): *"Extraction machen wir nur auf kanonische
+dateien. Das sollte disco wissen."*
+
+---
+
+## Public-Workspace fuer Cross-Projekt-Reuse (Prioritaet: mittel)
+
+Heute ist jedes Projekt streng sandboxed (contextvars-basierte
+Mandantentrennung in `disco.agent.context`). Disco kann nicht
+zwischen Projekten zugreifen. Das ist sicher, verhindert aber
+Cross-Projekt-Reuse.
+
+**Idee:** ein **Public-Workspace** auf gleicher Ebene wie `projects/`,
+sichtbar fuer alle Projekte, schreib-zugreifbar via dedizierte Tools.
+
+```
+~/Disco/                       (analog ~/Disco-dev/)
+├── system.db
+├── _public/                   ← NEU
+│   ├── flows/                 — geteilte Flow-Definitionen
+│   ├── reports/               — projekt-uebergreifende Reports (z.B. Cross-Projekt-Stats)
+│   ├── exports/               — fertige Lieferungen, Templates
+│   └── data.db                — eigene SQLite fuer geteilte Lookup-Tabellen
+└── projects/
+    └── <slug>/
+```
+
+### Use-Cases
+
+- **Geteilte Flow-Library** — DCC-Klassifikations-Flow einmal entwickeln, in allen Projekten nutzen. Heute muesste man pro Projekt forken.
+- **Cross-Projekt-Reports** — Dashboard ueber alle Projekte (PDF-Anzahl, Routing-Verteilung, Cost). Heute schwer.
+- **Standard-Templates** — HTML-Report-Skelette, Excel-Vorlagen, DCC-Referenzlisten.
+- **Norm-Bibliothek** — eine `VGB_S_831.pdf` reicht im Public, kein Duplikat in 10 Projekten.
+
+### Architektur-Optionen
+
+**Option A — Spezial-Pfad im Filesystem-Sandbox:**
+- `fs_*`-Tools erkennen `_public/...` und erlauben Cross-Projekt-Zugriff
+- Pro: minimal-invasiv, vorhandene Tools bleiben
+- Con: leicht versehentlich Cross-Read; keine klare Eigentuemer-Markierung
+
+**Option B — Eigene Public-Tools (mein Favorit):**
+- Neue Tools `fs_public_list/read/write`, `sqlite_public_query/write`
+- Klare Trennung im Tool-Inventar — Disco entscheidet bewusst "ich lege das ins Public"
+- System-Prompt-Regel: vor Public-Write Bestaetigung beim User holen
+- Con: Tool-Anzahl waechst (heute 49, dann ~55)
+
+**Option C — Public als Pseudo-Projekt mit Sondermodus:**
+- `~/Disco/projects/_public/` als reservierter Slug
+- Switch-Tool `use_public_workspace()`: hebt die Sandbox temporaer auf
+- Pro: konsistent zur Projekt-Logik
+- Con: User-Confusion; Sandbox-Aufhebung kontraintuitiv
+
+### Sicherheits-Design (egal welche Option)
+
+- **Schreibzugriff erfordert explizite Geste** — nicht aus Versehen ins Public schreiben
+- **Audit-Trail** — agent_script_runs/agent_tool_calls protokollieren Public-Operationen besonders
+- **Egress-Policy unveraendert** — Public ist immer noch lokal, kein neuer Cloud-Endpoint
+- **Symlink-Schutz** — Public-Dateien duerfen nicht aus dem Public-Tree rauszeigen
+
+### Migration / Stufung
+
+1. **Stufe 1**: read-only Public-Workspace, nur Disco kann lesen, der User kuratiert per File-Manager. Reicht fuer geteilte Templates + Norm-Bibliothek.
+2. **Stufe 2**: `fs_public_write` + Schutz-Konvention im System-Prompt. Disco kann selbst Reports/Exports ablegen.
+3. **Stufe 3**: shared `_public/data.db` mit Lookup-Tabellen, in Projekten via `ATTACH DATABASE` lesbar (analog `ds`).
+
+User-Quote (2026-04-25): *"einen public folder, in dem disco flows,
+Reports und exports ablegen kann. Der Ordner kann von allen Projekte
+gesehen und bearbeitet werden"*
+
+---
+
+## Run-Strip Bugs (Prioritaet: niedrig)
+
+Beobachtet 2026-04-25 nach den Run-Strip-Updates (Commits 829fd65,
+6200002, 0e04dc9, 77f71ea):
+
+### Bug 1: gleicher Run wird doppelt angezeigt
+
+Beobachtet: `#3 extraction_routing_decision` erscheint zweimal im
+Strip (einmal mit slug-Badge `bew-rsd-lager-halle`, einmal ohne).
+
+Vermutete Ursache: derselbe Run-Eintrag liegt sowohl in
+`state._runStripFinished` (lokal, localStorage-persisted) als auch in
+`data.recent_finished` (Backend-Antwort). `_runStripAddFinished` hat
+einen Dedup-Lookup ueber `${project_slug}:${id}`, aber wenn das
+project_slug-Feld in einer der zwei Quellen fehlt oder anders
+formatiert ist (z.B. leer vs. richtiger slug), wird der Lookup nicht
+matchen und der Eintrag landet zweimal.
+
+**Fix-Ansatz**: 
+- Dedup robuster machen: nicht nur Key vergleichen, sondern bei leerem
+  slug auf `flow_name + id` fallback
+- Im Backend sicherstellen, dass `project_slug` in `recent_finished`
+  immer gefuellt ist (heute haben wir das via Slug-Resolution, sollte
+  klappen — Logging im Backend bei NULL)
+
+### Bug 2: Counter springt nicht auf 100% (1720/1721 bleibt)
+
+Beobachtet: Run mit `done · 1 failed`, total=1721 zeigt Counter
+`1720/1721 (100%)` statt `1721/1721 (100%)`.
+
+Ursache: ich hatte den **pct** auf `processed/total` umgestellt
+(Commit 77f71ea), aber das **Template** rendert weiter `${done}/${total}`
+— die linke Zahl ist also weiterhin `done_items`, nicht
+`processed_items`. Inkonsistent: 100% Prozentsatz aber 1720/1721
+absolut.
+
+**Fix**: in `runStripRenderRow` Template-String anpassen:
+```js
+// alt:
+<span class="run-counts">${done}/${total} (${pct}%)${failedStr}</span>
+// neu:
+<span class="run-counts">${processed}/${total} (${pct}%)${failedStr}</span>
+```
+
+Zwei Zeilen Code, keine API-Aenderung.
+
+User-Quote (2026-04-25): *"Es werden zwei Flows doppelt angezeigt und
+1720 / 1721 das haette auf 1721 / 1721 springen sollen, wenn der flow
+durch ist. Der failed soll ja mitgezaehlt werden."*
+
+---
+
+## Cost-Tracking fuer GPT-5.1-Vision-Aufrufe (Prioritaet: hoch)
+
+Heute: `disco/docs/image.py` setzt `estimated_cost_eur = 0.0`
+hardcoded und speichert nur die Token-Counts in `meta_json`. Damit
+zeigen `agent_flow_runs.total_cost_eur` und der Run-Strip fuer
+Bild-Engines immer 0,00 €, obwohl jeder Vision-Call Foundry-Tokens
+verbraucht.
+
+Bestand-Beispiel (pipeline-fulltest, 3 Bilder):
+- ~3 151 prompt + 708 completion = **3 859 Tokens**, aber 0 EUR
+  ausgewiesen.
+
+### Was zu tun ist
+
+1. **Pricing-Modul**: `disco/pricing.py` mit zentraler Definition pro
+   Foundry-Modell. Beispiel-Struktur:
+   ```python
+   FOUNDRY_PRICING_EUR_PER_1M_TOKENS = {
+       "gpt-5.1": {"input": ..., "cached_input": ..., "output": ...},
+       "gpt-5":   {...},
+   }
+   ```
+   Mit Audit-Datum + EUR/USD-Wechselkurs-Annahme im Modul-Doc.
+2. **In `image.py`** Cost berechnen:
+   ```python
+   cost = (prompt_tokens * P["input"] + completion_tokens * P["output"]) / 1_000_000
+   meta["estimated_cost_eur"] = round(cost, 5)
+   ```
+3. **Cached-Input-Tokens beruecksichtigen**: Foundry liefert in der
+   Usage `cached_tokens`. Cached zaehlt zu reduziertem Preis. Bei
+   wiederholtem Vision-Call auf identisches System-Prompt-Praefix
+   greift der Cache stark.
+4. **System-Prompt-Cache nutzen** (Backlog-Querverweis): wenn wir
+   Foundry-Cache-Hits drueben haben, koennen wir die System-Prompt-
+   Bytes als Cache-Praefix markieren — drastische Cost-Reduktion bei
+   Bulk-Vision-Laeufen ueber 100+ Bilder.
+
+### Auswirkung auf andere Engines
+
+- `pdf-azure-di` / `pdf-azure-di-hr`: rechnen heute korrekt mit
+  `_AZURE_DI_LAYOUT_EUR_PER_PAGE` (= 8,68 / 13,89 EUR pro 1000 p).
+- `pdf-docling-standard` / `excel-*` / `dwg-*`: 0 EUR ist korrekt
+  (lokal, keine Cloud).
+- `image-gpt5-vision`: hier sind wir schief.
+
+### Folge: Bestand korrigieren?
+
+Pro betroffenem Run koennten wir nachtraeglich aus `meta_json`
+(prompt_tokens / completion_tokens) den EUR-Betrag rechnen und in
+`agent_flow_runs.total_cost_eur` per Update korrigieren. Klein, aber
+historische Daten stimmen wieder.
+
+User-Quote (2026-04-25): *"tracken wir eigentlich schon was uns der
+gpt aufruf mit den bildern kostet im flow?"*
+
+---
+
+## Anhaltspunkte fuer `replaces` und `format-conversion-of` (Vertiefung)
+
+Konkrete Erkennungs-Patterns als Implementierungs-Vorlage fuer den
+Filter "Extraction nur auf kanonische Dateien". Stufung von schnell
+(Filename-Heuristik, kein Inhalt) zu maechtig (Embeddings, LLM).
+
+### Replaces — Versionsketten
+
+**Stufe 1 — Filename-Versions-Suffixe** (deterministisch, lokal, schnell):
+
+| Pattern | Reihenfolge | In rea-denox-Pool gefunden |
+|---|---|---|
+| `_R0A_V00` / `_R0B_V00` / `_R0C_V00` | A→B→C | ja, sehr haeufig (Tekla/CAD-Konvention) |
+| `_R00_V00` / `_R00_V01` / `_R00_V03` | nu­merisch | ja (Statik-Berechnungen) |
+| `_R0A_V00` / `_R0A_V01` / `_R0A_V02` | nu­merisch | ja (Mehrfach-Iteration auf Rev.A) |
+| `_v1` / `_v2` / `_v2.0` | nu­merisch | ja (`_V01`, `_V02`) |
+| `_RevA` / `_RevB` | alpha­be­tisch | gelegentlich |
+| `_alt` / `_old` / `_obsolet` / `_neu` / `_aktuell` | semantisch | ja (`_obsolet!`-Suffix klar) |
+| ` (1)` / ` (2)` / ` (3)` | nu­merisch | ja (Windows-Copy-Suffix — meist Hash-Duplikat) |
+| ISO-Datum `_2024-09-19` / `_240919` | chrono­logisch | ja (`240607_`, `240816_`, `240919_` Praefixe) |
+
+**Vorgehen:**
+1. Stamm-Stem-Normalisierung: alle bekannten Suffixe entfernen
+2. Im selben Ordner gruppieren (Cross-Ordner ist riskant)
+3. Suffix-Reihenfolge → "neueste" gewinnt
+4. Schreibe `replaces`-Relations: alle alten verweisen auf die neueste
+
+**Stufe 2 — Pfad-Hinweise:**
+- Subordner `/archiv/`, `/alt/`, `/Rev_A/`, `/superseded/` → Datei darin ist nicht-kanonisch
+- GU-spezifische Konventionen ggf. via Projekt-Konfig
+
+**Stufe 3 — Begleit-Excel (sources_attach_metadata):**
+- GU-Lieferindex-Spalte "Revision", "ersetzt durch", "Status"
+- Ergibt explizite Relations ohne Heuristik
+
+**Stufe 4 — PDF-Inhalt (Schriftfeld):**
+- pypdf/PyMuPDF: `/ModDate`, `/Title` aus PDF-Metadata
+- LLM-Extraktion aus dem Schriftfeld: "Index/Revision: B"
+- Zeitlich-juengste Rev gewinnt
+
+**Stufe 5 — Embedding-Aehnlichkeit (Phase 2c):**
+- Bei Markdown-Embedding-Cosine >= 0.92 zwischen zwei Files mit
+  unterschiedlichem Hash, gleicher Top-Level-Domain (DCC-Code o.ae.):
+  Versions-Kandidat fuer LLM-Bestaetigung
+
+### Format-conversion-of
+
+**Stufe 1 — Stem + andere Extension** (Heuristik, sehr verlaesslich):
+
+In rea-denox live gefunden:
+- `VGB-S-831 Anlage_A1_IBL_Begleitdokumentation` als `.pdf` + `.xlsx`
+- `Errichterbescheinigung` als `.docx` + `.pdf`
+- `Uebersichtsliste Sicherung` als `.xlsx` + `.pdf`
+- `Handover_Takeover_Plan_V01` als `.docx` + `.pdf`
+
+**Hierarchie (was gewinnt):**
+
+| Original | Konversion | Begruendung |
+|---|---|---|
+| `.dwg` | `.pdf` | DWG ist editierbar, PDF ist Plot |
+| `.docx` | `.pdf` | Original > Export |
+| `.xlsx` | `.pdf` | Daten > Snapshot |
+| `.dwg` | `.dxf` | DWG ist Master, DXF ist Austauschformat |
+
+Bei Mehrdeutigkeit (z.B. `.docx` + `.xlsx` mit gleichem Stem): heute
+nicht typisch, ggf. via Projekt-Konfig.
+
+**Stufe 2 — PDF-Producer-Tag** (sehr verlaesslich, lokal):
+- pypdf: `reader.metadata["/Producer"]`
+- Patterns:
+  - `"AutoCAD"`, `"Bluebeam Revu"` -> DWG-Plot
+  - `"Microsoft Word"`, `"Adobe PDF Library Word"` -> DOCX-Export
+  - `"Microsoft Excel"` -> XLSX-Export
+- Wenn Producer auf Originalformat hinweist UND ein File mit gleichem
+  Stem in dem Format existiert: starker `format-conversion-of`-Hinweis
+
+**Stufe 3 — Inhaltsabgleich:**
+- Schriftfeld-Texte aus DWG (libredwg) vs. PDF-OCR
+- >= 80 % der DWG-Schriftfeld-Texte im PDF wiederfindbar -> bestaetigt
+
+### Implementierungs-Plan
+
+1. **Stamm-Stem-Funktion** in `disco/docs/canonik.py` (oder als Teil der
+   sources-Logik). Liste der Suffix-Patterns konfigurierbar.
+2. **`sources_detect_replaces`-Tool** analog zu `sources_detect_duplicates`:
+   gruppiert nach Stamm-Stem, schreibt `replaces`-Relations.
+3. **`sources_detect_format_conversions`-Tool**: Stem + andere
+   Extension finden, PDF-Producer-Tag pruefen, schreibt
+   `format-conversion-of`-Relations.
+4. **Filter im `extraction_routing_decision`-Item-Loader** (Backlog-
+   Eintrag oben): Items skippen, die nicht-kanonisch sind.
+5. **Optional: re-run-Mode**: bei neu detektierten Relations laesst
+   sich die Pipeline auf den (jetzt) kanonischen Files re-run.
+
+User-Quote (2026-04-26): *"Welche anhaltspunkte haetten wir um
+replaces und format_converson-of zu ermitteln?"*
+
+
+## Relevance-Score / Document-Scoring (Prioritaet: mittel)
+
+Ueber `kanonisch` (= mechanisch dedupliziert) hinaus wollen wir eine
+zweite, projektspezifische Achse: **Wie relevant ist dieses Dokument
+fuer das Projekt-Ziel?** Heute hat jedes Dokument im Pool denselben
+Wert; tatsaechlich ist eine Stahlbau-Statik fuer einen
+SOLL/IST-Abgleich gegen VGB S 831 hochrelevant, ein internes
+Besprechungs-Foto eher nicht.
+
+**Zwei Spielarten:**
+
+1. **Lifecycle-Score** (deterministisch, billig):
+   `final | review | draft | archived | scratch`. Aus Pfad-Hinweisen
+   (`/archiv/`, `/draft/`, `/superseded/`), Begleit-Excel-Status-Spalten
+   und Versions-Suffixen ableitbar. Kein LLM noetig.
+
+2. **Topical-Score** (LLM-basiert, teurer):
+   Wie inhaltlich nah ist das Dokument am Projekt-Ziel? Aus
+   `README.md` (Projekt-Ziel) + Markdown-Extrakt + Embedding-Distance
+   oder LLM-Klassifikation. Skala 0-100 oder Buckets (high/medium/low).
+
+**Use-Cases:**
+- Suchergebnisse priorisieren (final > draft, hoher Topical-Score zuerst)
+- Bulk-Flows nur auf relevanter Teilmenge laufen lassen
+   (Token-Budget schonen)
+- Reports filtern ("zeige nur high-relevance-Dokumente fuer den
+  SOLL/IST-Abgleich")
+
+**Offene Fragen** (zu klaeren bevor implementiert):
+- Wer schreibt den Score: Disco automatisch beim Source-Onboarding,
+  oder explizit per Skill/Flow?
+- Eine Score-Spalte oder mehrere (lifecycle/topical/manual)?
+- Persistiert in `agent_sources` oder eigene Tabelle `agent_source_scores`?
+
+User-Quote (2026-04-26): *"Ich wuerde auch gerne noch sowas wie einen
+relevance score einfuehren oder sowas..."*
+
+Bezug: braucht `Anhaltspunkte fuer replaces und format-conversion-of`
+fuer den Lifecycle-Score; profitiert spaeter von OpenAI Evals (s.u.)
+fuer die Kalibrierung der LLM-basierten Topical-Klassifikation.
+
+
+## OpenAI Evals / Azure AI Foundry Evaluations (Prioritaet: niedrig, aber strategisch)
+
+Sobald Disco LLM-basierte Klassifikationen oder Scores produziert
+(Topical-Relevance, DCC-Klassifikation, SOLL/IST-Match), brauchen wir
+**systematische Qualitaetsmessung** — nicht "passt schon", sondern
+reproduzierbare Eval-Runs gegen ein Goldstandard-Set.
+
+**Was es ist:**
+
+- **OpenAI Evals**: zwei Dinge — (a) Open-Source-Framework
+  `openai/evals` (MIT) zum Bauen eigener Eval-Suiten,
+  (b) Platform-Produkt `platform.openai.com/evals` mit UI, Datasets
+  und gemanagten Runs.
+- **Azure AI Foundry Evaluations** ist das Microsoft-Aequivalent:
+  - **SDK**: `azure-ai-evaluation` (Python, MIT) — heute NICHT in
+    unserem `pyproject.toml`, koennte mit `uv add azure-ai-evaluation`
+    nachgezogen werden.
+  - **Foundry Portal UI**: Evaluations-Tab pro Projekt fuer Runs,
+    Vergleiche und Dataset-Verwaltung.
+- **Built-in Evaluators** (Sweden Central verfuegbar):
+  `RelevanceEvaluator`, `GroundednessEvaluator`, `CoherenceEvaluator`,
+  `FluencyEvaluator`, `SimilarityEvaluator`. Alle nehmen Query +
+  Response (+ optional Context) und liefern einen 1-5-Score plus
+  Begruendung.
+- **Custom Evaluators**: eigene Python-Klassen mit `__call__(query,
+  response, ground_truth, ...) -> dict` lassen sich registrieren und
+  in Eval-Runs mischen.
+
+**Fuer Disco relevant in:**
+
+1. **Kalibrierung der Relevance-Score-Rubrik** (s.o.): bevor wir auf
+   3.000 Dokumente loslassen, ein 50-er-Goldstandard mit
+   Human-Labels bauen, drei Prompt-Varianten gegen den Goldstandard
+   evaluieren, beste Variante in Prod.
+2. **A/B-Tests bei Prompt-Aenderungen**: System-Prompt-Update auf dem
+   Portal-Agent — vorher/nachher-Eval ueber dasselbe Goldstandard-Set,
+   damit Regressions nicht erst dem User auffallen.
+3. **Klassifikator-Qualitaet**: DCC-/Gewerks-Klassifikation,
+   SOLL/IST-Match — alles Use-Cases mit klarer Wahrheit, ideal fuer
+   Evals.
+
+**Vermutete Kosten** (Sweden Central Listpreise):
+- Built-in-Evaluators sind LLM-Calls gegen GPT-4-Klasse-Modell, also
+  ~$0.01-0.05 pro Eval-Run-Item, Goldstandard-Set 50 Items + 3
+  Prompt-Varianten ~ 1-3 EUR pro Kalibrierungs-Zyklus. Vernachlaessigbar.
+
+**Implementierungs-Skizze** (wenn wir es angehen):
+
+1. `uv add azure-ai-evaluation`
+2. Goldstandard-Set bauen: `~/Disco/projects/<slug>/evals/goldstandard.jsonl`
+   mit `{"document_id": ..., "expected_relevance": "high", "rationale": "..."}`.
+3. Eval-Skript in `scripts/evals/relevance_eval.py`: laedt Goldstandard,
+   ruft Disco-Klassifikator pro Item, vergleicht mit Built-in
+   `RelevanceEvaluator` + Custom-Evaluator (exact-match auf
+   high/medium/low).
+4. Run via `uv run python scripts/evals/relevance_eval.py` ergibt
+   einen JSONL-Eval-Report; bei Aenderung des System-Prompts oder
+   Modell-Deployments einfach erneut ausfuehren.
+5. **Optional Phase 2**: Eval-Runs auch im Foundry-Portal sichtbar
+   machen ueber `azure.ai.evaluation.evaluate(target=..., evaluators=...,
+   azure_ai_project=...)` — zentrales Dashboard fuer alle Eval-Runs.
+
+**Warum jetzt nicht implementieren:**
+- Solange wir keine LLM-basierten Scores in Prod haben, gibt's nichts
+  zu evaluieren.
+- Sobald Topical-Relevance oder DCC-Klassifikation aktiv sind, wird
+  Eval-Setup vor Skalierung Pflicht.
+
+User-Quote (2026-04-26): *"Ne, das thema ist noch zu frueh aber
+brauchen wir. Kommt auf die BL bitte"*
+
+
+## Stabilitaets-Bugs aus FTS5-Deadlock 2026-04-26 (Prioritaet: hoch)
+
+Beim Aufbau eines FTS5-Suchindex auf bew-rsd-lager-halle ist der
+Prod-Server gehangen — Diagnose live durchgefuehrt. Eine Kette von
+verbundenen Bugs, die alle einzeln in den Backlog wollen:
+
+### 1. FTS5-Indexer blockiert Prod-Server (HAUPT-BUG)
+
+**Symptom**: User triggert "baue Suchindex auf lager-halle". Aufgabe
+laeuft als `multiprocessing.spawn`-Subprocess vom Uvicorn (PID 57812
+im Live-Vorfall). Nach kurzem normalem Lauf bleibt der Subprocess in
+einer FTS5-Sync-Endlosschleife stehen — Stack zeigt
+`fts5SyncMethod → fts5IndexFlush → fts5DataRead → blobReadWrite`,
+100% CPU auf einem Core, **kein Wachstum** der `datastore.db` oder
+`datastore.db-wal` ueber Minuten.
+
+**Folge-Schaden**: Subprocess teilt sich einen
+`multiprocessing.Manager`-Lock-Server mit zwei laufenden Flow-Runner-
+Children (campus-reuter Run #4, rea-denox Run #15). Beide Children
+stehen sofort still, sobald sie den naechsten Status-Update an den
+Parent abschicken wollen — Stack zeigt
+`pysqlite_connection_commit_impl → unixSync → __psynch_cvwait`. Der
+gesamte Flow-Subsystem ist eingefroren.
+
+**Folge zwei**: Uvicorn-Hauptprozess (PID 57710) hat in seinem
+`--reload`-Watchfiles-Thread einen `pthread_mutex_lock` auf einer
+Mutex die ein toter Thread haelt — Server antwortet nicht mehr auf
+`/api/health` (5s timeout). SIGTERM wirkungslos, SIGKILL noetig.
+
+**Was zu tun ist**:
+1. **FTS5-Sync-Hang reproduzieren** — herausfinden, welche
+   Markdown-Einheit das ausloest. Verdacht: ein einziger sehr grosser
+   Markdown-Block (mehrere MB), den FTS5 nicht inkrementell flushen
+   kann. Mitigation: Markdown-Inputs vor dem FTS5-Insert chunken
+   (max 200KB pro Row) — passt eh zur Hybrid-Search-Phase 2c-Strategie
+   (~500-800-Tokens-Chunks).
+2. **Indexer als isolierter Subprocess, nicht
+   `multiprocessing.spawn` vom Uvicorn**. Statt dessen: separater
+   Worker-Prozess (analog zu Flow-Runner via `runner_host`), der NUR
+   ueber DB-Status mit dem Service kommuniziert — kein
+   `multiprocessing.Manager` zwischen Web-Server und Indexer.
+3. **Indexer interruptible**: User-Klick auf "Cancel" muss die Sync-
+   Operation sauber abbrechen koennen, auch wenn FTS5 in einem Loop
+   steckt. Heute: nur SIGKILL hilft.
+4. **Watchfiles-Reload weniger gefahrlich machen**: wenn ein
+   Subprocess-Crash detected wird, sollte Uvicorn den Reload-Cycle
+   nicht im Hauptprozess synchron abschliessen, sondern lazy
+   restartet werden.
+
+### 2. Counter-Update-Bug nach unsauberem Shutdown
+
+**Symptom**: Beim Restart eines Flow-Runs nach dem Crash zaehlt
+`agent_flow_runs.done_items` nicht hoch, obwohl
+`agent_doc_markdown` korrekt befuellt wird. Beobachtet bei
+campus-reuter Run #5 — `done_items=0`, aber 14 Markdown-Records mit
+`run_id=5`. Discrepancy bleibt waehrend des gesamten Run-Verlaufs
+bestehen, nicht nur am Anfang.
+
+**Verdacht**: workspace.db hat aus dem Crash eine Stale-Lock-Page
+oder ein Transaktions-State, der den UPDATE-Pfad fuer `done_items`
+blockiert (oder still verschluckt). Inserts in datastore.db gehen
+durch, weil das eine andere DB ist.
+
+**Was zu tun ist**:
+1. **Reproduzieren** im Dev: Flow-Run starten → SIGKILL → neuen Run
+   starten → checken ob done_items mitwaechst.
+2. **WAL-Checkpoint beim Service-Start**: vor dem ersten Open der
+   workspace.db ein `PRAGMA wal_checkpoint(TRUNCATE)` ausfuehren.
+3. **Stale-Run-Recovery beim Service-Start**: `agent_flow_runs` mit
+   `status='running'` und `worker_pid` der nicht mehr existiert
+   automatisch auf `status='failed'` setzen mit
+   `error='killed during shutdown'`. Heute: bleibt manuell zu
+   bereinigen.
+
+### 3. Azure-DI HighRes: max_retries zu niedrig
+
+**Symptom**: HR-Endpoint liefert vereinzelt `(InternalServerError)
+An unexpected error occurred.` zurueck. Bei `max_retries=1` (heute)
+ist das Item sofort als failed markiert. Beobachtet: 7 von 14
+versuchten HR-Items in campus-reuter Run #5 (50%!) gefailt mit
+diesem Fehler. Andere HR-Items kommen normal durch.
+
+**Was zu tun ist**:
+1. **`max_retries=3` mit Exponential-Backoff** (300ms, 1s, 3s) fuer
+   die Engines pdf-azure-di, pdf-azure-di-hr, image-gpt5-vision —
+   alles Engines die gegen Azure laufen.
+2. **HR→Standard-Fallback** als Option: nach N HR-Failures auf
+   demselben Item, einmal mit pdf-azure-di-Standard versuchen. Verlust
+   an Qualitaet (bei Plaenen schlechter), aber besser als kein
+   Output. Konfigurierbar.
+
+### 4. LibreDWG SIGABRT bei bestimmten DWGs (bekannt, aber Anteil hoch)
+
+**Symptom**: `dwg2dxf` killed sich mit SIGABRT bei manchen DWGs.
+Beobachtet 18 SIGABRT-Cases + 4 "Invalid handle 0" + 2
+"Expected DXF entity" + 2 "'MODEL'"-KeyError = **26 von 35 DWGs
+gefailt** in campus-reuter Run #5 (74%!). Der LibreDWG-Code (GPL-3,
+OSS) hat Probleme mit AutoCAD-2018+-Features oder bestimmten
+Tekla-/CAD-Konventionen.
+
+**Was zu tun ist**:
+1. **Fallback auf einen zweiten Konverter**: ezdxf hat selbst einen
+   experimentellen DWG-Reader (in C, ueber `cadtool` oder
+   `pyodadrx` — closed-source aber lokal). Oder: DWGs die libredwg
+   nicht kann, **skippen mit klarer Markierung** und manuell
+   nachverarbeiten.
+2. **Fehler-Klassifikation**: in `disco/docs/dwg.py` die
+   LibreDWG-Crashes von ezdxf-Read-Errors trennen — heute kommen
+   beide als "DXF-Read nach LibreDWG-Konvertierung fehlgeschlagen"
+   raus, was die Statistik unscharf macht.
+3. **Pool-Curation**: bei ~74% LibreDWG-Failrate auf Stahlbau-DWGs
+   ist der Outsource-Tool-Markt vielleicht der falsche. Bei Bedarf:
+   ODA File Converter wieder reaktivieren (closed-source, aber
+   lizenzfrei, deutlich stabiler) — Risiko: Konvention 9 (Network
+   Egress) muss neu geprueft werden, weil ODA-Updates online
+   geholt werden.
+
+User-Beobachtung 2026-04-26: *"jetzt habe ich die flows neu
+gestartet aber im hintergrund failed alles"* — die echten
+Erfolgsraten waren ~26% (counter falsch) bzw. ~45% wenn man
+LibreDWG-Bugs als bekannt rausrechnet.
+
+Bezug zur "Hybrid-Search Phase 2c"-Sektion in CLAUDE.md ("Was als
+Naechstes kommt"): Der hier beschriebene FTS5-Indexer ist offenbar
+ein laengst angefangener Code-Pfad, kein offizieller Phase 2c-
+Indexer. Vor weiterer Arbeit: aufraeumen und planen, statt
+inkrementell weiter zu erweitern.
+
+
+## Disco-Prozess-Management fuer den User (Prioritaet: hoch)
+
+Heute ist Claude die einzige Instanz, die den Disco-Server (Dev +
+Prod) starten, ueberwachen und beenden kann. Der User hat keine
+Uebersicht und keine eigenen Tools — er muss bei jedem Hagel
+("Server haengt", "Flows failen", "Restart noetig") fragen, statt
+selbst eingreifen zu koennen. Das ist ein UX-Defizit, nicht zuletzt,
+weil der User Disco jeden Tag laufen hat und Claude *nicht* immer
+gleich verfuegbar ist.
+
+**Was der User heute (un-)kann:**
+
+| Aktivitaet | Heute | Pain |
+|---|---|---|
+| Server starten (Dev/Prod) | langer `cd ... && DISCO_WORKSPACE=... uv run uvicorn ...` aus CLAUDE.md kopieren | hoch — er macht das selten, vergisst die Flags |
+| Sehen, ob Server laeuft | `lsof -i :8765` oder Browser-Probe | mittel |
+| Sehen, was an Subprocesses haengt | nur via Activity-Monitor (Mac), keine Disco-Sicht | hoch — er sieht "Python-Prozess mit 100% CPU" und weiss nicht, was es ist |
+| Server stoppen | `pkill -f "port 8765"` oder `kill <PID>` von Hand | mittel, leicht falsch zu machen |
+| Hangenden Subprocess killen (wie heute der FTS5-Spinner) | gar nicht — er ruft Claude | hoch |
+| Flow-Runs ueberwachen | UI-Run-Strip + Logs lesen | OK fuer normale Faelle, schwach bei Stale-States |
+| Stale "running"-Flow-Runs aufraeumen | gar nicht — bleibt manuell | mittel |
+
+### Was wir bauen sollten
+
+**1. `disco service`-CLI** (existiert noch nicht):
+
+```bash
+disco service status           # Was laeuft? Dev-Server? Prod-Server? Welche Flow-Runner? PIDs, CPU, Uptime
+disco service start dev        # Dev-Server hochfahren (Port 8766, ~/Disco-dev)
+disco service start prod       # Prod-Server hochfahren (Port 8765, ~/Disco)
+disco service stop dev|prod    # Sauber stoppen (SIGTERM, dann ggf. SIGKILL)
+disco service restart dev|prod # Kombi: stop + start, mit Health-Check
+disco service logs dev|prod [--tail N]  # Live-Tail oder letzte N Zeilen vom Server
+disco service kill <pid>       # einen Subprocess mit Sicherheitsabfrage killen
+```
+
+Implementierung: dünner Wrapper um `lsof`/`ps`/`kill`, plus Disco-
+Wissen ueber Process-Markers (z.B. "uvicorn fuer Port 8765 mit
+DISCO_WORKSPACE=~/Disco" = Prod-Server). Speichert PID-Files unter
+`~/Disco/.disco/server.prod.pid` — dann ist die Identifikation
+robust auch wenn das `--reload` den Worker-Prozess tauscht.
+
+**2. `disco doctor`-Diagnose-Command**:
+
+Bei einem haengenden Server: User ruft `disco doctor` auf, kriegt
+eine Zusammenfassung:
+- Welche Disco-Prozesse laufen (Server + Subprocesses)
+- Welche davon hoch-CPU oder lang-laufend sind
+- Welche WAL-Files >10MB sind (Hinweis auf nicht-committete
+  Transaktionen)
+- Welche Stale "running"-Flow-Runs in der DB stehen
+- Empfohlene Aktion ("Subprocess 12345 spinning seit 30min — kann
+  mit `disco service kill 12345` beendet werden")
+
+Im Wesentlichen das, was Claude in der heutigen Session live mit
+einer Mischung aus `ps`, `lsof`, `sample` und SQLite-Queries gebaut
+hat — automatisiert.
+
+**3. UI-Sicht "Server-Status"**:
+
+In der Web-UI (Sidebar oder Settings-Pane) eine kleine
+Process-Anzeige: "Dev-Server :8766 ✓ (PID 12345, Uptime 2h 15min,
+3 Flow-Runner aktiv)". Bei Hang: "⚠ Subprocess 12345 spinning seit
+30min — Details anzeigen".
+
+**4. Operations-Manual** (`docs/operations.md`):
+
+Ein kurzer User-Leitfaden:
+- Wie starte/stoppe ich Server?
+- Was tun bei "Server antwortet nicht"?
+- Was bedeuten die Run-Strip-Status (running/done/failed/stale)?
+- Wie kille ich einen haengenden Subprocess sicher?
+- Wann brauche ich Claude vs. wann kann ich selbst handeln?
+
+### Reihenfolge
+
+Schritt 1 ist `disco service status` + `start` + `stop` + `restart`
++ ein erstes `docs/operations.md`. Das deckt 80% der Faelle ab und
+macht den User unabhaengig fuer den Alltag. Schritte 2-3 (doctor,
+UI-Sicht) sind nice-to-have.
+
+User-Quote (2026-04-26): *"Wir muessen einmal darueber sprechen wie
+ich die processe von disco selbstaendig starten ueberwachen und
+beenden kann. Aktuell lasse ich dich das immer machen und habe
+selbst keine Uebersicht."*
+
+**Zu diskutieren** bevor wir bauen:
+- Soll `disco service` auch Caffeinate ein/aus nehmen?
+- Sollen Dev + Prod gemeinsam gestartet werden ("`disco service start
+  all`") oder bewusst getrennt?
+- PID-File-Strategie: pro Workspace (~/Disco/.disco/server.pid) oder
+  zentral (~/.disco/services.json)?
+- Wie verhalten wir uns bei `--reload`-Worker-Tausch (PID-Wechsel)?
