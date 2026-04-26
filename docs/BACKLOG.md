@@ -1853,3 +1853,202 @@ User-Quote (2026-04-27): *"Mit steigender menge an flows und
 Datentabellen wird die Navigationseite sehr unuebersichtlich.
 Hier muessen wir uns was einfallen lassen. Sollte mindestens
 expandable sein."*
+
+
+## Extraction-Pipeline-UX: Ampelsystem, Auto-Pipeline, Batch-Mode (Prioritaet: hoch)
+
+**Heutige Realitaet** (live durchgelitten 2026-04-26/27): die
+Pipeline von "Datei in sources/ kopiert" bis "im FTS5-Suchindex
+findbar" funktioniert grundsaetzlich, aber jeder Schritt muss
+einzeln vom User angestossen werden, jeder Zwischenstand kann
+ohne klare Anzeige drift­en, und Fehlermeldungen kommen ad-hoc
+("Datei nicht in agent_doc_markdown", "context_length_exceeded",
+"Pfad ohne Prefix"). Disco kann zwar alle Schritte ausfuehren,
+aber das Bild "wo stehen wir gerade pro Datei" ist nicht sichtbar.
+
+Heutige Schritt-Sequenz pro Paket neuer Dateien:
+
+1. Files in `sources/` kopieren (manuell)
+2. `sources_register` aufrufen → Hash, Groesse, Eintrag in
+   `agent_sources`
+3. Optional `sources_attach_metadata` (Begleit-Excel)
+4. Optional `sources_detect_duplicates`
+5. Flow `extraction_routing_decision` starten (entscheidet
+   pro File welche Engine) → schreibt in `work_extraction_routing`
+6. Flow `extraction` starten → liest Routing, ruft Engine an,
+   schreibt in `agent_doc_markdown`
+7. `build_search_index` aufrufen → liest `agent_doc_markdown`,
+   baut FTS5-Index
+
+Zwischen jedem Schritt: User muss explizit triggern oder Disco
+darum bitten. Bei einem Restart oder Crash: kein einfaches
+"mach weiter wo ich war".
+
+### User-Anforderungen (2026-04-27)
+
+> "Da müssen wir ran:
+> - ganz klar strukturierter Ablauf mit Ampelsystem
+> - Vollstaendiger Durchlauf neuer Files sollte der Standard sein
+> - Batchprocessing ueber Nacht ueberlegung? (Kosten sparen moeglich)"
+
+### 1. Ampelsystem — pro Datei ein klarer Status
+
+Vorschlag: 4-Stufen-Status in `agent_sources` als zusaetzliche
+Spalte `pipeline_state`:
+
+| State | Bedeutung | DB-Indikator |
+|---|---|---|
+| 🔴 `registered` | Hash + Eintrag, sonst nichts | nur in `agent_sources` |
+| 🟠 `routed` | Routing-Engine entschieden | + in `work_extraction_routing` |
+| 🟡 `extracted` | Markdown vorhanden | + in `agent_doc_markdown` |
+| 🟢 `searchable` | im FTS5-Index | + in `agent_search_docs` |
+
+Anzeige: Ampel-Icon in Web-UI-Explorer neben jedem Filename.
+Tooltip mit Details (Engine, Cost, letzter Run, etc.). Ein
+Dashboard-Widget oben zeigt das Aggregat: "1708 von 1806 sind
+🟡, 0 sind 🟢". Klick → Filter auf "alle nicht-grünen".
+
+Plus eine fuenfte Stufe ⚫ `error` mit letzter Error-Message,
+wenn ein Schritt fehlgeschlagen ist (z.B. LibreDWG-SIGABRT).
+
+### 2. Vollstaendiger Durchlauf als Standard
+
+Heute muss der User vier Tools/Flows nacheinander triggern. Ziel:
+**ein Klick / ein Befehl** macht alles fuer neue Files.
+
+Vorschlaege:
+
+a) **Neuer Flow `pipeline`**, der intern register → routing →
+   extract → index orchestriert. Items sind Files (nicht Engine-
+   Aufrufe), pro Item laeuft die ganze Pipeline durch. Status
+   pro Item zeigt den aktuellen Schritt. Bei Fehler in einem
+   Schritt: Item failed mit klarer Phase ("failed: extraction
+   step on engine pdf-azure-di-hr").
+
+b) **Auto-Trigger beim Source-Onboarding**: `sources_register`
+   bekommt eine Option `auto_pipeline=true` (Default true), die
+   die Pipeline-Stufen direkt nach dem Registrieren startet.
+
+c) **Inotify/FS-Watcher** (Phase 2): Disco watch `sources/`-Folder,
+   erkennt neue Files automatisch, triggert Pipeline. Kein
+   manuelles Eingreifen mehr.
+
+Variante (a) ist der pragmatische Einstieg. (b) und (c) sind
+Komfort obendrauf.
+
+### 3. Batchprocessing ueber Nacht (Kosten-Reduktion)
+
+Azure-DI und Azure OpenAI bieten **Batch-APIs** mit ~50% Rabatt
+gegenueber den Real-time-Endpoints — Gegenleistung: bis zu 24h
+Bearbeitungszeit, kein Streaming.
+
+**Ueberschlagsrechnung** fuer ein typisches Onboarding-Paket:
+- 2000 PDFs × 0.014 EUR (Standard-Real-time-DI) = 28 EUR
+- mit Batch-API: ~14 EUR
+- Pro Onboarding-Tag also ~14 EUR Einsparung
+
+Bei 10 Projekten/Jahr mit grossen Paketen: ~140 EUR/Jahr. Nicht
+huge, aber sauber.
+
+**Implementation:**
+
+- Neue Engines `pdf-azure-di-batch`, `pdf-azure-di-hr-batch`,
+  `image-gpt5-vision-batch` parallel zu den Real-time-Engines.
+- Routing-Decision bekommt einen `prefer_batch=true|false`-Mode.
+  Default `false` (Real-time), `true` aktivierbar im Flow-Start
+  ("Diesen Run als Nacht-Batch laufen lassen").
+- Neue Tabelle `agent_batch_jobs` mit submit-Zeit, externem
+  Job-ID, Status, Result-Download-URL.
+- Neuer Flow `batch_poll`: laeuft alle ~30 min, fragt offene
+  Jobs ab, schreibt fertige Results in `agent_doc_markdown`,
+  closed Jobs in `agent_batch_jobs`.
+- UI: Batch-Run sieht aus wie ein normaler Flow-Run, aber mit
+  Statusangabe "Submitted, expected by 06:00".
+
+**Zu klaeren** vor Implementation:
+- Welche Items lohnen sich fuer Batch (klar: PDFs ueber Real-time
+  $$$, weniger klar: einzelne grosse Excels)?
+- Fallback wenn Batch-Job failed (Real-time-Re-Run?)
+- Wie verhalten wir uns bei einem Batch-Run, der teilweise da
+  ist (z.B. 1500 von 2000 Items fertig nach 18h)?
+
+### Weiteres aus der heutigen Schmerz-Session, was passend hier rein gehoert:
+
+- **Counter-Update-Bug nach Crash** (siehe Eintrag "Stabilitaets-
+  Bugs aus FTS5-Deadlock" oben): Pipeline-Status-Anzeige darf nicht
+  von Counter-Update-Bugs abhaengen — Source of Truth muss die
+  echte Daten-Existenz sein (z.B. COUNT von `agent_doc_markdown`
+  statt `agent_flow_runs.done_items`).
+- **Vorbedingungs-Pruefung**: heute prueft `build_search_index`
+  pro File ob `agent_doc_markdown` einen Eintrag hat. Bei 1500
+  Misses gibt's 1500 Errors. Das Pipeline-Konzept oben loest
+  das, weil Files erst in der Pipeline-Phase "extracted" sind
+  bevor sie indiziert werden.
+- **lager-halle Pfad-Bug** (siehe Vorgeschichte): hatte mit dem
+  Race zwischen Migration 009 und parallel laufendem alten
+  Extraktor zu tun. Pipeline mit klarem State-Modell verhindert,
+  dass solche Inkonsistenzen still untergehen.
+
+### 4. Retry-Strategie und Permanent-Fail-Markierung
+
+**User-Anforderung 2026-04-27**: *"Die Dateien die beim
+extraction failen sollen gleich 2 mal neu versucht werden und
+dann markiert und beim naechsten durchlauf nicht neu versucht
+werden."*
+
+Heute ist `max_retries=1` (Logs zeigen "Attempt 1/1 FEHLER" —
+ein Versuch, sofort als failed markiert). Aenderung:
+
+| Versuch | Verhalten |
+|---|---|
+| Attempt 1 | normal versuchen |
+| Attempt 2 | retry mit Exponential-Backoff (z.B. 30s, 2min) |
+| Attempt 3 | letzter retry |
+| Nach 3× failed | Item bekommt `pipeline_state='extraction_failed'` mit Timestamp + last_error + n_attempts |
+
+**Beim naechsten `pipeline`/`extraction`-Run**:
+- Items mit `pipeline_state='extraction_failed'` werden DEFAULT
+  geskippt (`reason="permanent_failed"`).
+- Force-Override via Flow-Config: `force_retry_failed=true`
+  (z.B. wenn LibreDWG ein Update hatte und man schauen will
+  ob die Files jetzt durchgehen).
+- UI zeigt diese Items als ⚫ (separates Icon vom 🔴 "noch nichts
+  passiert"-State), Tooltip zeigt last_error + Datum.
+- `agent_sources` bekommt zusaetzliche Spalten: `last_attempt_at`,
+  `attempt_count`, `last_error_message` (~250 chars truncated).
+
+**Differenzierung transient vs. permanent**:
+- Azure-DI `InternalServerError` → transient, retries lohnen sich
+- LibreDWG `SIGABRT` → permanent (Datei ist kaputt), retries
+  helfen nicht
+- pypdf-CID → permanent (jetzt aber nicht mehr relevant da v2)
+- Heuristik: nach 3× demselben Error-Pattern hintereinander
+  → als permanent markieren, sonst noch transient. Das verhindert
+  endloses Retry bei klar persistenten Bugs.
+
+**Querverweis zu "Stabilitaets-Bugs aus FTS5-Deadlock 2026-04-26"
+Section 3** ("Azure-DI HighRes: max_retries zu niedrig") — das
+hier ist die strukturierte User-Sicht-Variante davon und sollte
+zusammen umgesetzt werden.
+
+### Implementierungs-Reihenfolge
+
+1. **`pipeline_state`-Spalte** in `agent_sources` + Backfill-
+   Migration (idempotent, leitet aus existierenden Tabellen ab).
+   States: `registered`, `routed`, `extracted`, `searchable`,
+   `extraction_failed`. Plus Retry-Spalten (`attempt_count`,
+   `last_attempt_at`, `last_error_message`).
+2. **Web-UI-Explorer**: Ampel-Icon neben Filename, Aggregat-
+   Widget oben, separates ⚫-Icon fuer permanent-failed.
+3. **Flow `extraction`**: max_retries=3 mit Backoff, bei finalem
+   Fail Status auf `extraction_failed` setzen.
+4. **Flow `pipeline`**: orchestriert die 4 Schritte als One-Click,
+   skipped permanent-failed by default.
+5. **Auto-Trigger** in `sources_register`.
+6. **Batch-API-Engines** als optionaler Mode (Phase 2).
+7. **FS-Watcher** (Phase 3).
+
+User-Quote (2026-04-27): *"Die gesamte extraction pipeline von
+registrierung bis hin zum fertigen suchindex funktioniert
+grundsetzlich, ist aber grade extrem! muehsam. Da muessen wir
+ran ..."*
