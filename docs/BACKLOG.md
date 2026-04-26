@@ -1545,3 +1545,227 @@ reproduzierbare Eval-Runs gegen ein Goldstandard-Set.
 
 User-Quote (2026-04-26): *"Ne, das thema ist noch zu frueh aber
 brauchen wir. Kommt auf die BL bitte"*
+
+
+## Stabilitaets-Bugs aus FTS5-Deadlock 2026-04-26 (Prioritaet: hoch)
+
+Beim Aufbau eines FTS5-Suchindex auf bew-rsd-lager-halle ist der
+Prod-Server gehangen — Diagnose live durchgefuehrt. Eine Kette von
+verbundenen Bugs, die alle einzeln in den Backlog wollen:
+
+### 1. FTS5-Indexer blockiert Prod-Server (HAUPT-BUG)
+
+**Symptom**: User triggert "baue Suchindex auf lager-halle". Aufgabe
+laeuft als `multiprocessing.spawn`-Subprocess vom Uvicorn (PID 57812
+im Live-Vorfall). Nach kurzem normalem Lauf bleibt der Subprocess in
+einer FTS5-Sync-Endlosschleife stehen — Stack zeigt
+`fts5SyncMethod → fts5IndexFlush → fts5DataRead → blobReadWrite`,
+100% CPU auf einem Core, **kein Wachstum** der `datastore.db` oder
+`datastore.db-wal` ueber Minuten.
+
+**Folge-Schaden**: Subprocess teilt sich einen
+`multiprocessing.Manager`-Lock-Server mit zwei laufenden Flow-Runner-
+Children (campus-reuter Run #4, rea-denox Run #15). Beide Children
+stehen sofort still, sobald sie den naechsten Status-Update an den
+Parent abschicken wollen — Stack zeigt
+`pysqlite_connection_commit_impl → unixSync → __psynch_cvwait`. Der
+gesamte Flow-Subsystem ist eingefroren.
+
+**Folge zwei**: Uvicorn-Hauptprozess (PID 57710) hat in seinem
+`--reload`-Watchfiles-Thread einen `pthread_mutex_lock` auf einer
+Mutex die ein toter Thread haelt — Server antwortet nicht mehr auf
+`/api/health` (5s timeout). SIGTERM wirkungslos, SIGKILL noetig.
+
+**Was zu tun ist**:
+1. **FTS5-Sync-Hang reproduzieren** — herausfinden, welche
+   Markdown-Einheit das ausloest. Verdacht: ein einziger sehr grosser
+   Markdown-Block (mehrere MB), den FTS5 nicht inkrementell flushen
+   kann. Mitigation: Markdown-Inputs vor dem FTS5-Insert chunken
+   (max 200KB pro Row) — passt eh zur Hybrid-Search-Phase 2c-Strategie
+   (~500-800-Tokens-Chunks).
+2. **Indexer als isolierter Subprocess, nicht
+   `multiprocessing.spawn` vom Uvicorn**. Statt dessen: separater
+   Worker-Prozess (analog zu Flow-Runner via `runner_host`), der NUR
+   ueber DB-Status mit dem Service kommuniziert — kein
+   `multiprocessing.Manager` zwischen Web-Server und Indexer.
+3. **Indexer interruptible**: User-Klick auf "Cancel" muss die Sync-
+   Operation sauber abbrechen koennen, auch wenn FTS5 in einem Loop
+   steckt. Heute: nur SIGKILL hilft.
+4. **Watchfiles-Reload weniger gefahrlich machen**: wenn ein
+   Subprocess-Crash detected wird, sollte Uvicorn den Reload-Cycle
+   nicht im Hauptprozess synchron abschliessen, sondern lazy
+   restartet werden.
+
+### 2. Counter-Update-Bug nach unsauberem Shutdown
+
+**Symptom**: Beim Restart eines Flow-Runs nach dem Crash zaehlt
+`agent_flow_runs.done_items` nicht hoch, obwohl
+`agent_doc_markdown` korrekt befuellt wird. Beobachtet bei
+campus-reuter Run #5 — `done_items=0`, aber 14 Markdown-Records mit
+`run_id=5`. Discrepancy bleibt waehrend des gesamten Run-Verlaufs
+bestehen, nicht nur am Anfang.
+
+**Verdacht**: workspace.db hat aus dem Crash eine Stale-Lock-Page
+oder ein Transaktions-State, der den UPDATE-Pfad fuer `done_items`
+blockiert (oder still verschluckt). Inserts in datastore.db gehen
+durch, weil das eine andere DB ist.
+
+**Was zu tun ist**:
+1. **Reproduzieren** im Dev: Flow-Run starten → SIGKILL → neuen Run
+   starten → checken ob done_items mitwaechst.
+2. **WAL-Checkpoint beim Service-Start**: vor dem ersten Open der
+   workspace.db ein `PRAGMA wal_checkpoint(TRUNCATE)` ausfuehren.
+3. **Stale-Run-Recovery beim Service-Start**: `agent_flow_runs` mit
+   `status='running'` und `worker_pid` der nicht mehr existiert
+   automatisch auf `status='failed'` setzen mit
+   `error='killed during shutdown'`. Heute: bleibt manuell zu
+   bereinigen.
+
+### 3. Azure-DI HighRes: max_retries zu niedrig
+
+**Symptom**: HR-Endpoint liefert vereinzelt `(InternalServerError)
+An unexpected error occurred.` zurueck. Bei `max_retries=1` (heute)
+ist das Item sofort als failed markiert. Beobachtet: 7 von 14
+versuchten HR-Items in campus-reuter Run #5 (50%!) gefailt mit
+diesem Fehler. Andere HR-Items kommen normal durch.
+
+**Was zu tun ist**:
+1. **`max_retries=3` mit Exponential-Backoff** (300ms, 1s, 3s) fuer
+   die Engines pdf-azure-di, pdf-azure-di-hr, image-gpt5-vision —
+   alles Engines die gegen Azure laufen.
+2. **HR→Standard-Fallback** als Option: nach N HR-Failures auf
+   demselben Item, einmal mit pdf-azure-di-Standard versuchen. Verlust
+   an Qualitaet (bei Plaenen schlechter), aber besser als kein
+   Output. Konfigurierbar.
+
+### 4. LibreDWG SIGABRT bei bestimmten DWGs (bekannt, aber Anteil hoch)
+
+**Symptom**: `dwg2dxf` killed sich mit SIGABRT bei manchen DWGs.
+Beobachtet 18 SIGABRT-Cases + 4 "Invalid handle 0" + 2
+"Expected DXF entity" + 2 "'MODEL'"-KeyError = **26 von 35 DWGs
+gefailt** in campus-reuter Run #5 (74%!). Der LibreDWG-Code (GPL-3,
+OSS) hat Probleme mit AutoCAD-2018+-Features oder bestimmten
+Tekla-/CAD-Konventionen.
+
+**Was zu tun ist**:
+1. **Fallback auf einen zweiten Konverter**: ezdxf hat selbst einen
+   experimentellen DWG-Reader (in C, ueber `cadtool` oder
+   `pyodadrx` — closed-source aber lokal). Oder: DWGs die libredwg
+   nicht kann, **skippen mit klarer Markierung** und manuell
+   nachverarbeiten.
+2. **Fehler-Klassifikation**: in `disco/docs/dwg.py` die
+   LibreDWG-Crashes von ezdxf-Read-Errors trennen — heute kommen
+   beide als "DXF-Read nach LibreDWG-Konvertierung fehlgeschlagen"
+   raus, was die Statistik unscharf macht.
+3. **Pool-Curation**: bei ~74% LibreDWG-Failrate auf Stahlbau-DWGs
+   ist der Outsource-Tool-Markt vielleicht der falsche. Bei Bedarf:
+   ODA File Converter wieder reaktivieren (closed-source, aber
+   lizenzfrei, deutlich stabiler) — Risiko: Konvention 9 (Network
+   Egress) muss neu geprueft werden, weil ODA-Updates online
+   geholt werden.
+
+User-Beobachtung 2026-04-26: *"jetzt habe ich die flows neu
+gestartet aber im hintergrund failed alles"* — die echten
+Erfolgsraten waren ~26% (counter falsch) bzw. ~45% wenn man
+LibreDWG-Bugs als bekannt rausrechnet.
+
+Bezug zur "Hybrid-Search Phase 2c"-Sektion in CLAUDE.md ("Was als
+Naechstes kommt"): Der hier beschriebene FTS5-Indexer ist offenbar
+ein laengst angefangener Code-Pfad, kein offizieller Phase 2c-
+Indexer. Vor weiterer Arbeit: aufraeumen und planen, statt
+inkrementell weiter zu erweitern.
+
+
+## Disco-Prozess-Management fuer den User (Prioritaet: hoch)
+
+Heute ist Claude die einzige Instanz, die den Disco-Server (Dev +
+Prod) starten, ueberwachen und beenden kann. Der User hat keine
+Uebersicht und keine eigenen Tools — er muss bei jedem Hagel
+("Server haengt", "Flows failen", "Restart noetig") fragen, statt
+selbst eingreifen zu koennen. Das ist ein UX-Defizit, nicht zuletzt,
+weil der User Disco jeden Tag laufen hat und Claude *nicht* immer
+gleich verfuegbar ist.
+
+**Was der User heute (un-)kann:**
+
+| Aktivitaet | Heute | Pain |
+|---|---|---|
+| Server starten (Dev/Prod) | langer `cd ... && DISCO_WORKSPACE=... uv run uvicorn ...` aus CLAUDE.md kopieren | hoch — er macht das selten, vergisst die Flags |
+| Sehen, ob Server laeuft | `lsof -i :8765` oder Browser-Probe | mittel |
+| Sehen, was an Subprocesses haengt | nur via Activity-Monitor (Mac), keine Disco-Sicht | hoch — er sieht "Python-Prozess mit 100% CPU" und weiss nicht, was es ist |
+| Server stoppen | `pkill -f "port 8765"` oder `kill <PID>` von Hand | mittel, leicht falsch zu machen |
+| Hangenden Subprocess killen (wie heute der FTS5-Spinner) | gar nicht — er ruft Claude | hoch |
+| Flow-Runs ueberwachen | UI-Run-Strip + Logs lesen | OK fuer normale Faelle, schwach bei Stale-States |
+| Stale "running"-Flow-Runs aufraeumen | gar nicht — bleibt manuell | mittel |
+
+### Was wir bauen sollten
+
+**1. `disco service`-CLI** (existiert noch nicht):
+
+```bash
+disco service status           # Was laeuft? Dev-Server? Prod-Server? Welche Flow-Runner? PIDs, CPU, Uptime
+disco service start dev        # Dev-Server hochfahren (Port 8766, ~/Disco-dev)
+disco service start prod       # Prod-Server hochfahren (Port 8765, ~/Disco)
+disco service stop dev|prod    # Sauber stoppen (SIGTERM, dann ggf. SIGKILL)
+disco service restart dev|prod # Kombi: stop + start, mit Health-Check
+disco service logs dev|prod [--tail N]  # Live-Tail oder letzte N Zeilen vom Server
+disco service kill <pid>       # einen Subprocess mit Sicherheitsabfrage killen
+```
+
+Implementierung: dünner Wrapper um `lsof`/`ps`/`kill`, plus Disco-
+Wissen ueber Process-Markers (z.B. "uvicorn fuer Port 8765 mit
+DISCO_WORKSPACE=~/Disco" = Prod-Server). Speichert PID-Files unter
+`~/Disco/.disco/server.prod.pid` — dann ist die Identifikation
+robust auch wenn das `--reload` den Worker-Prozess tauscht.
+
+**2. `disco doctor`-Diagnose-Command**:
+
+Bei einem haengenden Server: User ruft `disco doctor` auf, kriegt
+eine Zusammenfassung:
+- Welche Disco-Prozesse laufen (Server + Subprocesses)
+- Welche davon hoch-CPU oder lang-laufend sind
+- Welche WAL-Files >10MB sind (Hinweis auf nicht-committete
+  Transaktionen)
+- Welche Stale "running"-Flow-Runs in der DB stehen
+- Empfohlene Aktion ("Subprocess 12345 spinning seit 30min — kann
+  mit `disco service kill 12345` beendet werden")
+
+Im Wesentlichen das, was Claude in der heutigen Session live mit
+einer Mischung aus `ps`, `lsof`, `sample` und SQLite-Queries gebaut
+hat — automatisiert.
+
+**3. UI-Sicht "Server-Status"**:
+
+In der Web-UI (Sidebar oder Settings-Pane) eine kleine
+Process-Anzeige: "Dev-Server :8766 ✓ (PID 12345, Uptime 2h 15min,
+3 Flow-Runner aktiv)". Bei Hang: "⚠ Subprocess 12345 spinning seit
+30min — Details anzeigen".
+
+**4. Operations-Manual** (`docs/operations.md`):
+
+Ein kurzer User-Leitfaden:
+- Wie starte/stoppe ich Server?
+- Was tun bei "Server antwortet nicht"?
+- Was bedeuten die Run-Strip-Status (running/done/failed/stale)?
+- Wie kille ich einen haengenden Subprocess sicher?
+- Wann brauche ich Claude vs. wann kann ich selbst handeln?
+
+### Reihenfolge
+
+Schritt 1 ist `disco service status` + `start` + `stop` + `restart`
++ ein erstes `docs/operations.md`. Das deckt 80% der Faelle ab und
+macht den User unabhaengig fuer den Alltag. Schritte 2-3 (doctor,
+UI-Sicht) sind nice-to-have.
+
+User-Quote (2026-04-26): *"Wir muessen einmal darueber sprechen wie
+ich die processe von disco selbstaendig starten ueberwachen und
+beenden kann. Aktuell lasse ich dich das immer machen und habe
+selbst keine Uebersicht."*
+
+**Zu diskutieren** bevor wir bauen:
+- Soll `disco service` auch Caffeinate ein/aus nehmen?
+- Sollen Dev + Prod gemeinsam gestartet werden ("`disco service start
+  all`") oder bewusst getrennt?
+- PID-File-Strategie: pro Workspace (~/Disco/.disco/server.pid) oder
+  zentral (~/.disco/services.json)?
+- Wie verhalten wir uns bei `--reload`-Worker-Tausch (PID-Wechsel)?
