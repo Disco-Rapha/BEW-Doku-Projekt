@@ -114,13 +114,25 @@ def extract(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
     md = resp.choices[0].message.content or ""
     md = md.strip() + "\n"
 
-    # 5) Token + cost (best effort — gpt-5.1-vision-Preise nicht hardcoded,
-    #    weil Foundry-Pricing variabel ist; wir rechnen 0.0 EUR und
-    #    dokumentieren prompt+completion-tokens fuer spaetere Kosten-
-    #    Aufrechnung)
-    usage = getattr(resp, "usage", None)
-    prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
-    completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+    # 5) Token-Usage + Cost-Berechnung via disco.pricing
+    from disco.pricing import extract_token_usage, get_foundry_price
+
+    usage = extract_token_usage(getattr(resp, "usage", None))
+    price = get_foundry_price(deployment)
+    if price is not None:
+        cost_eur = price.cost_eur(
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            cached_prompt_tokens=usage["cached_tokens"],
+        )
+    else:
+        # Unbekanntes Deployment — Tokens trotzdem mitschreiben, Kosten 0
+        # damit die Pipeline nicht crasht. Im Log ein Hinweis.
+        logger.warning(
+            "Kein Foundry-Pricing fuer deployment=%s — estimated_cost_eur=0",
+            deployment,
+        )
+        cost_eur = 0.0
 
     char_count = len(md)
     engine_version = _ENGINE_VERSIONS.get(engine, "1.0")
@@ -138,8 +150,7 @@ def extract(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
                 "char_end": char_count,
             }
         ],
-        # Kosten lassen wir bei 0 — die echten Foundry-Tokens stehen in meta_json
-        "estimated_cost_eur": 0.0,
+        "estimated_cost_eur": cost_eur,
         "extractor_version": (
             f"{EXTRACTION_PIPELINE_VERSION}:{engine}:{engine_version}"
         ),
@@ -148,8 +159,9 @@ def extract(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
             "orig_height": orig_size[1],
             "resized_width": img_resized.size[0],
             "resized_height": img_resized.size[1],
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
+            "prompt_tokens": usage["prompt_tokens"],
+            "completion_tokens": usage["completion_tokens"],
+            "cached_tokens": usage["cached_tokens"],
             "deployment": deployment,
         },
     }
