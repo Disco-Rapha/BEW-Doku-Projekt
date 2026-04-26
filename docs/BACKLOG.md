@@ -1769,3 +1769,87 @@ selbst keine Uebersicht."*
 - PID-File-Strategie: pro Workspace (~/Disco/.disco/server.pid) oder
   zentral (~/.disco/services.json)?
 - Wie verhalten wir uns bei `--reload`-Worker-Tausch (PID-Wechsel)?
+
+
+## Sidebar-Navigation skaliert nicht (Prioritaet: hoch)
+
+**Beobachtung 2026-04-27 in lager-halle**: die Sidebar listet 12
+datastore.db-Tabellen, ~60+ workspace.db-Tabellen (vor allem
+`context_*`-Tabellen wie `context_armatur_regel__armatur_b_reg`,
+`context_batterie__batterie_b`, ...) und 2 Flows. Insgesamt > 80
+Eintraege in einer endlosen, flachen Scroll-Liste. Die Tabellen-
+namen sind so lang, dass sie haeufig abgeschnitten dargestellt
+werden ("context_armatur_rueckschlag__armatur..." mit "..."-
+Truncation).
+
+Mit jedem context-Excel-Import werden 5-10 weitere Tabellen
+angelegt (z.B. VGB-S-831-Anlagen-Tabellen). Bei mehreren grossen
+Projekten oder beim sources-Onboarding mit Begleit-Excels wird
+die Sidebar in Zukunft eher 200+ Eintraege haben.
+
+### User-Anforderung (Minimum)
+
+> "Sollte mindestens expandable sein."
+
+Also: jede Gruppe (datastore.db / workspace.db / Flows) und jede
+Untergruppe (context_armatur_regel, context_batterie, ...) muss
+einklappbar sein. Default-State waere "alles eingeklappt ausser
+das was kuerzlich geoeffnet war".
+
+### Vorschlaege fuer den Polish darueber hinaus
+
+1. **Gruppierung nach Namespace-Praefix**:
+   - `agent_*` als Gruppe (immer aufgeklappt — Kern-Tabellen)
+   - `work_*` als Gruppe (Arbeitstabellen, oft ad-hoc)
+   - `context_*` mit Sub-Gruppierung am `__`-Separator
+     (z.B. alle `context_armatur_regel__*` unter einer Section
+     "context_armatur_regel" zusammenfassen)
+
+2. **DB-File als oberste Hierarchie-Ebene** (Datastore vs.
+   Workspace bleibt wichtige Unterscheidung — Read-only-Status
+   ist heute nur Text-Annotation, koennte ein Icon werden).
+
+3. **Filter-/Suchfeld** ueber der Liste: tippe "armatur" → nur
+   passende Tabellen sichtbar.
+
+4. **Pin-Funktion**: haeufig benutzte Tabellen oben, manuell
+   pinbar (sticky pro Projekt im LocalStorage).
+
+5. **Leere Tabellen ausblenden** als Toggle: in lager-halle hat
+   `agent_source_metadata` 0 Rows, `agent_source_relations` 0,
+   `agent_sharepoint_docs` ist da aber wird nicht aktiv genutzt.
+   Default-Modus "verstecke leere" reduziert das Listing oft
+   um 30%.
+
+6. **Row-Count-Spalte besser nutzen**: heute steht der Count
+   rechts neben dem Namen — bei Truncation des Namens unklar
+   welcher Count zu welchem Namen gehoert. Ggf. besser als
+   Tooltip oder unter dem Namen.
+
+7. **Flows-Bereich aehnlich**: aktuell flach, aber bei vielen
+   Flows kommt das gleiche Problem. Gruppierung nach Status
+   (running / done / failed / scheduled) oder nach Flow-Name
+   waere sinnvoll.
+
+### Implementierungs-Reihenfolge
+
+Schritt 1 — **Expandable** (User-Minimum):
+  - Pro Top-Level-Section (datastore.db, workspace.db, Flows)
+    ein Disclosure-Triangle (`<details>` reicht im einfachsten
+    Fall). State im LocalStorage, pro Projekt.
+
+Schritt 2 — **Namespace-Gruppierung**:
+  - Bei context_*-Tabellen: split am ersten `__`, Untergruppen
+    bilden. Gruppe einklappbar, Default eingeklappt wenn > 5
+    Tabellen pro Gruppe.
+
+Schritt 3 — **Filter-Feld**:
+  - Eine kleine `<input>`-Box oben mit Echtzeit-Filter ueber
+    den Tabellenname. Reduziert die meisten Such-Use-Cases.
+
+Schritte 4-7 sind Polish, koennen iterativ kommen.
+
+User-Quote (2026-04-27): *"Mit steigender menge an flows und
+Datentabellen wird die Navigationseite sehr unuebersichtlich.
+Hier muessen wir uns was einfallen lassen. Sollte mindestens
+expandable sein."*
