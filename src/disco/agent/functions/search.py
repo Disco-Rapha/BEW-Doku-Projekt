@@ -333,14 +333,49 @@ def _build_search_index(
     finally:
         conn.close()
 
+    # Listen-Truncation, damit das Tool-Result nicht das Context-Window
+    # des Agents sprengt. Bei 1000+ Files waere die volle Liste mehrere
+    # hundert KB — beim naechsten LLM-Call gibt's context_length_exceeded.
+    # Volle Listen sind weiterhin via sqlite_query auf agent_search_docs
+    # zugaenglich.
+    MAX_LIST = 25
+
+    # Errors nach Pattern aggregieren (erste 80 chars als Bucket-Key) —
+    # 1500 "Datei nicht in agent_doc_markdown"-Errors werden so zu 1 Eintrag.
+    from collections import Counter
+    error_patterns: list[dict[str, Any]] = []
+    if errors:
+        ctr = Counter(
+            (e.get("error", "") or "")[:80] for e in errors
+        )
+        error_patterns = [
+            {"pattern": pat, "count": cnt}
+            for pat, cnt in ctr.most_common(10)
+        ]
+
     return {
-        "indexed": indexed,
-        "skipped": skipped,
-        "errors": errors,
-        "total_files": len(indexed),
+        "total_files_in_scope": len(indexed) + len(skipped) + len(errors),
         "total_chunks": total_chunks,
         "total_pages": total_pages,
         "force_reindex": force_reindex,
+        "n_indexed": len(indexed),
+        "n_skipped": len(skipped),
+        "n_errors": len(errors),
+        # Beispiel-Listen, gekappt:
+        "indexed": indexed[:MAX_LIST],
+        "skipped": skipped[:MAX_LIST],
+        "errors": errors[:MAX_LIST],
+        "error_patterns": error_patterns,
+        "list_truncated": (
+            len(indexed) > MAX_LIST
+            or len(skipped) > MAX_LIST
+            or len(errors) > MAX_LIST
+        ),
+        "_note": (
+            "Listen sind auf je 25 Eintraege gekappt. Volle Liste via "
+            "`sqlite_query` auf agent_search_docs (where error IS NOT "
+            "NULL fuer fehlerhafte Files)."
+        ),
     }
 
 
