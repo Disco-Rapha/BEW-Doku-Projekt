@@ -1431,3 +1431,117 @@ nicht typisch, ggf. via Projekt-Konfig.
 
 User-Quote (2026-04-26): *"Welche anhaltspunkte haetten wir um
 replaces und format_converson-of zu ermitteln?"*
+
+
+## Relevance-Score / Document-Scoring (Prioritaet: mittel)
+
+Ueber `kanonisch` (= mechanisch dedupliziert) hinaus wollen wir eine
+zweite, projektspezifische Achse: **Wie relevant ist dieses Dokument
+fuer das Projekt-Ziel?** Heute hat jedes Dokument im Pool denselben
+Wert; tatsaechlich ist eine Stahlbau-Statik fuer einen
+SOLL/IST-Abgleich gegen VGB S 831 hochrelevant, ein internes
+Besprechungs-Foto eher nicht.
+
+**Zwei Spielarten:**
+
+1. **Lifecycle-Score** (deterministisch, billig):
+   `final | review | draft | archived | scratch`. Aus Pfad-Hinweisen
+   (`/archiv/`, `/draft/`, `/superseded/`), Begleit-Excel-Status-Spalten
+   und Versions-Suffixen ableitbar. Kein LLM noetig.
+
+2. **Topical-Score** (LLM-basiert, teurer):
+   Wie inhaltlich nah ist das Dokument am Projekt-Ziel? Aus
+   `README.md` (Projekt-Ziel) + Markdown-Extrakt + Embedding-Distance
+   oder LLM-Klassifikation. Skala 0-100 oder Buckets (high/medium/low).
+
+**Use-Cases:**
+- Suchergebnisse priorisieren (final > draft, hoher Topical-Score zuerst)
+- Bulk-Flows nur auf relevanter Teilmenge laufen lassen
+   (Token-Budget schonen)
+- Reports filtern ("zeige nur high-relevance-Dokumente fuer den
+  SOLL/IST-Abgleich")
+
+**Offene Fragen** (zu klaeren bevor implementiert):
+- Wer schreibt den Score: Disco automatisch beim Source-Onboarding,
+  oder explizit per Skill/Flow?
+- Eine Score-Spalte oder mehrere (lifecycle/topical/manual)?
+- Persistiert in `agent_sources` oder eigene Tabelle `agent_source_scores`?
+
+User-Quote (2026-04-26): *"Ich wuerde auch gerne noch sowas wie einen
+relevance score einfuehren oder sowas..."*
+
+Bezug: braucht `Anhaltspunkte fuer replaces und format-conversion-of`
+fuer den Lifecycle-Score; profitiert spaeter von OpenAI Evals (s.u.)
+fuer die Kalibrierung der LLM-basierten Topical-Klassifikation.
+
+
+## OpenAI Evals / Azure AI Foundry Evaluations (Prioritaet: niedrig, aber strategisch)
+
+Sobald Disco LLM-basierte Klassifikationen oder Scores produziert
+(Topical-Relevance, DCC-Klassifikation, SOLL/IST-Match), brauchen wir
+**systematische Qualitaetsmessung** — nicht "passt schon", sondern
+reproduzierbare Eval-Runs gegen ein Goldstandard-Set.
+
+**Was es ist:**
+
+- **OpenAI Evals**: zwei Dinge — (a) Open-Source-Framework
+  `openai/evals` (MIT) zum Bauen eigener Eval-Suiten,
+  (b) Platform-Produkt `platform.openai.com/evals` mit UI, Datasets
+  und gemanagten Runs.
+- **Azure AI Foundry Evaluations** ist das Microsoft-Aequivalent:
+  - **SDK**: `azure-ai-evaluation` (Python, MIT) — heute NICHT in
+    unserem `pyproject.toml`, koennte mit `uv add azure-ai-evaluation`
+    nachgezogen werden.
+  - **Foundry Portal UI**: Evaluations-Tab pro Projekt fuer Runs,
+    Vergleiche und Dataset-Verwaltung.
+- **Built-in Evaluators** (Sweden Central verfuegbar):
+  `RelevanceEvaluator`, `GroundednessEvaluator`, `CoherenceEvaluator`,
+  `FluencyEvaluator`, `SimilarityEvaluator`. Alle nehmen Query +
+  Response (+ optional Context) und liefern einen 1-5-Score plus
+  Begruendung.
+- **Custom Evaluators**: eigene Python-Klassen mit `__call__(query,
+  response, ground_truth, ...) -> dict` lassen sich registrieren und
+  in Eval-Runs mischen.
+
+**Fuer Disco relevant in:**
+
+1. **Kalibrierung der Relevance-Score-Rubrik** (s.o.): bevor wir auf
+   3.000 Dokumente loslassen, ein 50-er-Goldstandard mit
+   Human-Labels bauen, drei Prompt-Varianten gegen den Goldstandard
+   evaluieren, beste Variante in Prod.
+2. **A/B-Tests bei Prompt-Aenderungen**: System-Prompt-Update auf dem
+   Portal-Agent — vorher/nachher-Eval ueber dasselbe Goldstandard-Set,
+   damit Regressions nicht erst dem User auffallen.
+3. **Klassifikator-Qualitaet**: DCC-/Gewerks-Klassifikation,
+   SOLL/IST-Match — alles Use-Cases mit klarer Wahrheit, ideal fuer
+   Evals.
+
+**Vermutete Kosten** (Sweden Central Listpreise):
+- Built-in-Evaluators sind LLM-Calls gegen GPT-4-Klasse-Modell, also
+  ~$0.01-0.05 pro Eval-Run-Item, Goldstandard-Set 50 Items + 3
+  Prompt-Varianten ~ 1-3 EUR pro Kalibrierungs-Zyklus. Vernachlaessigbar.
+
+**Implementierungs-Skizze** (wenn wir es angehen):
+
+1. `uv add azure-ai-evaluation`
+2. Goldstandard-Set bauen: `~/Disco/projects/<slug>/evals/goldstandard.jsonl`
+   mit `{"document_id": ..., "expected_relevance": "high", "rationale": "..."}`.
+3. Eval-Skript in `scripts/evals/relevance_eval.py`: laedt Goldstandard,
+   ruft Disco-Klassifikator pro Item, vergleicht mit Built-in
+   `RelevanceEvaluator` + Custom-Evaluator (exact-match auf
+   high/medium/low).
+4. Run via `uv run python scripts/evals/relevance_eval.py` ergibt
+   einen JSONL-Eval-Report; bei Aenderung des System-Prompts oder
+   Modell-Deployments einfach erneut ausfuehren.
+5. **Optional Phase 2**: Eval-Runs auch im Foundry-Portal sichtbar
+   machen ueber `azure.ai.evaluation.evaluate(target=..., evaluators=...,
+   azure_ai_project=...)` — zentrales Dashboard fuer alle Eval-Runs.
+
+**Warum jetzt nicht implementieren:**
+- Solange wir keine LLM-basierten Scores in Prod haben, gibt's nichts
+  zu evaluieren.
+- Sobald Topical-Relevance oder DCC-Klassifikation aktiv sind, wird
+  Eval-Setup vor Skalierung Pflicht.
+
+User-Quote (2026-04-26): *"Ne, das thema ist noch zu frueh aber
+brauchen wir. Kommt auf die BL bitte"*
