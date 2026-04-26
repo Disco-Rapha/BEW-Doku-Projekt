@@ -2189,3 +2189,164 @@ Vorteile:
 User-Quote (2026-04-27): *"Da sind ja viele wichtige Daten dabei,
 die wir gleich bei der registrierung mit extrahieren koennten.
 Die sollten dann auch verfuegbar sein."*
+
+
+## Cost-Tracking: Chat + Monatliche Gesamtsicht (Prioritaet: hoch)
+
+**Heutiger Stand (2026-04-27, system.db Stichprobe):**
+
+- `chat_messages` hat bereits `tokens_input`, `tokens_output`,
+  `token_count`-Spalten — **aber keine `cost_eur`-Spalte**.
+- Nur **737 von 2026 Rows** (~36 %) haben Token-Counts erfasst —
+  Erfassung greift offenbar nicht zuverlaessig.
+- Aggregat ueber das was da ist: **72 Mio Input-Tokens**, **485k
+  Output-Tokens** ueber den Lebenszyklus aller Disco-Chats.
+- Bei GPT-5.1-Listpreisen ($2.50/$1.25/$10 pro 1M Input/cached/output)
+  und USD_TO_EUR=0.92: Lifetime-Chat-Kosten **ca. 140-170 EUR**
+  (je nach cache-hit-Rate).
+- `cached_tokens` wird heute gar nicht erfasst — Foundry-Cache spart
+  ~50 % auf Input, das geht in der Kostenrechnung verloren.
+
+**Bestehende Cost-Erfassung (bereits da):**
+
+- `agent_doc_markdown.estimated_cost_eur` (pro extrahiertes File via
+  GPT-5.1 Vision).
+- `agent_flow_runs.total_cost_eur` (pro Flow-Run aggregiert).
+- `disco/pricing.py` zentral mit `FOUNDRY_PRICING`-Dict.
+
+**Was fehlt:**
+
+1. **Chat-Kosten pro Message erfassen** — Token-Counts zuverlaessig,
+   plus `cached_tokens`, plus berechneter `cost_eur`.
+2. **Azure-DI-Kosten erfassen** — DI hat heute keine zentrale
+   Cost-Spur. PDFs werden via `pdf-azure-di`/`pdf-azure-di-hr`
+   verarbeitet und Disco hat Listpreise (ca. $1.50 pro 1000 Pages
+   Standard, $5 pro 1000 Pages HighRes), aber nicht in der Pipeline
+   erfasst.
+3. **Monatliche Aggregat-Sicht** ueber alle Quellen.
+
+### User-Anforderungen (2026-04-27)
+
+> "Ich moechte auch die Disco-agent chat-kosten erfassen. Dann
+> moechte ich die montlichen gesamtkosten fuer gpt5 und DI sehen
+> koennen."
+
+### 1. Chat-Kosten erfassen
+
+**DB-Schema** (system.db Migration):
+
+```sql
+ALTER TABLE chat_messages ADD COLUMN cached_tokens INTEGER;
+ALTER TABLE chat_messages ADD COLUMN model_deployment TEXT;
+ALTER TABLE chat_messages ADD COLUMN cost_eur REAL;
+```
+
+**Code-Hook** in `disco/agent/core.py`-AgentService:
+- Bei jedem OpenAI/Foundry-Response: extract_token_usage (existiert
+  bereits in pricing.py) → schreibe alle 4 Token-Felder.
+- Berechne cost_eur via `get_foundry_price(deployment).cost_eur(...)`.
+- Default-Deployment "gpt-5.1" wenn nicht aus Response extrahierbar.
+
+**Bug fixen**: warum sind heute nur 36 % der Messages mit
+Token-Counts erfasst? Vermutlich werden Streaming-Responses oder
+Tool-Result-Messages nicht durchlaufen. Ursache identifizieren
+und fixen, sonst ist die ganze Statistik schief.
+
+### 2. Azure-DI-Kosten erfassen
+
+`disco/docs/pdf.py` (Azure-DI-Engine) ergaenzt das Result-Dict um
+`estimated_cost_eur` analog zu image.py:
+
+```python
+DI_PRICE_PER_1K_PAGES = {
+    'pdf-azure-di':    1.50 * USD_TO_EUR,    # USD-listpreis * EUR
+    'pdf-azure-di-hr': 5.00 * USD_TO_EUR,    # HighRes ist ~3x teurer
+}
+cost_eur = round(n_pages / 1000 * DI_PRICE_PER_1K_PAGES[engine], 6)
+```
+
+DI-Listpreise sollten in `disco/pricing.py` zentralisiert werden,
+analog zu `FOUNDRY_PRICING`. Quelle-Hinweis (regelmaessig pruefen):
+https://azure.microsoft.com/de-de/pricing/details/ai-document-intelligence/
+
+### 3. Monatliche Gesamt-Sicht
+
+**SQL-View** (oder Materialized Table fuer Performance):
+
+```sql
+CREATE VIEW v_cost_by_month AS
+-- Chat-Kosten aus system.db
+SELECT
+  strftime('%Y-%m', created_at) AS month,
+  COALESCE(model_deployment, 'gpt-5.1') AS service,
+  'chat' AS category,
+  SUM(cost_eur) AS cost_eur,
+  COUNT(*) AS n_calls
+FROM chat_messages
+WHERE cost_eur IS NOT NULL
+GROUP BY 1, 2
+UNION ALL
+-- Extraction-Kosten aus jeder Projekt-DB (UNION ALL ueber alle Projekte)
+-- ... pro Projekt: agent_doc_markdown.estimated_cost_eur
+-- aggregiert nach engine + month;
+```
+
+Die Cross-Database-Aggregation ist tricky (system.db fuer Chats,
+projektspezifische datastore.dbs fuer Extraction). Loesungs-Optionen:
+
+a) **Aggregator-Skript** `disco cost-report --month 2026-04` das
+   alle Projekt-DBs durchgeht und ein Aggregat in
+   `system.db.cost_aggregates` schreibt.
+
+b) **Rolling-Sync**: bei jedem Flow-Run-Abschluss schreibt der
+   `total_cost_eur` zentral in `system.db.cost_aggregates`
+   (denormalisiert, schneller fuer Reporting).
+
+c) **Federated SQL**: SQLite kann via `ATTACH DATABASE` mehrere
+   DBs joinen. Ein Reporting-Tool koennte alle Projekt-DBs
+   attachen und live aggregieren. Kompliziert.
+
+Pragmatisch: **(a)** als CLI-Befehl + spaeter UI-Endpoint der
+das Aggregat lebt.
+
+### UI-Vorschlag
+
+Neuer Settings-Pane-Tab "Kosten" in der Web-UI:
+
+- **Chart 1**: Stacked-Bar pro Monat, gestapelt nach service
+  (gpt-5.1 chat, gpt-5.1 vision, pdf-azure-di, pdf-azure-di-hr)
+- **Tabelle**: Detail pro Monat × Service × n_calls × cost_eur
+- **Filter**: nach Projekt einschraenkbar
+- **Aktueller Monat** prominent oben: "April 2026: 23.45 EUR (47 Chats, 1517 PDFs)"
+- **Lifetime-Total** als Summe
+
+### Implementierungs-Reihenfolge
+
+1. **system.db-Migration**: cached_tokens, model_deployment, cost_eur
+   in chat_messages
+2. **Bug-Fix**: warum nur 36 % der Messages Tokens haben (in
+   AgentService nachschauen)
+3. **DI-Cost-Tracking** in pdf.py + zentral in pricing.py
+4. **Aggregator-CLI**: `disco cost-report --month YYYY-MM`
+5. **UI-Tab "Kosten"** mit Chart + Tabelle (Phase 2)
+
+### Cost-Quellen — Vollstaendigkeitscheck
+
+Damit nichts vergessen wird:
+
+| Quelle | Status heute | Was fehlt |
+|---|---|---|
+| Disco-Chat (GPT-5.1 + Tools) | Token teilweise | cost_eur, cached_tokens, 64% Messages ohne Token |
+| Image-Extraction (GPT-5.1 Vision) | cost_eur in agent_doc_markdown | nichts (gut!) |
+| PDF-Extraction (Azure-DI Standard + HR) | nichts | cost_eur in agent_doc_markdown + zentrale Preise |
+| Excel-Extraction (openpyxl) | n/a (kostenlos) | n/a |
+| DWG-Extraction (libredwg + ezdxf) | n/a (kostenlos) | n/a |
+| Embeddings (Phase 2c) | nicht da | parallel mitdenken bei Implementation |
+
+User-Quote (2026-04-27): *"Ich moechte auch die Disco-agent chat-
+kosten erfassen. Dann moechte ich die montlichen gesamtkosten
+fuer gpt5 und DI sehen koennen."*
+
+Belastbare Schaetzung Lifetime-Chat-Kosten (heute aus 36%-Stichprobe
+hochgerechnet): **ca. 140-170 EUR**. Real wahrscheinlich hoeher,
+weil cached_tokens-Discount nicht korrekt eingerechnet ist.
