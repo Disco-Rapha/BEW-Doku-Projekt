@@ -1332,3 +1332,102 @@ historische Daten stimmen wieder.
 
 User-Quote (2026-04-25): *"tracken wir eigentlich schon was uns der
 gpt aufruf mit den bildern kostet im flow?"*
+
+---
+
+## Anhaltspunkte fuer `replaces` und `format-conversion-of` (Vertiefung)
+
+Konkrete Erkennungs-Patterns als Implementierungs-Vorlage fuer den
+Filter "Extraction nur auf kanonische Dateien". Stufung von schnell
+(Filename-Heuristik, kein Inhalt) zu maechtig (Embeddings, LLM).
+
+### Replaces — Versionsketten
+
+**Stufe 1 — Filename-Versions-Suffixe** (deterministisch, lokal, schnell):
+
+| Pattern | Reihenfolge | In rea-denox-Pool gefunden |
+|---|---|---|
+| `_R0A_V00` / `_R0B_V00` / `_R0C_V00` | A→B→C | ja, sehr haeufig (Tekla/CAD-Konvention) |
+| `_R00_V00` / `_R00_V01` / `_R00_V03` | nu­merisch | ja (Statik-Berechnungen) |
+| `_R0A_V00` / `_R0A_V01` / `_R0A_V02` | nu­merisch | ja (Mehrfach-Iteration auf Rev.A) |
+| `_v1` / `_v2` / `_v2.0` | nu­merisch | ja (`_V01`, `_V02`) |
+| `_RevA` / `_RevB` | alpha­be­tisch | gelegentlich |
+| `_alt` / `_old` / `_obsolet` / `_neu` / `_aktuell` | semantisch | ja (`_obsolet!`-Suffix klar) |
+| ` (1)` / ` (2)` / ` (3)` | nu­merisch | ja (Windows-Copy-Suffix — meist Hash-Duplikat) |
+| ISO-Datum `_2024-09-19` / `_240919` | chrono­logisch | ja (`240607_`, `240816_`, `240919_` Praefixe) |
+
+**Vorgehen:**
+1. Stamm-Stem-Normalisierung: alle bekannten Suffixe entfernen
+2. Im selben Ordner gruppieren (Cross-Ordner ist riskant)
+3. Suffix-Reihenfolge → "neueste" gewinnt
+4. Schreibe `replaces`-Relations: alle alten verweisen auf die neueste
+
+**Stufe 2 — Pfad-Hinweise:**
+- Subordner `/archiv/`, `/alt/`, `/Rev_A/`, `/superseded/` → Datei darin ist nicht-kanonisch
+- GU-spezifische Konventionen ggf. via Projekt-Konfig
+
+**Stufe 3 — Begleit-Excel (sources_attach_metadata):**
+- GU-Lieferindex-Spalte "Revision", "ersetzt durch", "Status"
+- Ergibt explizite Relations ohne Heuristik
+
+**Stufe 4 — PDF-Inhalt (Schriftfeld):**
+- pypdf/PyMuPDF: `/ModDate`, `/Title` aus PDF-Metadata
+- LLM-Extraktion aus dem Schriftfeld: "Index/Revision: B"
+- Zeitlich-juengste Rev gewinnt
+
+**Stufe 5 — Embedding-Aehnlichkeit (Phase 2c):**
+- Bei Markdown-Embedding-Cosine >= 0.92 zwischen zwei Files mit
+  unterschiedlichem Hash, gleicher Top-Level-Domain (DCC-Code o.ae.):
+  Versions-Kandidat fuer LLM-Bestaetigung
+
+### Format-conversion-of
+
+**Stufe 1 — Stem + andere Extension** (Heuristik, sehr verlaesslich):
+
+In rea-denox live gefunden:
+- `VGB-S-831 Anlage_A1_IBL_Begleitdokumentation` als `.pdf` + `.xlsx`
+- `Errichterbescheinigung` als `.docx` + `.pdf`
+- `Uebersichtsliste Sicherung` als `.xlsx` + `.pdf`
+- `Handover_Takeover_Plan_V01` als `.docx` + `.pdf`
+
+**Hierarchie (was gewinnt):**
+
+| Original | Konversion | Begruendung |
+|---|---|---|
+| `.dwg` | `.pdf` | DWG ist editierbar, PDF ist Plot |
+| `.docx` | `.pdf` | Original > Export |
+| `.xlsx` | `.pdf` | Daten > Snapshot |
+| `.dwg` | `.dxf` | DWG ist Master, DXF ist Austauschformat |
+
+Bei Mehrdeutigkeit (z.B. `.docx` + `.xlsx` mit gleichem Stem): heute
+nicht typisch, ggf. via Projekt-Konfig.
+
+**Stufe 2 — PDF-Producer-Tag** (sehr verlaesslich, lokal):
+- pypdf: `reader.metadata["/Producer"]`
+- Patterns:
+  - `"AutoCAD"`, `"Bluebeam Revu"` -> DWG-Plot
+  - `"Microsoft Word"`, `"Adobe PDF Library Word"` -> DOCX-Export
+  - `"Microsoft Excel"` -> XLSX-Export
+- Wenn Producer auf Originalformat hinweist UND ein File mit gleichem
+  Stem in dem Format existiert: starker `format-conversion-of`-Hinweis
+
+**Stufe 3 — Inhaltsabgleich:**
+- Schriftfeld-Texte aus DWG (libredwg) vs. PDF-OCR
+- >= 80 % der DWG-Schriftfeld-Texte im PDF wiederfindbar -> bestaetigt
+
+### Implementierungs-Plan
+
+1. **Stamm-Stem-Funktion** in `disco/docs/canonik.py` (oder als Teil der
+   sources-Logik). Liste der Suffix-Patterns konfigurierbar.
+2. **`sources_detect_replaces`-Tool** analog zu `sources_detect_duplicates`:
+   gruppiert nach Stamm-Stem, schreibt `replaces`-Relations.
+3. **`sources_detect_format_conversions`-Tool**: Stem + andere
+   Extension finden, PDF-Producer-Tag pruefen, schreibt
+   `format-conversion-of`-Relations.
+4. **Filter im `extraction_routing_decision`-Item-Loader** (Backlog-
+   Eintrag oben): Items skippen, die nicht-kanonisch sind.
+5. **Optional: re-run-Mode**: bei neu detektierten Relations laesst
+   sich die Pipeline auf den (jetzt) kanonischen Files re-run.
+
+User-Quote (2026-04-26): *"Welche anhaltspunkte haetten wir um
+replaces und format_converson-of zu ermitteln?"*
