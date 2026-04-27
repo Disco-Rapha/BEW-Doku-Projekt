@@ -2350,3 +2350,162 @@ fuer gpt5 und DI sehen koennen."*
 Belastbare Schaetzung Lifetime-Chat-Kosten (heute aus 36%-Stichprobe
 hochgerechnet): **ca. 140-170 EUR**. Real wahrscheinlich hoeher,
 weil cached_tokens-Discount nicht korrekt eingerechnet ist.
+
+
+## Data-Lineage / Tracing fuer abgeleitete Artefakte (Prioritaet: hoch)
+
+**Idee 2026-04-27**: Jedes Artefakt, das Disco erzeugt — Tabellen,
+Excel-Exports, Reports, Charts, Markdown-Zusammenfassungen — soll
+fuer Disco selbst und den User **nachvollziehbar dokumentiert**
+sein:
+
+- **Wo kommen die Daten her?** (Source-Tabellen, Source-Files)
+- **Mit welcher Abfrage / Logik wurden sie erzeugt?** (SQL, Python-
+  Skript, ggf. Tool-Call-Sequenz)
+- **Zu welchem Zweck?** (Business-Begruendung in einem Satz)
+
+Heute hat Disco kein zentrales Lineage-Register. Eine Tabelle
+`work_canonical_report` existiert, aber niemand weiss aus dem Stand
+heraus: wann wurde die erstellt, mit welchem SQL, welche Sources?
+Disco wuerde das Skript suchen muessen oder im Chat-History
+zurueckscrollen — beides fragil.
+
+### User-Anforderung (2026-04-27)
+
+> "Wir bauen ein Data-tracing auf. D.h. fuer jede Tabelle, bericht
+> etc die erstellt werden, soll fuer disco nachvollziehbar dokumentiert
+> werden wo die daten her kommen, mit welcher Abfrage die Daten zu
+> welchem Zweck erzeugt wurden."
+
+### DB-Schema-Vorschlag
+
+Neue Tabelle in workspace.db:
+
+```sql
+CREATE TABLE agent_data_lineage (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_type   TEXT NOT NULL,    -- 'table' | 'export' | 'report' | 'chart' | 'markdown'
+    artifact_name   TEXT NOT NULL,    -- 'work_canonical_report' | 'exports/Soll-Ist-2026.xlsx'
+    artifact_db     TEXT,             -- 'workspace.db' | 'datastore.db' | 'fs'
+    purpose         TEXT NOT NULL,    -- 1-2 Saetze, vom Erzeuger geschrieben
+    sources_json    TEXT,             -- JSON-Array: [{"type":"table","name":"agent_sources"},
+                                      --              {"type":"file","path":"context/vgb-s831.pdf"}]
+    query_sql       TEXT,             -- ausgefuehrtes SQL (NULL fuer Python-only-Artefakte)
+    code_snippet    TEXT,             -- Python-Code-Snippet wenn nicht via SQL
+    n_rows          INTEGER,          -- Result-Groesse
+    schema_json     TEXT,             -- Spalten der Result-Tabelle als JSON
+    created_by      TEXT,             -- 'disco-agent' | 'flow:extraction:run-12' | 'user'
+    chat_message_id INTEGER,          -- optional: Link zur Chat-Nachricht
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(artifact_type, artifact_name)  -- pro Artefakt der LETZTE Erzeugungs-Eintrag
+);
+CREATE INDEX idx_lineage_artifact ON agent_data_lineage(artifact_type, artifact_name);
+CREATE INDEX idx_lineage_created  ON agent_data_lineage(created_at);
+```
+
+UNIQUE-Constraint auf `(artifact_type, artifact_name)`: pro
+Artefakt **eine** Zeile, die bei Re-Erzeugung via UPSERT
+ueberschrieben wird. Fuer Historie waere eine `agent_data_lineage_history`
+denkbar — Phase 2.
+
+### Wer schreibt — Hook-Punkte
+
+1. **`sqlite_write`** (Disco-Tool fuer DDL/DML): bei `CREATE TABLE`,
+   `CREATE TABLE AS SELECT`, `INSERT INTO ... SELECT` automatisch
+   einen Lineage-Eintrag schreiben. Sources werden aus dem
+   geparsten SQL extrahiert (FROM-/JOIN-Tabellen). Purpose muss
+   als Pflichtparameter mitgegeben werden ("Warum schreibst du
+   diese Tabelle?").
+
+2. **`build_xlsx_from_tables`** (Excel-Export): bei jedem Export
+   einen Eintrag mit den Source-Tabellen, ausgefuehrtem
+   Multi-Sheet-Spec und Purpose.
+
+3. **`import_xlsx_to_table` / `import_csv_to_table`**: Eintrag
+   mit Source-File-Pfad, Schema, Row-Count.
+
+4. **`run_python`**: bei DB-Schreibungen aus dem Skript heraus —
+   das Skript muss per Helper-Funktion `disco.lineage.record(...)`
+   einen Eintrag schreiben. Konvention im python-executor-Skill
+   verankert.
+
+5. **Flows** (z.B. extraction): pro Run einen Eintrag fuer das
+   produzierte agent_doc_markdown-Subset. Kann via
+   `chat_message_id`-Feld auch verknuepfen.
+
+### Wie Disco das nutzt
+
+**Neues Tool `data_lineage`**:
+
+```python
+@register
+def data_lineage(artifact_type: str, artifact_name: str) -> dict:
+    """Lineage einer Tabelle, eines Files oder Reports. Liefert:
+    - purpose, sources, query_sql/code_snippet, n_rows, schema, created_by, created_at"""
+```
+
+Bei Disco-Tool-Aufrufen wie `sqlite_query` auf einer fremden
+Tabelle, koennte der Tool-Wrapper optional eine
+"Lineage-Hint"-Section anhaengen ("Diese Tabelle wurde erzeugt am
+... aus ... mit dem Zweck ..."), wenn das die Antwort verbessert.
+
+System-Prompt-Erweiterung: in der Agent-Instruktion eine kurze
+Regel "Wenn Du Tabellen anlegst (sqlite_write CREATE TABLE),
+schreibe einen Lineage-Eintrag mit klarem Purpose".
+
+### Use-Cases
+
+1. **Re-Run einer Auswertung**: User fragt "kannst du den
+   SOLL/IST-Report nochmal erstellen, aber gefiltert auf
+   Bautechnik?". Disco liest Lineage von
+   `work_canonical_report`, sieht das Original-SQL, modifiziert
+   es um den Filter, fuehrt aus.
+2. **Audit / Impact-Analyse**: User aendert eine Source-Tabelle.
+   `data_lineage` rueckwaerts fuehrt: "welche Reports basieren
+   auf agent_doc_markdown?" → 5 Tabellen + 3 Excel-Exports
+   muessten neu generiert werden.
+3. **Disco-Debugging**: "warum sind in dieser Tabelle nur 47
+   Rows obwohl in der Quelle 1500 sind?" → Lineage zeigt das
+   SQL → "ah, da war ein WHERE date > 2024 drin".
+4. **Cross-Session-Continuity**: Disco kommt nach Pause zurueck
+   und sieht eine `work_*`-Tabelle, die er nicht mehr im
+   Kontext hat. Ueber Lineage versteht er, was sie ist und
+   wofuer.
+
+### Implementierungs-Reihenfolge
+
+1. **Migration** workspace/006_data_lineage (oder naechste Nummer):
+   Tabelle anlegen.
+2. **Helper-Modul** `disco/lineage.py` mit `record(...)`-Funktion.
+3. **Hook in `sqlite_write`**: parsst SQL, ruft `record(...)`. Pflicht-
+   Parameter `purpose` hinzufuegen — Disco muss begruenden was er
+   schreibt. Bei fehlendem Purpose: Fehler.
+4. **Hook in `build_xlsx_from_tables`**, **import-Tools**: dito mit
+   Pflicht-Parameter `purpose`.
+5. **Tool `data_lineage`** registrieren.
+6. **System-Prompt**: kurze Regel hinzufuegen "Lineage dokumentieren".
+7. **UI**: Tabelle anklicken im Sidebar → Lineage-Panel mit
+   Purpose, Sources, SQL, Created.
+
+### Verbindungen zu anderen Backlog-Eintraegen
+
+- **File-Internal-Metadata**: das ist eingebettete Source-File-
+  Provenance (woher kommt das Original?). Lineage hier ist
+  abgeleitete Artefakt-Provenance (was wurde DARAUS gemacht?).
+  Beide ergaenzen sich.
+- **Pipeline-UX (pipeline_state)**: Lineage ergaenzt das fuer
+  abgeleitete Daten — pipeline_state ist pro Source, Lineage
+  ist pro abgeleitetem Artefakt.
+- **Cost-Tracking**: Lineage-Eintrag koennte ein `cost_eur`-Feld
+  haben → "diese Tabelle hat 0.34 EUR gekostet zu erzeugen".
+- **Relevance-Score**: Tabellen mit vielen Konsumenten (Lineage-
+  Inverse-Lookup) sind relevanter.
+- **Public-Workspace**: bei Cross-Projekt-Reuse von Tools/Skripten
+  kann Lineage zeigen "dieses Skript hat in Projekt X eine Tabelle
+  Y erzeugt — gleiche Logik anwendbar?".
+
+User-Quote (2026-04-27): *"Wir bauen ein Data-tracing auf. D.h.
+fuer jede Tabelle, bericht etc die erstellt werden, soll fuer
+disco nachvollziehbar dokumentiert werden wo die daten her
+kommen, mit welcher Abfrage die Daten zu welchem Zweck erzeugt
+wurden."*
