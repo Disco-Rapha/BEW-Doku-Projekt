@@ -2509,3 +2509,281 @@ fuer jede Tabelle, bericht etc die erstellt werden, soll fuer
 disco nachvollziehbar dokumentiert werden wo die daten her
 kommen, mit welcher Abfrage die Daten zu welchem Zweck erzeugt
 wurden."*
+
+
+## User-Feedback-Cluster aus 24 bad-Reactions (Prioritaet: hoch)
+
+**Quelle**: `chat_message_feedback`-Tabelle in system.db. Zeitraum
+22.04.–27.04.2026. **24 bad** + 7 good Reactions, davon 23 mit
+Kommentar. Direkter, validierter User-Pain — nicht spekulativ.
+
+13 Themen-Cluster, einige bestaetigen bereits geplante Backlog-
+Eintraege, andere sind neu.
+
+---
+
+### Cluster A — Foundry-/Stream-Fehler unverstaendlich (4 Reactions)
+
+**Quotes:**
+- *"Der Fehler kommt an und an. Weiß nicht was das sein soll: 'Founrdy melde Fehle keien Details von Foundry'"* (msg 1105)
+- *"Fehler ohne Angabe weiter unten"* (msg 1115)
+- *"Wieder foundry fehler"* (msg 1296)
+- *"Fehler: input exceed the context window. Obwohl oben steht dass context window sei nur zu 13k tokens gefüllt. Da stimmt was nicht"* (msg 1202)
+
+**Verbesserung:**
+1. **Error-Messages strukturiert**: bei Foundry-Errors HTTP-Status,
+   Response-Body und ggf. Tool-Call-Snapshot in einer Block-Struktur
+   anzeigen (heute oft kryptische String-Konkat).
+2. **Context-Window-Anzeige korrigieren**: die Anzeige (oben rechts
+   `153k / 200k · 76 %`) stimmt nicht mit dem tatsaechlichen
+   Foundry-Limit ueberein — vermutlich werden Tool-Definitions/Skills
+   beim Token-Count nicht eingerechnet. **Bug**: bei context_length-
+   exceeded sieht User "13k benutzt", die Realitaet ist deutlich
+   mehr.
+3. **Error-Klassifikation**: transient (retry-bar), permanent
+   (Code-Bug), Quota (config-Issue) als drei sichtbare Klassen, mit
+   passendem Vorschlag was zu tun ist.
+
+---
+
+### Cluster B — Flow-Bedienung schwer (4 Reactions)
+
+**Quotes:**
+- *"Disco kann die pdf flows nicht starten. Was ist da los?"* (msg 1286)
+- *"Ich kann mit den flows nicht arbeiten und sie nutzten. Hier brauchen wir noch eine lösung"* (msg 1293)
+- *"Möchte den flow individueller bestücken und laufen lassen können"* (msg 1440)
+- *"BUG! Der Flow muss laufen"* (msg 1792)
+
+**Verbesserung:**
+1. **Flow-Lifecycle-Klarheit**: User sagt "starte Flow X", Disco
+   bestaetigt Start mit Run-ID + erwartetem Verlauf. Heute oft
+   uneindeutig ob ein Run wirklich laeuft oder nur als geplant in
+   der DB steht.
+2. **Flow-Parametrisierung im Chat**: "starte Flow X mit limit=10
+   und only_kind=pdf" muss zuverlaessig vom Foundry-Agent verstanden
+   und als config_json an den Runner uebergeben werden.
+3. **Flow-Pre-Check**: vor Run-Start zeigt Disco die geplante
+   Run-Konfig (Items-Anzahl, Kosten-Schaetzung, Engines) und der
+   User bestaetigt — verhindert ungewollte 200-EUR-Runs.
+
+Bezug: passt mit "Extraction-Pipeline-UX" und "Disco-Prozess-
+Management"-Eintraegen zusammen.
+
+---
+
+### Cluster C — Stille falsche Annahmen, falsche Resultate (2 Reactions)
+
+**Quotes:**
+- *"Disco konnte bestimmte dateien nicht finden, obwohl sie da waren. Das ist fatal und müssen wir vermeiden."* (msg 1474)
+- *"Bei sowas müssen wir sauber arbeiten. Solche fehler führen am Ende zu komplett falschen auswertungen denke ich"* (msg 1831)
+
+**Verbesserung:**
+1. **Sanity-Checks bei Diff-Aussagen**: wenn Disco sagt "X nicht
+   gefunden", muss er vorher mindestens 2 Such-Strategien probiert
+   haben (z.B. Path-Match + Filename-Match + Hash-Match) und das
+   Ergebnis in der Antwort transparent machen ("ich habe via X, Y, Z
+   gesucht, alle 3 leer").
+2. **"Done"/"Abgeschlossen"-Aussagen sind teurer als "Versuch":**
+   Skill-/Prompt-Regel ergaenzen: bevor Disco ein Ergebnis als
+   final reportet, muss er die Datenquelle der Wahrheit
+   (`agent_doc_markdown`-Counts, FS-Match) zitieren — nicht nur
+   einen Zaehler aus einer abgeleiteten Tabelle.
+
+---
+
+### Cluster D — Unicode-Normalisierung in Queries (1 Reaction, konzeptionell)
+
+**Quote:**
+- *"Disco findet den fehler. Unterschiedliche unicodes. Das haben wir noch gar nicht betrachtet. Sollten wir konzeptionel drauf hinweisen, damit die queries funktionieren."* (msg 1477)
+
+**Verbesserung:**
+1. **NFC-Normalisierung als Standard** in den SQL-Helper-Funktionen
+   bei String-Vergleichen — z.B. `WHERE rel_path = ?` mit `?`
+   vor-NFC-normalisiert. Aufgrund OS X (Filesystem nutzt NFD) vs.
+   Excel/SharePoint (oft NFC) kommt es zu unsichtbaren Mismatches.
+2. **System-Prompt / Skill-Hinweis**: bei String-Joins zwischen
+   Filesystem und User-Input immer NFC-normalisieren (oder
+   `unicodedata.normalize` im Python-Vergleich).
+3. **SQL-Helper `WHERE rel_path = NORMALIZE_NFC(?)`** als gemeinsame
+   Wrapper-Funktion in den disco-Tools.
+
+---
+
+### Cluster E — Reasoning-Failures: Disco macht etwas anderes als gefragt (3 Reactions)
+
+**Quotes:**
+- *"Jetzt hätte disco es eigentlich hin bekommen müssen"* (msg 1492)
+- *"Was ist denn hier passiert? Er wollte mir doch ein flow bauen jetzt hat er doch einfach die tabelle geändert?"* (msg 2092)
+- *"Was soll das? DAs ist doch wohl klar, dass disco hier die tabelle ausfüllen sollte"* (msg 2273)
+
+**Verbesserung:**
+1. **Plan-Bestaetigung vor Aktion bei "fett"-Aufgaben**: bei
+   Aufgaben mit > 1 Tool-Call oder > 1 Min Laufzeit zeigt Disco
+   einen Plan ("ich werde A, B, C tun in dieser Reihenfolge")
+   und wartet auf User-OK, bevor er ausfuehrt. Heute springt er
+   manchmal direkt los, dann passt's nicht.
+2. **Strategy-Switch sichtbar machen**: wenn Disco zwischen "Flow
+   bauen" und "Tabelle direkt aendern" wechselt, muss er die
+   Aenderung explizit ankuendigen ("ich aendere meinen Plan auf
+   X, weil Y").
+3. **System-Prompt Triggertabelle erweitern** — User hatte schon
+   konkrete Regeln gegeben (Memory-Eintrag "imperativ statt soft"),
+   aber bei komplexeren Aufgaben fehlt's noch.
+
+---
+
+### Cluster F — Context-File-Behandlung (3 Reactions, eng verzahnt)
+
+**Quotes:**
+- *"Information zu spezifischen Dateien sollten wir gleich an den Dateien speichern. Context files: kurz sagen was das für eine datei ist wo die her kommt und was wir damit machen wollen. Sollte sich zuverlässig gemerkt werden"* (msg 1620)
+- *"Bug: die context dateien wollen wir ja genau so registrieren und einlesen."* (msg 1668)
+- *"Disco fängt an links zu verwenden, das ist gut und genau da will ich auch hin - nur funktioniert dieser noch nicht."* (msg 1601)
+
+**Verbesserung:**
+1. **Context-Files in agent_sources registrieren** mit `kind='context'`
+   (heute teilweise: 88 Rows in lager-halle als context). Voll
+   gleichberechtigt zu sources: Hash, Metadaten, Pipeline-State.
+2. **File-Notes-Tabelle** `agent_source_notes` (oder Spalten in
+   agent_sources):
+   ```sql
+   purpose      TEXT  -- "Norm fuer SOLL/IST-Abgleich"
+   origin       TEXT  -- "vom GU geliefert 2026-04-15"
+   usage_intent TEXT  -- "Nachschlagewerk bei Klassifikation"
+   ```
+   Beim context-Onboarding-Skill werden diese 3 Felder ad-hoc gefragt.
+   Persistent in der DB statt im Memory-Markdown.
+3. **Hyperlink-Fix in Excel-Exports**: SharePoint-Pfad-Konvention
+   sauber implementieren in `build_xlsx_from_tables`. User beobachtet:
+   Disco verlinkt, Pfade funktionieren aber nicht im Excel.
+
+Bezug: ergaenzt File-Internal-Metadata-Eintrag (eingebettete Metadaten)
+um User-erstellte File-Annotations.
+
+---
+
+### Cluster G — Pipeline-Disziplin (3 Reactions) — *bereits im Backlog*
+
+**Quotes:**
+- *"Reihenfolge: Registrieren → Duplikate erkennen → nur mit kanonischen → Routing → Extraction"* (msg 1708)
+- *"Extraction immer nur auf kanonischen Dateien durchführen. Das müssen wir klären."* (msg 2068)
+- *"Status hängt nicht am echten process und wird von disco fehlinterpretiert."* (msg 2098)
+
+**Status:** abgedeckt durch:
+- "Extraction nur auf kanonische Dateien" (BL)
+- "Extraction-Pipeline-UX: Ampelsystem, Auto-Pipeline" (BL)
+- "Stabilitaets-Bugs aus FTS5-Deadlock" Section "Counter-Update-Bug"
+
+→ Hier nur **Bestaetigung**, kein neuer Eintrag noetig.
+
+---
+
+### Cluster H — Failed-Files markieren — *bereits im Backlog*
+
+**Quote:**
+- *"Vielleicht sollten wir in die md der datei schreiben lassen, wenn die extraction failed? Dann versuchen wir die nicht immer wieder und sehen die auch nicht dauerhaft als Diff"* (msg 2071)
+
+**Status:** abgedeckt durch "Extraction-Pipeline-UX" Section 4
+("Retry-Strategie und Permanent-Fail-Markierung"). Bestaetigt.
+
+---
+
+### Cluster I — Flow-Abbruch bei wegfallender Bedingung (1 Reaction)
+
+**Quote:**
+- *"Dann soll Disco den Flow auch abbrechen. Das wäre ein valider grund gewesen."* (msg 2079)
+
+**Verbesserung:**
+1. **Flow-Selbstdiagnose**: bei Run-Start prueft der Runner, ob
+   die Items noch mit der Routing-Tabelle uebereinstimmen. Wenn
+   z.B. waehrend `extraction_routing_decision` lief, parallel der
+   sources-Set sich geaendert hat (oder die Routing-Tabelle leer
+   ist) → Run sofort als `aborted_invalid_state` beenden mit klarer
+   Begruendung.
+2. **Disco soll selbst Flow-Cancel nutzen koennen** wenn er
+   mid-Run merkt, dass die Bedingung weggefallen ist (ohne dass
+   der User es explizit anstoesst).
+
+---
+
+### Cluster J — PDF-Fokus statt alle Dateiformate (1 Reaction)
+
+**Quote:**
+- *"Wir haben irgendwo noch ein PDF Fokus drin. Wenn ich nach Dateien frage möchte ich ja eine Aussage über alle Dateiformate im Projekt haben und nicht nur über PDF"* (msg 2022)
+
+**Verbesserung:**
+1. **Tool-/Skill-Audit**: alle Stellen finden, wo "PDF"
+   hardcoded ist (z.B. `agent_pdf_inventory` heisst noch so,
+   `pdf_classify`-Tool). Auf "file" oder "doc" generalisieren
+   wo sinnvoll. Bestand: agent_pdf_inventory (noch da, wird vom
+   Such-Index nicht mehr genutzt).
+2. **Skill-Sprache anpassen**: in disco/system_prompt.md /
+   Skills, wenn von "Dokumenten" gesprochen wird, soll die
+   Antwort alle file_kinds umfassen. Default "Dateien" =
+   alles, nicht nur PDFs.
+3. **Cleanup veralteter Tabellen**: agent_pdf_inventory könnte
+   entfernt werden, wenn nichts mehr darauf liest. Migration.
+
+---
+
+### Cluster K — Memory-Schreibung zuverlaessig (1 Reaction)
+
+**Quote:**
+- *"Trotz der deutlichen Aufforderung sich den Link zu merken, wurde nichts ins memory geschrieben. Dafür war eine zweite Aufforderung nötig."* (msg 2326)
+
+**Verbesserung:**
+1. **System-Prompt-Regel**: bei expliziten Memory-Aufforderungen
+   ("merk dir das", "behalte im hinterkopf", "bitte ins memory")
+   muss Disco SOFORT `project_notes_append` oder ein vergleichbares
+   Tool aufrufen — nicht aufschieben.
+2. **Bestaetigungs-Pattern**: Disco antwortet mit "✓ gemerkt" und
+   zeigt den NOTES-Eintrag, statt nur zu sagen "ok".
+3. **Trigger-Phrasen** in der bestehenden Triggertabelle des
+   System-Prompts erweitern.
+
+---
+
+### Cluster L — SharePoint-Links / Excel-Hyperlinks (1 Reaction)
+
+**Quote:**
+- *"Disco fängt an links zu verwenden, das ist gut und genau da will ich auch hin - nur funktioniert dieser noch nicht."* (msg 1601)
+
+**Verbesserung:**
+1. **build_xlsx_from_tables**: Hyperlink-Spalten korrekt mit
+   `=HYPERLINK("...","...")` formel-ifizieren statt nur Plain-Text.
+2. **SharePoint-URL-Konvention**: aus `agent_sharepoint_docs.FileServerRelativeUrl`
+   den vollen SharePoint-URL bauen (Tenant + Site + relative Url).
+   Heute fehlt der Praefix ggf.
+3. **URL-Encoding**: Umlaute und Spaces korrekt kodieren — Excel
+   ist da pingelig.
+
+---
+
+### Cluster M — kleine Cluster und Einzelpunkte
+
+- **msg 2092**: Disco wechselt zwischen "Flow bauen" und
+  "Tabelle direkt aendern" ohne anzukuendigen — Doppel-Erwaehnung
+  bei E (Reasoning) und I (Strategy-Switch).
+
+---
+
+### Implementierungs-Priorisierung
+
+**Quick wins** (1-2h Aufwand, hoher User-Impact):
+- Cluster K (Memory-Pflicht) — System-Prompt-Regel
+- Cluster L (SharePoint-Hyperlinks) — bug-fix in build_xlsx
+- Cluster D (Unicode NFC) — Helper-Funktion
+
+**Mittel** (Tagesarbeit):
+- Cluster A (Error-UX) — Foundry-Error-Wrapper
+- Cluster F (Context-File-Notes) — Migration + Skill-Update
+- Cluster I (Flow-Selbstdiagnose) — Runner-Hook
+
+**Groß** (mehrere Tage, mit anderen Eintraegen verzahnt):
+- Cluster B (Flow-Bedienung) — Teil von Pipeline-UX
+- Cluster C (Sanity-Checks) — Skill/Prompt-Architektur
+- Cluster E (Reasoning) — schwer, iterativ
+- Cluster J (PDF-Fokus-Cleanup) — Audit-Aufgabe
+
+User-Quote (2026-04-27): *"Schaue Dir die sachverhalte mal an
+entwickle Verbesserungsvorschlaege und uebernehme ins BL. Also
+noch nicht umsetzten."*
