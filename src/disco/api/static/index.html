@@ -97,17 +97,48 @@ a:hover { text-decoration: underline; }
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
+  overflow-y: auto;  /* eine gemeinsame Scroll-Achse fuer alle Sections */
 }
 .sb-section {
   border-bottom: 1px solid var(--border);
   padding: 8px 10px;
   flex-shrink: 0;
 }
-.sb-section.scrollable { overflow-y: auto; flex: 1 1 auto; min-height: 80px; }
+/* Collapsible sections via <details>: Padding nur fuer Body, nicht fuer Header.
+   .sb-section.collapsible ist ein <details>-Element. */
+.sb-section.collapsible { padding: 0; }
+.sb-section.collapsible > summary {
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;       /* default-Triangle entfernen, eigenes via ::before */
+  user-select: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.sb-section.collapsible > summary::-webkit-details-marker { display: none; }
+.sb-section.collapsible > summary::before {
+  content: '▶';
+  display: inline-block;
+  font-size: 10px;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+}
+.sb-section.collapsible[open] > summary::before { transform: rotate(90deg); }
+.sb-section.collapsible > .sb-body { padding: 0 10px 10px; }
 .sb-title {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.7px; color: var(--text-dim);
   margin-bottom: 6px;
+}
+/* Im <summary> gilt sb-title nicht mehr als margin-Lieferant; flex regelt das */
+.sb-section.collapsible > summary .sb-title {
+  margin-bottom: 0; flex: 1;
+}
+.sb-section.collapsible > summary .sb-subtitle {
+  font-size: 10px; color: var(--text-dim);
+  text-transform: none; font-weight: normal; letter-spacing: 0;
 }
 .sb-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 3px; cursor: pointer; }
 .sb-row:hover { background: var(--panel2); }
@@ -860,23 +891,43 @@ a:hover { text-decoration: underline; }
       </div>
     </div>
 
-    <div class="sb-section scrollable" id="explorer-section">
-      <div class="sb-title">Explorer</div>
-      <div id="explorer-tree" class="tree"></div>
-    </div>
-
-    <div class="sb-section scrollable" id="db-tables-section">
-      <div class="sb-title">Datenbank-Tabellen</div>
-      <div id="db-tables-list" class="tree"></div>
-    </div>
-
-    <div class="sb-section scrollable" id="flows-section">
-      <div class="sb-title sb-toolbar">
-        <span>Flows</span>
-        <button class="icon-btn" title="Liste aktualisieren" onclick="loadFlows(state.activeProjectSlug)">↻</button>
+    <details class="sb-section collapsible" id="explorer-section" data-sb-key="explorer" open>
+      <summary><span class="sb-title">Explorer</span></summary>
+      <div class="sb-body">
+        <div id="explorer-tree" class="tree"></div>
       </div>
-      <div id="flows-list"></div>
-    </div>
+    </details>
+
+    <details class="sb-section collapsible" id="db-datastore-section" data-sb-key="db-datastore" open>
+      <summary>
+        <span class="sb-title">datastore.db</span>
+        <span class="sb-subtitle">Ebene 1+2 · read-only</span>
+      </summary>
+      <div class="sb-body">
+        <div id="db-tables-datastore" class="tree"></div>
+      </div>
+    </details>
+
+    <details class="sb-section collapsible" id="db-workspace-section" data-sb-key="db-workspace" open>
+      <summary>
+        <span class="sb-title">workspace.db</span>
+        <span class="sb-subtitle">Ebene 3 · read/write</span>
+      </summary>
+      <div class="sb-body">
+        <div id="db-tables-workspace" class="tree"></div>
+      </div>
+    </details>
+
+    <details class="sb-section collapsible" id="flows-section" data-sb-key="flows" open>
+      <summary>
+        <span class="sb-title">Flows</span>
+        <button class="icon-btn" title="Liste aktualisieren"
+                onclick="event.preventDefault(); event.stopPropagation(); loadFlows(state.activeProjectSlug)">↻</button>
+      </summary>
+      <div class="sb-body">
+        <div id="flows-list"></div>
+      </div>
+    </details>
 
     <div class="sb-section">
       <div class="sb-title">Einstellungen</div>
@@ -1060,6 +1111,22 @@ async function initEnvFooter() {
 }
 
 // =========================================================================
+// Sidebar-Sections: Open/Closed-State pro <details data-sb-key=...> persistieren
+// =========================================================================
+function initSidebarSections() {
+  const els = document.querySelectorAll('details.sb-section.collapsible[data-sb-key]');
+  els.forEach(el => {
+    const key = 'sb-open:' + el.dataset.sbKey;
+    const saved = localStorage.getItem(key);
+    if (saved === '0') el.removeAttribute('open');
+    else if (saved === '1') el.setAttribute('open', '');
+    el.addEventListener('toggle', () => {
+      localStorage.setItem(key, el.open ? '1' : '0');
+    });
+  });
+}
+
+// =========================================================================
 // Init
 // =========================================================================
 window.addEventListener('DOMContentLoaded', async () => {
@@ -1068,6 +1135,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   initMarkdown();
   initSplitters();
   initChatInput();
+  initSidebarSections();
 
   // Projekt-Liste laden
   try {
@@ -2511,31 +2579,34 @@ function pdfNext() { if (state._pdfPage < state._pdfTotal) { state._pdfPage++; r
 // DB-Tabellen-Liste in Sidebar + Tabellen-Viewer
 // =========================================================================
 async function loadDbTables(slug) {
-  const c = document.getElementById('db-tables-list');
-  c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  const containers = {
+    datastore: document.getElementById('db-tables-datastore'),
+    workspace: document.getElementById('db-tables-workspace'),
+  };
+  for (const c of Object.values(containers)) {
+    c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  }
   try {
     const tables = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/db/tables`);
     if (!Array.isArray(tables) || !tables.length) {
-      c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Keine work_*/agent_*-Tabellen.</div>';
+      for (const c of Object.values(containers)) {
+        c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Keine work_*/agent_*-Tabellen.</div>';
+      }
       return;
     }
-    c.innerHTML = '';
-    // Gruppiert nach DB: Datastore zuerst (Ebene 1+2), dann Workspace (Ebene 3)
+    // Gruppiert nach DB
     const groups = {datastore: [], workspace: []};
     for (const t of tables) {
       (groups[t.db] || groups.workspace).push(t);
     }
     for (const branch of ['datastore', 'workspace']) {
+      const c = containers[branch];
       const list = groups[branch];
-      if (!list.length) continue;
-      const header = document.createElement('div');
-      header.className = 'tree-row muted';
-      header.style.fontSize = '11px';
-      header.style.padding = '4px 6px 2px';
-      header.textContent = branch === 'datastore'
-        ? 'datastore.db (Ebene 1+2, read-only)'
-        : 'workspace.db (Ebene 3, read/write)';
-      c.appendChild(header);
+      c.innerHTML = '';
+      if (!list.length) {
+        c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">leer</div>';
+        continue;
+      }
       for (const t of list) {
         const row = document.createElement('div');
         row.className = 'tree-row file';
@@ -2549,7 +2620,9 @@ async function loadDbTables(slug) {
       }
     }
   } catch (e) {
-    c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
+    for (const c of Object.values(containers)) {
+      c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
+    }
   }
 }
 
