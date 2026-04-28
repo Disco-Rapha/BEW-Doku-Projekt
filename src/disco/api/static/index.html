@@ -1645,6 +1645,20 @@ function renderTreeNode(node, isRoot=false) {
     childWrap.className = 'tree-node-children';
     childWrap.style.display = isRoot ? 'block' : 'none';
     (node.children || []).forEach(c => childWrap.appendChild(renderTreeNode(c, false)));
+    // Bei truncated: Pseudo-Knoten "…" mit Tooltip einhaengen, damit
+    // sichtbar bleibt dass es tiefer geht (Backend hat max_depth-Limit).
+    if (node.truncated) {
+      const trunc = document.createElement('div');
+      trunc.className = 'tree-row tree-truncated muted';
+      trunc.title = 'Tiefer Ordner — Limit erreicht. Inhalt wird nicht im Tree angezeigt.';
+      trunc.appendChild(spanIcon('⋯'));
+      const lbl = document.createElement('span');
+      lbl.className = 'tree-name';
+      lbl.textContent = '… (tiefer Ordner, nicht geladen)';
+      lbl.style.fontStyle = 'italic';
+      trunc.appendChild(lbl);
+      childWrap.appendChild(trunc);
+    }
     toggle.onclick = (e) => {
       e.stopPropagation();
       const open = childWrap.style.display !== 'none';

@@ -824,12 +824,17 @@ async def api_workspace_projects():
 
 
 @app.get("/api/workspace/projects/{slug}/tree")
-async def api_workspace_tree(slug: str, max_depth: int = 4):
+async def api_workspace_tree(slug: str, max_depth: int = 12):
     """Verzeichnisbaum eines Projekts (rekursiv, ohne Inhalte).
 
     Liefert ein Tree-Dict mit Knoten:
       {name, path (relativ zum Projekt), type: 'dir'|'file',
-       size?, modified?, children?: [...]}
+       size?, modified?, children?: [...], truncated?: bool}
+
+    max_depth: 12 (Default, deckt realistische Projekt-Ordnerstrukturen ab,
+    inkl. tief verschachtelter SharePoint-Exports). Bei Erreichen der
+    Limit-Tiefe wird der Knoten mit `truncated: true` markiert; das Frontend
+    zeigt das visuell als "…"-Pseudo-Knoten an.
     """
     from ..workspace import validate_slug
     from ..config import settings
