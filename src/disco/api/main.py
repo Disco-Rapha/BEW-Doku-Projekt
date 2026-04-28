@@ -147,8 +147,11 @@ async def api_agent_config_post(payload: dict):
     Body: {"reasoning_effort": "medium", "verbosity": "low", "model_deployment": "gpt-5.4-prod"}
     Alle Felder optional — None bedeutet "nicht aendern".
     """
-    # Validierung
-    allowed_reasoning = {"minimal", "low", "medium", "high"}
+    # Validierung — Reasoning-Stufen passen zum Modell. gpt-5.4: none/low/
+    # medium/high/xhigh (Foundry-Portal-Auswahl, Stand 2026-04-27). Aeltere
+    # GPT-5-Familie nutzt 'minimal' statt 'none' — wir akzeptieren beides
+    # damit ein Modellwechsel keine Validation kippt.
+    allowed_reasoning = {"none", "minimal", "low", "medium", "high", "xhigh"}
     allowed_verbosity = {"low", "medium", "high"}
 
     re_v = (payload.get("reasoning_effort") or "").strip() or None

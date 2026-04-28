@@ -989,13 +989,14 @@ a:hover { text-decoration: underline; }
       <div class="chat-actions">
         <span id="chat-status" class="muted">Bereit</span>
         <span class="chat-actions-right">
-          <label class="chat-model-label" title="Reasoning-Effort fuer Disco. Hoeher = tieferes Nachdenken, langsamer + teurer. Aenderung pusht eine neue Agent-Version ins Foundry-Portal (~3s).">
+          <label class="chat-model-label" title="Reasoning-Effort fuer Disco (gpt-5.4-Stufen). Hoeher = tieferes Nachdenken, langsamer + teurer. Aenderung pusht eine neue Agent-Version ins Foundry-Portal (~3s).">
             Reasoning:
             <select id="reasoning-select" onchange="onReasoningChange()" disabled>
-              <option value="minimal">minimal</option>
+              <option value="none">none</option>
               <option value="low">low</option>
               <option value="medium" selected>medium</option>
               <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
             </select>
           </label>
           <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
