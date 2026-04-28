@@ -80,17 +80,15 @@ FOUNDRY_PRICING: dict[str, TokenPrice] = {
         output_eur_per_1m=9.55,
     ),
 
-    # gpt-5.4: Sweden Central Data Zone Standard hochgerechnet.
-    # - Input ist global $2.50 (gleich wie gpt-5.1) → in SC-DZ vermutlich
-    #   ebenfalls €1.20.
-    # - Output ist global $15.00 (50% teurer als gpt-5.1) → SC-DZ skaliert
-    #   mit gleichem Faktor 9.55/10.00 → €14.32.
-    # - Cached-Input ist global 90% Rabatt → €0.12.
-    # Bei Verifikation der echten SC-DZ-EUR-Werte fuer gpt-5.4 hier anpassen.
+    # gpt-5.4: User-Vorgabe 2026-04-27, weil Microsoft die echten Sweden-
+    # Central-Data-Zone-EUR-Werte noch nicht offiziell publiziert.
+    # Input/Output direkt vom User. Cached-Input mit 90% Rabatt vom Input
+    # (gpt-5.4-globaler USD-Listpreis-Rabatt 2.50 → 0.25), also 0.23 EUR.
+    # Bei offizieller Microsoft-Bestaetigung hier anpassen.
     "gpt-5.4": TokenPrice(
-        input_eur_per_1m=1.20,
-        cached_input_eur_per_1m=0.12,   # 90% Rabatt (gpt-5.4-spezifisch)
-        output_eur_per_1m=14.32,
+        input_eur_per_1m=2.30,
+        cached_input_eur_per_1m=0.23,   # 90% Rabatt vom Input
+        output_eur_per_1m=14.50,
     ),
 
     # gpt-5 / gpt-4o: noch keine SC-DZ-EUR-Verifikation. Konservative
