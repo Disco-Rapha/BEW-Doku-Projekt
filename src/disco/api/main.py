@@ -121,6 +121,76 @@ async def root():
     return html
 
 
+@app.get("/api/agent/config")
+async def api_agent_config_get():
+    """Aktuelle Disco-Agent-Konfiguration (Modell, Reasoning, Verbosity).
+
+    Liest aus dem Settings-Singleton — der wird beim setup_agent in-process
+    aktualisiert, sodass GET nach POST den neuen Wert sieht ohne Restart.
+    """
+    return {
+        "model_deployment": settings.foundry_model_deployment or "",
+        "reasoning_effort": settings.foundry_reasoning_effort or "medium",
+        "verbosity": settings.foundry_verbosity or "low",
+        "agent_id": settings.foundry_agent_id or "",
+    }
+
+
+@app.post("/api/agent/config")
+async def api_agent_config_post(payload: dict):
+    """Aendert Reasoning-Effort (und optional Modell/Verbosity) live.
+
+    Pusht eine neue Foundry-Agent-Version mit den geaenderten Werten und
+    patcht .env fuer Persistenz. Der naechste Chat-Turn zieht automatisch
+    die neue Version (FOUNDRY_AGENT_ID auf 'latest').
+
+    Body: {"reasoning_effort": "medium", "verbosity": "low", "model_deployment": "gpt-5.4-prod"}
+    Alle Felder optional — None bedeutet "nicht aendern".
+    """
+    # Validierung
+    allowed_reasoning = {"minimal", "low", "medium", "high"}
+    allowed_verbosity = {"low", "medium", "high"}
+
+    re_v = (payload.get("reasoning_effort") or "").strip() or None
+    vb_v = (payload.get("verbosity") or "").strip() or None
+    md_v = (payload.get("model_deployment") or "").strip() or None
+
+    if re_v is not None and re_v not in allowed_reasoning:
+        return {"error": f"reasoning_effort {re_v!r} ungueltig. Erlaubt: {sorted(allowed_reasoning)}"}, 400
+    if vb_v is not None and vb_v not in allowed_verbosity:
+        return {"error": f"verbosity {vb_v!r} ungueltig. Erlaubt: {sorted(allowed_verbosity)}"}, 400
+
+    if not any([re_v, vb_v, md_v]):
+        return {"error": "Mindestens eines von reasoning_effort, verbosity, model_deployment angeben."}, 400
+
+    # Setup ausfuehren in einem Worker-Thread (HTTP-Call ~3s, blockt sonst Event-Loop)
+    import asyncio
+
+    def _run_setup() -> dict:
+        # Lazy import — scripts/foundry_setup.py ist kein Package
+        import importlib.util as _ilu
+        from pathlib import Path as _P
+        spec = _ilu.spec_from_file_location(
+            "_foundry_setup",
+            _P(__file__).resolve().parent.parent.parent.parent / "scripts" / "foundry_setup.py",
+        )
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.setup_agent(
+            model_deployment=md_v,
+            reasoning_effort=re_v,
+            verbosity=vb_v,
+            verbose=False,
+        )
+
+    try:
+        result = await asyncio.to_thread(_run_setup)
+    except RuntimeError as exc:
+        return {"error": str(exc)}, 500
+
+    return result
+
+
 @app.get("/api/env")
 async def api_env():
     """Liefert Environment-Marker + Workspace + Modell fuer die UI-Footer-Anzeige.
@@ -1589,10 +1659,6 @@ async def ws_chat(
             data = await websocket.receive_text()
             payload = json.loads(data)
             user_text = (payload.get("text") or "").strip()
-            # Optional: UI-Dropdown gibt eine Modell-Vorgabe fuer
-            # Flow-Runs mit. Wird in den Developer-Context von run_turn
-            # eingebettet — beeinflusst Disco's flow_run-Aufrufe.
-            flow_model_hint = (payload.get("flow_model_hint") or "").strip() or None
             if not user_text:
                 continue
 
@@ -1611,11 +1677,7 @@ async def ws_chat(
 
                 def _worker() -> None:
                     try:
-                        for event in svc.run_turn(
-                            project_slug,
-                            user_text,
-                            flow_model_hint=flow_model_hint,
-                        ):
+                        for event in svc.run_turn(project_slug, user_text):
                             loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
                     except Exception as exc:
                         logger.exception("AgentService-Fehler")

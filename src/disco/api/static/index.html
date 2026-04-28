@@ -989,11 +989,13 @@ a:hover { text-decoration: underline; }
       <div class="chat-actions">
         <span id="chat-status" class="muted">Bereit</span>
         <span class="chat-actions-right">
-          <label class="chat-model-label" title="Modell-Vorgabe fuer den naechsten Flow-Run, den Disco startet (z.B. extraction). Disco gibt diesen Wert als config={'model': ...} an den Runner weiter. Default: gpt-5.1.">
-            Flow-Modell:
-            <select id="flow-model-select" onchange="onFlowModelChange()">
-              <option value="gpt-5.1">gpt-5.1</option>
-              <option value="gpt-5.4-prod">gpt-5.4-prod</option>
+          <label class="chat-model-label" title="Reasoning-Effort fuer Disco. Hoeher = tieferes Nachdenken, langsamer + teurer. Aenderung pusht eine neue Agent-Version ins Foundry-Portal (~3s).">
+            Reasoning:
+            <select id="reasoning-select" onchange="onReasoningChange()" disabled>
+              <option value="minimal">minimal</option>
+              <option value="low">low</option>
+              <option value="medium" selected>medium</option>
+              <option value="high">high</option>
             </select>
           </label>
           <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
@@ -1165,7 +1167,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   initSplitters();
   initChatInput();
   initSidebarSections();
-  initFlowModelSelect();
+  initReasoningSelect();
 
   // Projekt-Liste laden
   try {
@@ -1841,35 +1843,67 @@ function sendMessage() {
   input.style.height = '';
   appendMessage('user', text);
   typingEl = appendTyping();
-  // Flow-Modell-Hint vom UI-Dropdown mitgeben (Backend baut daraus
-  // einen Block im Developer-Context — Disco nutzt das Modell bei
-  // flow_run-Aufrufen, sofern der User-Text nichts anderes sagt).
-  const payload = { text };
-  const flowModel = state.flowModel;
-  if (flowModel) payload.flow_model_hint = flowModel;
-  state.ws.send(JSON.stringify(payload));
+  state.ws.send(JSON.stringify({ text }));
   currentBubble = null; currentText = '';
   state._isStreaming = true;
   showStopButton(true);
   setStatus('Disco denkt …');
 }
 
-function onFlowModelChange() {
-  const sel = document.getElementById('flow-model-select');
+// Reasoning-Effort-Selector: Aenderung triggert ein Live-Setup
+// (POST /api/agent/config) — pusht eine neue Foundry-Agent-Version
+// mit dem geaenderten reasoning.effort. ~3s Latenz; nachfolgende
+// Turns ziehen automatisch die neue Version.
+async function onReasoningChange() {
+  const sel = document.getElementById('reasoning-select');
   if (!sel) return;
-  state.flowModel = sel.value;
-  try { localStorage.setItem('disco-flow-model', sel.value); } catch (e) {}
+  const newValue = sel.value;
+  const previousValue = state.reasoningEffort || 'medium';
+  if (newValue === previousValue) return;
+  sel.disabled = true;
+  setStatus(`Reasoning → ${newValue} … (Setup laeuft, ~3s)`);
+  try {
+    const r = await fetch('/api/agent/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ reasoning_effort: newValue }),
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error(`HTTP ${r.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await r.json();
+    state.reasoningEffort = newValue;
+    setStatus(`Reasoning ${newValue} aktiv (Agent v${data.version || '?'})`, 'ok');
+    setTimeout(() => setStatus('Bereit'), 3000);
+  } catch (err) {
+    sel.value = previousValue;
+    setStatus(`Reasoning-Wechsel fehlgeschlagen: ${err.message}`, 'err');
+  } finally {
+    sel.disabled = false;
+  }
 }
 
-function initFlowModelSelect() {
-  const sel = document.getElementById('flow-model-select');
+async function initReasoningSelect() {
+  const sel = document.getElementById('reasoning-select');
   if (!sel) return;
-  let saved = null;
-  try { saved = localStorage.getItem('disco-flow-model'); } catch (e) {}
-  if (saved && Array.from(sel.options).some(o => o.value === saved)) {
-    sel.value = saved;
+  // Aktuellen Stand vom Server holen (nicht localStorage — server-side
+  // truth in .env / Foundry-Agent-Definition)
+  try {
+    const r = await fetch('/api/agent/config');
+    if (r.ok) {
+      const data = await r.json();
+      const current = data.reasoning_effort || 'medium';
+      if (Array.from(sel.options).some(o => o.value === current)) {
+        sel.value = current;
+      }
+      state.reasoningEffort = sel.value;
+    }
+  } catch (e) {
+    // wenn Endpoint noch nicht da: bleibt auf default
+    state.reasoningEffort = sel.value;
   }
-  state.flowModel = sel.value;
+  sel.disabled = false;
 }
 
 function stopResponse() {

@@ -445,7 +445,6 @@ class AgentService:
         user_text: str,
         file_search_vector_store_ids: list[str] | None = None,
         _system_trigger: dict[str, Any] | None = None,
-        flow_model_hint: str | None = None,
     ) -> Iterator[AgentEvent]:
         """Fuehrt einen kompletten Turn aus (User-Nachricht -> Assistant-Antwort).
 
@@ -618,20 +617,6 @@ class AgentService:
         # erstes Item, damit Disco Projekt-Sandbox und ggf. System-Trigger-
         # Regeln kennt. In beiden Modi (Chain + Stateless) identisch.
         developer_ctx_items: list[dict[str, Any]] = []
-
-        # Optional: Flow-Modell-Vorgabe aus dem UI-Dropdown (chat-input-area).
-        # Wirkt nur wenn Disco in diesem Turn einen LLM-Flow-Run startet.
-        flow_model_block = ""
-        if flow_model_hint and flow_model_hint.strip():
-            flow_model_block = (
-                f"\n\n[FLOW-MODELL-VORGABE vom UI: {flow_model_hint.strip()}]\n"
-                f"Wenn Du in diesem Turn einen Flow-Run mit `flow_run` startest, "
-                f"der ein LLM-basiertes Modell nutzt (heute: extraction mit "
-                f"image-Engine), gib `config={{'model': '{flow_model_hint.strip()}'}}` "
-                f"mit. Wenn der User in seiner Nachricht explizit ein anderes "
-                f"Modell nennt, hat das Vorrang. Erwaehne diese Vorgabe nur, "
-                f"wenn der User explizit nach dem Modell fragt."
-            )
         if _p_info is not None:
             # Env-Label fuer die Disco-Instanz (prod|dev). Wird vom
             # DISCO_ENV-Flag in der .env gesetzt — so weiss Disco ob er
@@ -661,7 +646,6 @@ class AgentService:
                 "Andere Projekte existieren fuer Dich in dieser Sitzung "
                 "nicht."
                 + trigger_block
-                + flow_model_block
             )
             developer_ctx_items.append(
                 {"type": "message", "role": "developer", "content": _ctx_text}
