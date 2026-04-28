@@ -1589,6 +1589,10 @@ async def ws_chat(
             data = await websocket.receive_text()
             payload = json.loads(data)
             user_text = (payload.get("text") or "").strip()
+            # Optional: UI-Dropdown gibt eine Modell-Vorgabe fuer
+            # Flow-Runs mit. Wird in den Developer-Context von run_turn
+            # eingebettet — beeinflusst Disco's flow_run-Aufrufe.
+            flow_model_hint = (payload.get("flow_model_hint") or "").strip() or None
             if not user_text:
                 continue
 
@@ -1607,7 +1611,11 @@ async def ws_chat(
 
                 def _worker() -> None:
                     try:
-                        for event in svc.run_turn(project_slug, user_text):
+                        for event in svc.run_turn(
+                            project_slug,
+                            user_text,
+                            flow_model_hint=flow_model_hint,
+                        ):
                             loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
                     except Exception as exc:
                         logger.exception("AgentService-Fehler")

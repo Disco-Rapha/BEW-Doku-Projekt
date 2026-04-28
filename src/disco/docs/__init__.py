@@ -92,8 +92,19 @@ def kind_for_engine(engine: str) -> str:
 ExtractorFn = Callable[[Path, str], tuple[str, dict[str, Any]]]
 
 
-def dispatch_extract(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
+def dispatch_extract(
+    path: Path,
+    engine: str,
+    *,
+    model_deployment: str | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Ruft den passenden Extractor fuer die Engine auf.
+
+    model_deployment:
+      Optional ueberschreibt das Default-Modell fuer LLM-basierte Engines
+      (heute nur image-gpt5-vision). Wird durchgereicht an Engines, die
+      es nutzen koennen — andere Engines (DI, openpyxl, ezdxf) ignorieren
+      es. None: Engine nutzt ihren ENV-Default.
 
     Returns: (markdown, meta) wobei meta mindestens enthaelt:
       - engine
@@ -103,22 +114,26 @@ def dispatch_extract(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
       - estimated_cost_eur
       - extractor_version
       - file_kind
-      - meta_json:dict (format-spezifisches)
+      - meta_json:dict (format-spezifisches; bei LLM-Engines mit
+        deployment-Feld)
     """
     kind = kind_for_engine(engine)
 
     if kind == "pdf":
         from . import pdf as _impl
+        md, meta = _impl.extract(path, engine)
     elif kind == "excel":
         from . import excel as _impl
+        md, meta = _impl.extract(path, engine)
     elif kind == "dwg":
         from . import dwg as _impl
+        md, meta = _impl.extract(path, engine)
     elif kind == "image":
         from . import image as _impl
+        md, meta = _impl.extract(path, engine, model_deployment=model_deployment)
     else:  # pragma: no cover
         raise ValueError(f"Kein Extractor fuer file_kind={kind!r}")
 
-    md, meta = _impl.extract(path, engine)
     # Sicherstellen, dass die Pflicht-Felder gesetzt sind
     meta.setdefault("file_kind", kind)
     meta.setdefault("engine", engine)

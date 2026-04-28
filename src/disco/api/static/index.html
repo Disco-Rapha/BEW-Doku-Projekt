@@ -571,7 +571,27 @@ a:hover { text-decoration: underline; }
 .chat-actions {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 11px; color: var(--text-dim);
+  gap: 12px;
 }
+.chat-actions-right {
+  display: flex; align-items: center; gap: 8px;
+}
+.chat-model-label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-dim);
+  cursor: help;
+}
+.chat-model-label select {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.chat-model-label select:hover { border-color: var(--accent); }
 
 /* ============= Viewer (rechts) ============= */
 #viewer-pane {
@@ -968,8 +988,17 @@ a:hover { text-decoration: underline; }
       <textarea id="chat-input" placeholder="Nachricht an Disco …  (Enter senden, Shift+Enter Zeilenumbruch)"></textarea>
       <div class="chat-actions">
         <span id="chat-status" class="muted">Bereit</span>
-        <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
-        <button id="btn-send" class="btn-primary" onclick="sendMessage()">Senden ▶</button>
+        <span class="chat-actions-right">
+          <label class="chat-model-label" title="Modell-Vorgabe fuer den naechsten Flow-Run, den Disco startet (z.B. extraction). Disco gibt diesen Wert als config={'model': ...} an den Runner weiter. Default: gpt-5.1.">
+            Flow-Modell:
+            <select id="flow-model-select" onchange="onFlowModelChange()">
+              <option value="gpt-5.1">gpt-5.1</option>
+              <option value="gpt-5.4-prod">gpt-5.4-prod</option>
+            </select>
+          </label>
+          <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
+          <button id="btn-send" class="btn-primary" onclick="sendMessage()">Senden ▶</button>
+        </span>
       </div>
     </div>
 
@@ -1136,6 +1165,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   initSplitters();
   initChatInput();
   initSidebarSections();
+  initFlowModelSelect();
 
   // Projekt-Liste laden
   try {
@@ -1811,11 +1841,35 @@ function sendMessage() {
   input.style.height = '';
   appendMessage('user', text);
   typingEl = appendTyping();
-  state.ws.send(JSON.stringify({ text }));
+  // Flow-Modell-Hint vom UI-Dropdown mitgeben (Backend baut daraus
+  // einen Block im Developer-Context — Disco nutzt das Modell bei
+  // flow_run-Aufrufen, sofern der User-Text nichts anderes sagt).
+  const payload = { text };
+  const flowModel = state.flowModel;
+  if (flowModel) payload.flow_model_hint = flowModel;
+  state.ws.send(JSON.stringify(payload));
   currentBubble = null; currentText = '';
   state._isStreaming = true;
   showStopButton(true);
   setStatus('Disco denkt …');
+}
+
+function onFlowModelChange() {
+  const sel = document.getElementById('flow-model-select');
+  if (!sel) return;
+  state.flowModel = sel.value;
+  try { localStorage.setItem('disco-flow-model', sel.value); } catch (e) {}
+}
+
+function initFlowModelSelect() {
+  const sel = document.getElementById('flow-model-select');
+  if (!sel) return;
+  let saved = null;
+  try { saved = localStorage.getItem('disco-flow-model'); } catch (e) {}
+  if (saved && Array.from(sel.options).some(o => o.value === saved)) {
+    sel.value = saved;
+  }
+  state.flowModel = sel.value;
 }
 
 function stopResponse() {

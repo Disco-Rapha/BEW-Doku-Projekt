@@ -125,8 +125,15 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
     if not abs_path.is_file():
         raise FileNotFoundError(f"Datei nicht gefunden: {fs_rel_path}")
 
+    # Optional: Modell-Override aus Run-Config (z.B. {"model": "gpt-5.4-prod"}).
+    # Default: None → Engine nutzt ihren ENV-Default. Wirkt nur fuer
+    # LLM-basierte Engines (image-gpt5-vision); andere ignorieren das Feld.
+    model_override = run.config.get("model") or None
+
     t0 = time.monotonic()
-    md_body, meta = dispatch_extract(abs_path, engine)
+    md_body, meta = dispatch_extract(
+        abs_path, engine, model_deployment=model_override,
+    )
     duration_ms = (time.monotonic() - t0) * 1000.0
 
     extracted_at = datetime.now(timezone.utc).isoformat()

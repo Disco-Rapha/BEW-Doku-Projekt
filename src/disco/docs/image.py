@@ -70,7 +70,23 @@ Wenn eine Zeile keine Werte hat: weglassen, nicht "—" oder "nicht
 vorhanden" schreiben."""
 
 
-def extract(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
+def extract(
+    path: Path,
+    engine: str,
+    *,
+    model_deployment: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Extrahiert Bild-Inhalt nach strukturiertem Markdown.
+
+    model_deployment:
+      - None: nutzt ENV-Default `FOUNDRY_MODEL_DEPLOYMENT` (Fallback "gpt-5.1").
+      - gesetzt: wird direkt fuer den Vision-Call genutzt (per-Run-Override
+        aus Flow-Config, z.B. "gpt-5.4-prod" fuer hoechste Qualitaet oder
+        "gpt-5.1-mini" fuer Kosten-Optimierung).
+
+    Der genutzte Deployment-Name landet im meta_json, sodass das Cost-
+    Tracking weiss, mit welchem Modell der Output erzeugt wurde.
+    """
     if engine not in _ENGINE_VERSIONS:
         raise ValueError(f"Unbekannte Image-Engine: {engine!r}")
 
@@ -90,7 +106,10 @@ def extract(path: Path, engine: str) -> tuple[str, dict[str, Any]]:
 
     # 3) Foundry/Azure-OpenAI-Client (gleiche Auth wie agent/core.py)
     client = _build_openai_client()
-    deployment = os.environ.get("FOUNDRY_MODEL_DEPLOYMENT", "gpt-5.1")
+    deployment = (
+        model_deployment
+        or os.environ.get("FOUNDRY_MODEL_DEPLOYMENT", "gpt-5.1")
+    )
 
     # 4) Vision-Call via chat.completions
     resp = client.chat.completions.create(
