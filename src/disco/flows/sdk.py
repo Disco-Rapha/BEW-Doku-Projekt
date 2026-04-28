@@ -131,87 +131,41 @@ HEARTBEAT_MAX_SEC = 14400  # 4 h
 # Azure-Rechnung.
 # ---------------------------------------------------------------------------
 
-# 1 USD ≈ 0.85 EUR (April 2026, EZB-Referenzkurs). Achtung: Richtung zaehlt!
-# usd_to_eur = usd_betrag * USD_TO_EUR
-USD_TO_EUR = 0.85
-
-MODEL_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
-    # GPT-5.1 Familie (aktueller Default fuer disco-prod-agent / disco-dev-agent
-    # in Sweden Central, Data Zone Standard deployment).
-    # Azure publiziert fuer Sweden Central in EUR; Data Zone Standard
-    # (Stand 2026-04-22): Input €1.20 / Output €9.55 / 1M Tokens.
-    # Rueckgerechnet via USD_TO_EUR=0.85: 1.20/0.85 = 1.412, 9.55/0.85 = 11.235.
-    "gpt-5.1": {"input": 1.412, "output": 11.235},
-    # mini/nano: nicht im aktuellen Azure-Data-Zone-Screenshot enthalten,
-    # daher unveraendert — vor Live-Einsatz pruefen.
-    "gpt-5.1-mini": {"input": 0.25, "output": 2.00},
-    "gpt-5.1-nano": {"input": 0.05, "output": 0.40},
-    # GPT-5.4 (User-Deployment "gpt-5.4-prod" seit 2026-04-27, Sweden Central
-    # Data Zone Standard). Microsoft-Listpreise global: $2.50 input / $0.25
-    # cached / $15.00 output (Standard-Tier <=272K Context, verifiziert
-    # 2026-04-27 via Microsoft Learn Q&A + cloudprice.net).
-    # Sweden-Central-Data-Zone-EUR-Spezialpreise sind nicht oeffentlich
-    # publiziert — bei gpt-5.1 ist Input ~52% guenstiger, Output ~95.5%
-    # vom globalen Listpreis. Hochgerechnet auf gpt-5.4:
-    #   Input  €1.20 / 1M (gleich wie gpt-5.1, da gleicher USD-Preis)
-    #   Output €14.32 / 1M (15.00 USD * 0.955 Faktor)
-    # Rueckgerechnet via USD_TO_EUR=0.85 (im sdk.py-Schema):
-    #   input USD-aequiv = 1.412, output USD-aequiv = 16.85
-    "gpt-5.4": {"input": 1.412, "output": 16.85},
-    # GPT-5 Familie (Legacy — falls ein Deployment noch darauf zeigt)
-    "gpt-5": {"input": 5.0, "output": 15.0},
-    "gpt-5-mini": {"input": 0.5, "output": 2.0},
-    "gpt-5-nano": {"input": 0.1, "output": 0.4},
-    # GPT-4.1-Familie (in Migration)
-    "gpt-4.1": {"input": 2.5, "output": 10.0},
-    "gpt-4.1-mini": {"input": 0.25, "output": 1.0},
-    # Embeddings (fuer spaetere Hybrid-Search-Flows)
-    "text-embedding-3-large": {"input": 0.13, "output": 0.0},
-    "text-embedding-3-small": {"input": 0.02, "output": 0.0},
-}
+# Pricing wird zentral aus disco.pricing geholt — EINE Source-of-Truth
+# fuer alle Cost-Berechnungen (Image-Engine, Flow-LLM-Calls, Chat-Tracking).
+# compute_cost_eur unten ist nur ein dünner Wrapper, der die alte sdk-
+# Signatur (model, tokens_in, tokens_out) weiterhin unterstuetzt — neue
+# Caller sollten direkt disco.pricing.compute_cost_eur() nutzen, weil
+# das auch cached_prompt_tokens-Discount kennt.
 
 
 def compute_cost_eur(model: str, tokens_in: int, tokens_out: int) -> float:
-    """Berechnet EUR-Kosten fuer einen API-Call.
+    """Berechnet EUR-Kosten fuer einen API-Call (Wrapper um disco.pricing).
 
     Nimmt den Modellnamen wie er im Deployment steht (z.B. 'gpt-5.1',
-    'gpt-5.1-mini'). Deployment-Aliase mit Suffixen wie
-    'gpt-5.1-2026-02-01' werden automatisch auf das Basis-Modell
-    zurueckgefuehrt.
+    'gpt-5.4-prod', 'gpt-5.1-mini'). Deployment-Aliase mit Suffixen werden
+    von pricing.get_foundry_price() automatisch auf das Basis-Modell
+    zurueckgefuehrt (laengster Prefix-Match).
 
-    Unbekannte Modelle → 0.0 EUR + Warnung im Log (spaeter: Exception).
+    Unbekannte Modelle → 0.0 EUR + Warnung im Log.
+    NOTE: Dieser Wrapper kennt cached_prompt_tokens NICHT. Fuer Calls mit
+    cached-Discount direkt disco.pricing.compute_cost_eur() nutzen.
     """
-    base = _normalize_model_name(model)
-    pricing = MODEL_PRICING_USD_PER_MTOK.get(base)
-    if pricing is None:
+    from disco.pricing import compute_cost_eur as _pricing_compute, get_foundry_price
+
+    if get_foundry_price(model) is None:
         logger.warning(
-            "Unbekanntes Modell fuer Cost-Berechnung: %r (base=%r) — 0 EUR",
-            model, base,
+            "Unbekanntes Modell fuer Cost-Berechnung: %r — 0 EUR",
+            model,
         )
         return 0.0
-    usd = (
-        (tokens_in / 1_000_000.0) * pricing["input"]
-        + (tokens_out / 1_000_000.0) * pricing["output"]
+
+    return _pricing_compute(
+        model,
+        prompt_tokens=tokens_in,
+        completion_tokens=tokens_out,
+        cached_prompt_tokens=0,
     )
-    return usd * USD_TO_EUR
-
-
-def _normalize_model_name(model: str) -> str:
-    """Reduziert 'gpt-5-2025-08-07' auf 'gpt-5', 'gpt-4.1-mini-abc' auf 'gpt-4.1-mini'.
-
-    Sucht den laengsten Key in MODEL_PRICING_USD_PER_MTOK, der ein Prefix
-    des gegebenen Modellnamens ist. So gewinnt 'gpt-5-mini' vor 'gpt-5'.
-    """
-    if not model:
-        return ""
-    m = model.lower().strip()
-    # laengster passender Prefix gewinnt (damit 'gpt-5-mini' nicht auf 'gpt-5' fallback)
-    best = ""
-    for key in MODEL_PRICING_USD_PER_MTOK:
-        if m == key or m.startswith(key + "-") or m.startswith(key):
-            if len(key) > len(best):
-                best = key
-    return best or m
 
 
 # ===========================================================================
