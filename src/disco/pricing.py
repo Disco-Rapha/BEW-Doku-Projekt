@@ -80,6 +80,9 @@ FOUNDRY_PRICING: dict[str, TokenPrice] = {
     # gpt-5.1: Annahme nahe gpt-4o (input $2.50, cached $1.25, output $10).
     # Wenn echte gpt-5.1-Preise hoeher sein sollten, hier ersetzen.
     "gpt-5.1": _usd(input_usd=2.50, cached_usd=1.25, output_usd=10.00),
+    # gpt-5.4: User-Deployment 2026-04-27 ("gpt-5.4-prod"). Preise unbekannt,
+    # konservative Annahme = gpt-5.1. Bei Aenderung hier anpassen.
+    "gpt-5.4": _usd(input_usd=2.50, cached_usd=1.25, output_usd=10.00),
     # gpt-5: gleiche Annahme als Fallback
     "gpt-5":   _usd(input_usd=2.50, cached_usd=1.25, output_usd=10.00),
     # gpt-4o: bekannte Listpreise

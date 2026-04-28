@@ -146,6 +146,10 @@ MODEL_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
     # daher unveraendert — vor Live-Einsatz pruefen.
     "gpt-5.1-mini": {"input": 0.25, "output": 2.00},
     "gpt-5.1-nano": {"input": 0.05, "output": 0.40},
+    # GPT-5.4 (User-Deployment "gpt-5.4-prod" seit 2026-04-27).
+    # Preise unbekannt — konservative Annahme = gpt-5.1. Bei Bekanntwerden
+    # der echten Listpreise hier anpassen.
+    "gpt-5.4": {"input": 1.412, "output": 11.235},
     # GPT-5 Familie (Legacy — falls ein Deployment noch darauf zeigt)
     "gpt-5": {"input": 5.0, "output": 15.0},
     "gpt-5-mini": {"input": 0.5, "output": 2.0},
