@@ -967,8 +967,15 @@ class FlowRun:
         response : Any
             Die Antwort vom Azure-OpenAI-Client.
         model : str | None
-            Modellname fuer die Preisberechnung. Wenn None, versucht die
-            Funktion `response.model` zu lesen. Fallback: 'gpt-5'.
+            Deployment-Name (NICHT Modell-ID!) fuer die Preisberechnung.
+            Wenn None, faellt auf settings.foundry_flow_model_deployment
+            zurueck.
+
+            WARUM NICHT response.model: pricing.FOUNDRY_PRICING ist
+            1:1 auf Deployment-Namen gemappt (z.B. "gpt-5.1",
+            "gpt-5.4-prod"). response.model liefert oft die Modell-ID
+            mit Datums-Suffix (z.B. "gpt-5.1-2025-...") — die wuerde
+            nicht matchen und 0.0 EUR Cost liefern.
 
         Returns
         -------
@@ -976,8 +983,10 @@ class FlowRun:
             (tokens_in, tokens_out, eur) — fuer Per-Item-Logging falls der
             Runner das in seine Ergebnis-Tabelle schreiben will.
         """
+        from disco.config import settings as _settings
+
         tokens_in, tokens_out = _extract_usage(response)
-        used_model = model or getattr(response, "model", None) or "gpt-5.1"
+        used_model = model or _settings.foundry_flow_model_deployment
         eur = compute_cost_eur(used_model, tokens_in, tokens_out)
         self.add_cost(eur=eur, tokens_in=tokens_in, tokens_out=tokens_out)
         return tokens_in, tokens_out, eur
