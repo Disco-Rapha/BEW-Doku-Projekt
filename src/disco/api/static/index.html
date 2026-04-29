@@ -1075,6 +1075,15 @@ function initMarkdown() {
       return '<pre><code class="hljs">' + state.md.utils.escapeHtml(str) + '</code></pre>';
     }
   });
+  // Erlaube custom URL-Schemas fuer Disco-interne Links:
+  //   disco-file://<rel-path>           → oeffnet Datei im Viewer
+  //   disco-table://<datastore|workspace>/<table>  → oeffnet Tabelle
+  // Standard-Schemas (http/https/mailto) bleiben erlaubt.
+  const _origValidate = state.md.validateLink.bind(state.md);
+  state.md.validateLink = function(url) {
+    if (/^disco-(file|table):/i.test(url)) return true;
+    return _origValidate(url);
+  };
 }
 
 function escapeHtml(s) {
@@ -1093,7 +1102,10 @@ function renderMarkdown(text) {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ['p','br','strong','em','code','pre','ul','ol','li','a','h1','h2','h3','h4','h5','h6',
                    'blockquote','hr','table','thead','tbody','tr','th','td','span','del','sub','sup','img'],
-    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt']
+    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt'],
+    // Erlaube zusaetzlich disco-file:// und disco-table:// als URI-Schemas.
+    // DOMPurify-Default whitelistet nur http/https/mailto/tel/data:image/etc.
+    ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp|xxx|disco-file|disco-table):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
   });
 }
 
@@ -1833,6 +1845,35 @@ function initChatInput() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
+
+  // Globaler Click-Handler fuer disco-file:// und disco-table://-Links
+  // (event delegation ueber #chat-messages — funktioniert auch fuer
+  // dynamisch eingefuegte Bubbles).
+  const msgs = document.getElementById('chat-messages');
+  if (msgs) {
+    msgs.addEventListener('click', (e) => {
+      const a = e.target.closest('a[href]');
+      if (!a) return;
+      const href = a.getAttribute('href') || '';
+      if (href.startsWith('disco-file://')) {
+        e.preventDefault();
+        const path = decodeURIComponent(href.substring('disco-file://'.length));
+        // Filename aus dem letzten Pfad-Segment ableiten
+        const name = path.split('/').pop() || path;
+        openFileInViewer(path, name);
+      } else if (href.startsWith('disco-table://')) {
+        e.preventDefault();
+        const rest = href.substring('disco-table://'.length);
+        // Format: <datastore|workspace>/<tabelle>
+        const slash = rest.indexOf('/');
+        if (slash < 0) return;
+        const db = rest.substring(0, slash);
+        const table = decodeURIComponent(rest.substring(slash + 1));
+        if (db !== 'datastore' && db !== 'workspace') return;
+        openTableInViewer(table, db);
+      }
+    });
+  }
 }
 
 function sendMessage() {
