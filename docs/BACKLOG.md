@@ -2999,3 +2999,105 @@ User-Quote (2026-04-27): *"Ich brauche eine Loesung wie man die
 Datenverarbeitung auf Ebene 3 organisiert. Nach einigen Arbeits-
 und Analyseschritten wird die Datenhaltung chaotisch und Disco
 verzettelt sich mit den Daten, berechtigterweise."*
+
+
+## Klickbare Links + bewusste Thumbnails im Chat (Prioritaet: hoch)
+
+**User-Anforderung 2026-04-29:** Disco soll in seinen Antworten Files und
+DB-Tabellen als anklickbare Links ausgeben (Klick → Viewer-Pane oeffnet die
+Datei/Tabelle). Zusaetzlich soll Disco bei visueller Relevanz **bewusst**
+Thumbnails einbinden — aber nicht jeder Datei-Verweis soll automatisch ein
+Thumbnail erzeugen.
+
+User-Quote: *"Ich möchte dass disco weiß, wann thumbnails verwendet. Also
+er soll die vorschau bewusst präsentieren wenn passend. Nicht einfach dass
+jedes zitat vom backend gerendert wird."*
+
+### Zwei klar getrennte Markdown-Patterns
+
+| Disco schreibt | Frontend rendert |
+|---|---|
+| `[Schaltplan](disco-file://sources/Elektro/foo.pdf)` | klickbarer Link → Viewer |
+| `[agent_doc_markdown](disco-table://datastore/agent_doc_markdown)` | klickbarer Link → Tabellen-View |
+| `![](disco-preview://sources/Elektro/foo.pdf)` | echtes Thumbnail inline (bewusste Praesentation) |
+| `![](sources/foto.jpg)` (Standard-Markdown) | wird NICHT automatisch gerendert |
+
+Bewusste Trennung: nur das `disco-preview://`-Schema triggert Thumbnail-
+Generierung. Standard-Markdown-Images werden absichtlich nicht
+automatisch eingebunden — verhindert dass eine Liste mit 20 Filenames
+den Chat mit 20 Bildern flutet.
+
+### System-Prompt-Hinweise (bewusst schlank gehalten)
+
+```
+Bei Datei-Verweisen: [name](disco-file://<rel-pfad>)
+Bei Tabellen-Verweisen: [name](disco-table://<datastore|workspace>/<table>)
+Wenn Du eine visuelle Vorschau BEWUSST praesentieren willst (z.B. weil
+es um das Bild/Plan an sich geht, nicht nur eine Erwaehnung):
+  ![](disco-preview://<rel-pfad>)
+Default: Link, nicht Thumbnail. Thumbnails sparsam einsetzen.
+```
+
+3-4 Zeilen System-Prompt — passt zur User-Vorgabe "schlank halten".
+
+### Wann Thumbnails vs. Links — Disco's Heuristik
+
+| Kontext | Pattern |
+|---|---|
+| "Hier ist der Plan/das Foto, das du gesucht hast" | Thumbnail |
+| "Ich habe Datei X bearbeitet" | Link |
+| "Vergleich der drei Schaltplaene A/B/C" | drei Thumbnails (sehr explizit) |
+| "10 PDFs untersucht, hier die Treffer-Liste" | Links |
+
+### Phasenplan + Aufwand
+
+**Phase 1 (~1.5h) — Klickbare Links**:
+- Frontend: Custom-URL-Schema-Parser (`disco-file://`, `disco-table://`)
+  in markdown-it, `event.preventDefault()` + Click-Handler die existing
+  `openFileInViewer(path)` / `openTableInViewer(table, db)` aufrufen.
+- Backend: NICHTS neu — alle Endpoints existieren (`/api/files`, DB-API).
+- System-Prompt: 2 Zeilen Konvention.
+- Klick oeffnet im **rechten Viewer-Pane** (konsistent mit Explorer).
+
+**Phase 2 (~3h) — Bewusste Thumbnails**:
+- Backend-Endpoint `/api/projects/{slug}/thumbnail?path=...&page=1`:
+  - JPG/PNG: direkt als Image durchreichen (existierender file-Endpoint)
+  - PDF: PyMuPDF (fitz) rendert erste Seite als JPEG, Cache in
+    `<projekt>/.disco/thumbnails/<sha256>.jpg`
+  - Cache mit LRU-Cleanup (max 500 MB / 30 Tage)
+- Frontend: image-renderer-override in markdown-it — `disco-preview://`
+  → `<img src="/api/projects/<slug>/thumbnail?path=...">`. Andere Image-
+  URLs werden nicht expandiert (Sicherheitsnetz).
+- System-Prompt: 1-2 Zeilen Konvention "sparsam einsetzen".
+
+**Phase 3 (Backlog, kein konkreter Auftrag)** — Office-/CAD-Formate:
+- DOCX/XLSX → LibreOffice-CLI Conversion zu PDF, dann Thumbnail
+- DWG → embedded `THUMBNAILIMAGE`-Section parsen (manche DWGs haben das)
+- Hoher Setup-Aufwand (LibreOffice-Dependency etc.) vs. moderater Nutzen
+  → erst wenn Bedarf konkret entsteht.
+
+### Technische Details
+
+- DOMPurify (im Markdown-Renderer) muss `disco-file://` /
+  `disco-table://` / `disco-preview://` whitelisten via `validateLink`-Hook
+  in markdown-it. Custom-URL-Schemas sind sonst gefiltert.
+- Thumbnail-Cache: pro Projekt (`<projekt>/.disco/thumbnails/`) — passt
+  zur sandboxierten Projekt-Architektur (Konvention 4: Idempotenz).
+- Cache-Key = sha256 des absoluten Pfads + Page-Nummer + image-Format.
+  Bei File-Aenderung wird neuer Hash → neuer Cache-Eintrag.
+
+### Bezug zu anderen Backlog-Eintraegen
+
+- **Sidebar-Navigation skaliert nicht**: orthogonal — bessere Sichtbarkeit
+  fuer Files/Tabellen, aber UX-Pfad ist unterschiedlich (Sidebar = Browse,
+  Inline-Links = "Disco zeigt mir das hier")
+- **Data-Lineage**: bei klickbaren Tabellen-Links koennte ein Lineage-
+  Hover-Tooltip ergaenzt werden ("Diese Tabelle wurde erzeugt am ...
+  aus ... mit Zweck X")
+
+User-Quote (2026-04-29): *"Wie aufwendig waere es, wenn disco gleich
+im chat thumbnails der dokumenten anzeigen koennte... alle inhalte aus
+dem explorer und die einzelnen DBs als link aufrufbar..."*
+
+User-Quote-Klarstellung: *"Disco soll die vorschau bewusst praesentieren
+wenn passend. Nicht einfach dass jedes zitat vom backend gerendert wird."*
