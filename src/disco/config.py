@@ -90,6 +90,22 @@ class Settings(BaseSettings):
     foundry_agent_id: str | None = None
 
     # ------------------------------------------------------------------
+    # Flow-LLM-Modell — getrennt vom Disco-Agent-Modell.
+    #
+    # Disco-Agent (Chat) nutzt foundry_model_deployment (gpt-5.4-prod
+    # heute). LLM-basierte Flows (Image-Extraktion, kuenftige Klassifi-
+    # katoren) nutzen foundry_flow_model_deployment — typisch das
+    # guenstigere Modell weil's Bulk-Mengen sind.
+    #
+    # Trennung im Config-Layer (nicht im System-Prompt) — System-Prompt
+    # bleibt schlank, Modell-Wahl wird durch ENV-Variablen gesteuert.
+    #
+    # Mittelfristig kann pro Run weiterhin per Flow-Config-Override ein
+    # anderes Modell gewaehlt werden (z.B. fuer Benchmark-Tests).
+    # ------------------------------------------------------------------
+    foundry_flow_model_deployment: str = "gpt-5.1"
+
+    # ------------------------------------------------------------------
     # GPT-5.1 Inference-Settings (per Request uebergeben, ueberschreibt
     # Portal-Agent-Defaults). Haben spuerbaren Einfluss auf Tool-Use:
     #
