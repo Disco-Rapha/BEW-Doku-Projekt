@@ -70,6 +70,19 @@ Wenn eine Zeile keine Werte hat: weglassen, nicht "—" oder "nicht
 vorhanden" schreiben."""
 
 
+DEFAULT_FLOW_MODEL = "gpt-5.1"
+"""Hardcoded Default-Modell fuer Image-Extraction-Flow.
+
+Bewusst NICHT aus FOUNDRY_MODEL_DEPLOYMENT-ENV gelesen — die ENV ist
+fuer den Disco-Agent (Chat) reserviert (heute gpt-5.4-prod). Flows
+sollen einen eigenen, kostenoptimierten Default haben (gpt-5.1 ist
+~30% guenstiger als gpt-5.4 bei Image-typischen Output-Mengen).
+
+Override pro Run via Flow-Config: `{"model": "gpt-5.4-prod"}` →
+`dispatch_extract(model_deployment=...)` → hier als Parameter.
+"""
+
+
 def extract(
     path: Path,
     engine: str,
@@ -79,7 +92,7 @@ def extract(
     """Extrahiert Bild-Inhalt nach strukturiertem Markdown.
 
     model_deployment:
-      - None: nutzt ENV-Default `FOUNDRY_MODEL_DEPLOYMENT` (Fallback "gpt-5.1").
+      - None (Default): nutzt DEFAULT_FLOW_MODEL = "gpt-5.1" (hardcoded).
       - gesetzt: wird direkt fuer den Vision-Call genutzt (per-Run-Override
         aus Flow-Config, z.B. "gpt-5.4-prod" fuer hoechste Qualitaet oder
         "gpt-5.1-mini" fuer Kosten-Optimierung).
@@ -106,10 +119,10 @@ def extract(
 
     # 3) Foundry/Azure-OpenAI-Client (gleiche Auth wie agent/core.py)
     client = _build_openai_client()
-    deployment = (
-        model_deployment
-        or os.environ.get("FOUNDRY_MODEL_DEPLOYMENT", "gpt-5.1")
-    )
+    # Default-Modell fuer Flow-Engine ist hardcoded, NICHT aus ENV. Damit
+    # haben Disco-Agent (Chat, gpt-5.4-prod) und Flows (gpt-5.1) saubere
+    # Trennung der Modell-Defaults.
+    deployment = model_deployment or DEFAULT_FLOW_MODEL
 
     # 4) Vision-Call via chat.completions
     resp = client.chat.completions.create(

@@ -91,15 +91,21 @@ mit Spalten + Zeilenanzahl.
 Wirkt nur auf LLM-basierte Engines (heute: `image-gpt5-vision`).
 Andere Engines (DI, openpyxl, ezdxf) ignorieren das Feld.
 
-Verfuegbare Modelle (Stand 2026-04):
-- `gpt-5.1` (Default-Empfehlung fuer Bulk; ~50% guenstiger als gpt-5.4)
-- `gpt-5.4-prod` (hoechste Qualitaet, deutlich teurer bei Output-lastigen
-  Tasks — Cached-Input dafuer 5x guenstiger)
+**Default ohne `model`-Feld**: `gpt-5.1` (hardcoded in
+`disco.docs.image.DEFAULT_FLOW_MODEL`). Bewusst NICHT die ENV-Variable
+`FOUNDRY_MODEL_DEPLOYMENT` — die ist fuer den Disco-Agent (Chat)
+reserviert (heute gpt-5.4-prod). Flow-Defaults sind kosten-orientiert.
 
-Ohne `model`-Feld faellt der Runner auf ENV-Default
-`FOUNDRY_MODEL_DEPLOYMENT` zurueck. Die tatsaechlich genutzte
-Modell-ID landet in `agent_doc_markdown.meta_json.deployment` (fuer
-Cost-Tracking).
+Verfuegbare Modelle (Stand 2026-04):
+- `gpt-5.1` (Default; Bulk-tauglich; ~30% guenstiger als gpt-5.4 bei
+  Image-typischen Output-Mengen)
+- `gpt-5.4-prod` (hoechste Qualitaet, teurer bei Output-lastigen
+  Tasks — Cached-Input dafuer 90% Rabatt)
+
+Die tatsaechlich genutzte Modell-ID landet in
+`agent_doc_markdown.meta_json.deployment` (fuer Cost-Tracking).
+Cost-Berechnung in `disco.pricing.compute_cost_eur()` nutzt
+automatisch die richtigen Sweden-Central-Data-Zone-EUR-Preise pro Modell.
 
 ## Resume + Idempotenz
 
