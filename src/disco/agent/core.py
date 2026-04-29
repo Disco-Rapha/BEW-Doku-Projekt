@@ -380,16 +380,19 @@ class AgentService:
         raise RuntimeError(
             "Kein Auth-Weg konfiguriert. In .env eintragen:\n"
             "  Variante A (empfohlen): FOUNDRY_ENDPOINT + FOUNDRY_API_KEY\n"
-            "  Variante B (klassisch): AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_KEY + AZURE_OPENAI_DEPLOYMENT\n"
+            "  Variante B (klassisch): AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_KEY\n"
             "  Variante C (Azure AD): FOUNDRY_ENDPOINT + vorher `az login`"
         )
 
     def _model_deployment(self) -> str:
-        """Bevorzugt AZURE_OPENAI_DEPLOYMENT, faellt zurueck auf FOUNDRY_MODEL_DEPLOYMENT."""
-        return (
-            settings.azure_openai_deployment
-            or settings.foundry_model_deployment
-        )
+        """Modell-Deployment fuer den Disco-Agent (Chat).
+
+        Liest ausschliesslich foundry_model_deployment. Frueher gab es
+        einen Fallback auf azure_openai_deployment — das wurde 2026-04-29
+        entfernt um klare Trennung Chat (foundry_model_deployment) vs.
+        Flows (foundry_flow_model_deployment) zu haben.
+        """
+        return settings.foundry_model_deployment
 
     # -------------------- Tool-Liste (Fallback-Weg) --------------------
 

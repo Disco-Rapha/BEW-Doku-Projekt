@@ -76,7 +76,12 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str | None = None
     azure_openai_key: str | None = None
     azure_openai_api_version: str = "preview"
-    azure_openai_deployment: str | None = None
+    # Hinweis: settings.azure_openai_deployment wurde 2026-04-29 ENTFERNT.
+    # Modell-Wahl laeuft jetzt explizit ueber foundry_model_deployment
+    # (Disco-Agent) und foundry_flow_model_deployment (LLM-Flows). Ein
+    # alter projekt-eigener Flow, der noch settings.azure_openai_deployment
+    # liest, bricht zur Laufzeit mit AttributeError — bewusst, damit
+    # Disco den Flow auf foundry_flow_model_deployment migriert.
 
     msal_tenant_id: str | None = None
     msal_client_id: str | None = None
