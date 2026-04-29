@@ -4,14 +4,27 @@ EINE Source-of-Truth fuer alle Cost-Berechnungen — Image-Engine, Flow-LLM-
 Calls, Chat-Cost-Tracking. Alle anderen Module rufen `get_foundry_price()`
 oder `compute_cost_eur()` und bekommen identische Werte.
 
-Werte sind die **echten Sweden Central Data Zone Standard-Listpreise in
-EUR pro 1M Tokens** (das Tier in dem unsere Foundry-Resource liegt).
-Microsoft publiziert das direkt in EUR — keine USD→EUR-Umrechnung noetig.
+Werte sind die Sweden Central Data Zone Standard-Listpreise in EUR pro
+1M Tokens (das Tier in dem unsere Foundry-Resource liegt). Microsoft
+publiziert das direkt in EUR — keine USD→EUR-Umrechnung noetig.
+
+WICHTIG — Konvention: 1 Pricing pro Deployment, kein Prefix-Matching
+================================================================
+Jeder Eintrag ist auf einen **konkreten Deployment-Namen** gemappt
+(wie er im Foundry-Portal steht), nicht auf die Modell-Familie. Das
+verhindert Drift wenn ein Deployment mal abweichende Tier-Werte hat
+(z.B. wenn jemand "gpt-5.4-test" mit anderem Pricing deployed).
+
+Wenn du ein neues Deployment anlegst:
+  1. Foundry-Portal: Deployment-Name vergeben, z.B. "gpt-5.4-test"
+  2. Hier den entsprechenden Eintrag mit den echten Preisen ergaenzen
+  3. Bei unbekanntem Deployment liefert get_foundry_price() None
+     und compute_cost_eur() gibt 0.0 EUR + Log-Warning zurueck
 
 WICHTIG — Werte regelmaessig pruefen:
   - https://azure.microsoft.com/de-de/pricing/details/ai-foundry/
   - Region "Sweden Central" + Tier "Data Zone Standard"
-  - Stand 2026-04-27 (BEW): bei Aenderung Datum hochziehen.
+  - Stand 2026-04-29 (BEW): bei Aenderung Datum hochziehen.
 
 Cached-Input-Discount:
   Foundry/Azure-OpenAI cacht den System-Prompt-Praefix ueber Calls
@@ -20,8 +33,11 @@ Cached-Input-Discount:
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -57,61 +73,64 @@ class TokenPrice:
 
 
 # ---------------------------------------------------------------------------
-# Foundry GPT-Familie — Sweden Central Data Zone Standard EUR-Listpreise
+# Foundry-Deployments — 1:1 Pricing
 # ---------------------------------------------------------------------------
-#
-# Quelle: Azure-Pricing-Seite. Microsoft publiziert in EUR direkt fuer
-# Sweden Central Data Zone Standard. Bei unbekanntem Cached-Anteil:
-# vom Globalen-USD-Listpreis-Rabatt-Verhaeltnis abgeleitet.
-#
-# Drift-Hinweis: globale USD-Listpreise sind hoeher (z.B. gpt-5.1 Input
-# $2.50 = €2.30 mit 0.92er-Kurs vs. €1.20 hier). Sweden-Central ist im
-# Data-Zone-Tarif spuerbar guenstiger — Microsoft hat dafuer einen eigenen
-# Preisplan.
+# Genau die Deployments, die im Foundry-Portal "Sweden-central-deployment"
+# existieren. Erweiterung pro neuem Deployment hier eintragen.
 
 FOUNDRY_PRICING: dict[str, TokenPrice] = {
-    # gpt-5.1: Sweden Central Data Zone Standard, Stand 2026-04-22
-    # (Azure-Pricing-Seite Screenshot, in flows/sdk.py-History dokumentiert).
-    # Cached-Input ist auf der Azure-Seite oft nicht separat gelistet —
-    # wir nehmen 50% vom Input-Preis (entspricht globalem 50%-Rabatt).
+    # Deployment: gpt-5.1
+    # Modell:     gpt-5.1
+    # Quelle:     Azure Pricing Sweden Central Data Zone Standard
+    #             (Stand 2026-04-22, dokumentiert).
+    # Cached:     50% Rabatt vom Input (Schaetzung — Sweden-Central-EUR-
+    #             Cached-Listpreis nicht separat publiziert).
     "gpt-5.1": TokenPrice(
         input_eur_per_1m=1.20,
-        cached_input_eur_per_1m=0.60,   # 50% Rabatt (Schaetzung)
+        cached_input_eur_per_1m=0.60,
         output_eur_per_1m=9.55,
     ),
 
-    # gpt-5.4: User-Vorgabe 2026-04-27, weil Microsoft die echten Sweden-
-    # Central-Data-Zone-EUR-Werte noch nicht offiziell publiziert.
-    # Input/Output direkt vom User. Cached-Input mit 90% Rabatt vom Input
-    # (gpt-5.4-globaler USD-Listpreis-Rabatt 2.50 → 0.25), also 0.23 EUR.
-    # Bei offizieller Microsoft-Bestaetigung hier anpassen.
-    "gpt-5.4": TokenPrice(
-        input_eur_per_1m=2.30,
-        cached_input_eur_per_1m=0.23,   # 90% Rabatt vom Input
-        output_eur_per_1m=14.50,
+    # Deployment: gpt-5.1_prod
+    # Modell:     gpt-5.1 (alter Prod-Alias, vor "gpt-5.4-prod"-Migration)
+    # Werte:     identisch zu gpt-5.1
+    "gpt-5.1_prod": TokenPrice(
+        input_eur_per_1m=1.20,
+        cached_input_eur_per_1m=0.60,
+        output_eur_per_1m=9.55,
     ),
 
-    # gpt-5 / gpt-4o: noch keine SC-DZ-EUR-Verifikation. Konservative
-    # Annahme = gpt-5.1-Werte. Wenn jemand diese Modelle aktiv nutzt:
-    # Werte aus Pricing-Seite verifizieren.
-    "gpt-5":  TokenPrice(input_eur_per_1m=1.20, cached_input_eur_per_1m=0.60, output_eur_per_1m=9.55),
-    "gpt-4o": TokenPrice(input_eur_per_1m=1.20, cached_input_eur_per_1m=0.60, output_eur_per_1m=9.55),
+    # Deployment: gpt-5.4-prod
+    # Modell:     gpt-5.4
+    # Quelle:     User-Vorgabe 2026-04-27 (Microsoft-EUR-Listpreis fuer
+    #             Sweden-Central-Data-Zone noch nicht offiziell publiziert).
+    # Cached:     90% Rabatt vom Input (gpt-5.4 hat global $0.25 vs $2.50
+    #             Input → 90% Rabatt; Faktor uebernommen).
+    "gpt-5.4-prod": TokenPrice(
+        input_eur_per_1m=2.30,
+        cached_input_eur_per_1m=0.23,
+        output_eur_per_1m=14.50,
+    ),
 }
 
 
 def get_foundry_price(deployment: str) -> TokenPrice | None:
     """TokenPrice fuer ein Foundry-Deployment, oder None wenn unbekannt.
 
-    Heuristik: prefix-match (z.B. 'gpt-5.1-mini' fallback auf 'gpt-5.1',
-    'gpt-5.4-prod' auf 'gpt-5.4').
+    EXACT-MATCH only — kein Prefix-Matching. Wenn ein Deployment nicht
+    in FOUNDRY_PRICING steht, ist es ein Konfig-Fehler (Deployment im
+    Foundry-Portal angelegt, aber nicht in pricing.py ergaenzt).
+
+    Caller sollten None als "unbekannt → 0 EUR + Warning loggen"
+    behandeln, nicht stillschweigend.
     """
     if deployment in FOUNDRY_PRICING:
         return FOUNDRY_PRICING[deployment]
-    # Laengster passender Prefix gewinnt (damit 'gpt-5.4' nicht auf 'gpt-5'
-    # fallback faellt). Sortierung: laengste Keys zuerst.
-    for known in sorted(FOUNDRY_PRICING.keys(), key=len, reverse=True):
-        if deployment.startswith(known):
-            return FOUNDRY_PRICING[known]
+    logger.warning(
+        "Kein Pricing fuer Deployment %r — bitte in disco/pricing.py "
+        "FOUNDRY_PRICING ergaenzen. Cost-Tracking liefert 0.0 EUR.",
+        deployment,
+    )
     return None
 
 
@@ -125,8 +144,8 @@ def compute_cost_eur(
     """Convenience-Wrapper: Cost-EUR fuer einen Foundry-Call.
 
     Wird von Flow-Engines und vom Chat-Cost-Tracking genutzt. Wenn das
-    Deployment nicht in FOUNDRY_PRICING ist, wird 0.0 zurueckgegeben (mit
-    None ist Cost-Aggregation tricky).
+    Deployment nicht in FOUNDRY_PRICING ist, wird 0.0 zurueckgegeben
+    (Warning bereits in get_foundry_price geloggt).
     """
     price = get_foundry_price(deployment)
     if price is None:
