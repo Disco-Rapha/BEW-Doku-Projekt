@@ -616,6 +616,151 @@ def _chat_state_payload(state: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+@app.get("/api/projects/{slug}/pipeline-status")
+async def api_pipeline_status(slug: str):
+    """Aggregat-Status der 6 Pipeline-Schritte eines Projekts.
+
+    Liefert eine Liste von 6 Schritten mit pro Schritt:
+      step_order, step_name, status (green|yellow|red|grey),
+      n_total, n_done, n_failed, n_pending, label
+
+    Berechnet live aus 4 Quell-Tabellen — kein Drift moeglich.
+
+    Status-Logik:
+      🟢 green : n_pending == 0 UND n_failed == 0
+      🟡 yellow: n_pending == 0 UND n_failed > 0
+      🔴 red   : n_pending > 0
+      ⚪ grey  : Schritt n.a. (Schritt 2: keine externe Quelle)
+    """
+    import sqlite3 as _sqlite
+    from ..workspace import validate_slug, datastore_db_path, workspace_db_path
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    proj_dir = settings.projects_dir / slug
+    ds_path = datastore_db_path(proj_dir)
+    ws_path = workspace_db_path(proj_dir)
+    if not ds_path.exists() or not ws_path.exists():
+        return {"error": f"Projekt {slug!r} hat keine DBs."}
+
+    conn = _sqlite.connect(str(ws_path), timeout=3.0)
+    conn.row_factory = _sqlite.Row
+    conn.execute(f"ATTACH DATABASE '{ds_path}' AS ds")
+
+    def _count(sql: str, params: tuple = ()) -> int:
+        try:
+            r = conn.execute(sql, params).fetchone()
+            return int(r[0]) if r else 0
+        except _sqlite.OperationalError:
+            return 0
+
+    # Schritt 1 — Registrierung: alle aktiven sources
+    n_registered = _count("SELECT COUNT(*) FROM ds.agent_sources WHERE status='active'")
+
+    # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
+    # agent_source_metadata ODER agent_sharepoint_docs
+    has_meta = _count("""
+        SELECT COUNT(DISTINCT s.id)
+        FROM ds.agent_sources s
+        JOIN ds.agent_source_metadata m ON m.source_id = s.id
+        WHERE s.status='active'
+    """)
+    has_sp = _count("""
+        SELECT COUNT(DISTINCT s.id)
+        FROM ds.agent_sources s
+        JOIN agent_sharepoint_docs sp ON sp.FileName = s.filename
+        WHERE s.status='active'
+    """)
+    n_enriched = _count("""
+        SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
+        WHERE s.status='active' AND (
+            EXISTS (SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id)
+            OR EXISTS (SELECT 1 FROM agent_sharepoint_docs sp WHERE sp.FileName = s.filename)
+        )
+    """)
+    has_any_external = (has_meta + has_sp) > 0
+
+    # Schritt 3 — Kanonik: Files OHNE duplicate-of-Relation
+    n_canonical = _count("""
+        SELECT COUNT(*) FROM ds.agent_sources s
+        WHERE s.status='active' AND NOT EXISTS (
+            SELECT 1 FROM ds.agent_source_relations r
+            WHERE r.source_id = s.id AND r.kind = 'duplicate-of'
+        )
+    """)
+
+    # Schritte 4-6 nutzen kanonische Files als Maßstab
+    n_routed = _count("""
+        SELECT COUNT(DISTINCT w.file_id)
+        FROM work_extraction_routing w
+        WHERE w.engine IS NOT NULL AND w.engine != ''
+    """)
+    n_extracted = _count("SELECT COUNT(DISTINCT file_id) FROM ds.agent_doc_markdown")
+    n_indexed = _count("SELECT COUNT(*) FROM ds.agent_search_docs WHERE error IS NULL")
+    n_index_failed = _count("SELECT COUNT(*) FROM ds.agent_search_docs WHERE error IS NOT NULL")
+
+    conn.close()
+
+    def _status(n_done: int, n_total: int, n_failed: int = 0) -> str:
+        n_pending = max(0, n_total - n_done - n_failed)
+        if n_total == 0:
+            return "grey"
+        if n_pending > 0:
+            return "red"
+        if n_failed > 0:
+            return "yellow"
+        return "green"
+
+    steps = [
+        {
+            "step_order": 1, "step_name": "Registrierung",
+            "n_total": n_registered, "n_done": n_registered,
+            "n_failed": 0, "n_pending": 0,
+            "status": "green" if n_registered > 0 else "grey",
+            "label": f"{n_registered} / {n_registered}" if n_registered else "leer",
+        },
+        {
+            "step_order": 2, "step_name": "Externe Anreicherung",
+            "n_total": n_registered, "n_done": n_enriched,
+            "n_failed": 0, "n_pending": max(0, n_registered - n_enriched),
+            "status": "grey" if not has_any_external else _status(n_enriched, n_registered),
+            "label": "n.a." if not has_any_external else f"{n_enriched} / {n_registered}",
+        },
+        {
+            "step_order": 3, "step_name": "Kanonik",
+            "n_total": n_registered, "n_done": n_registered,
+            "n_failed": 0, "n_pending": 0,
+            "status": "green" if n_registered > 0 else "grey",
+            "label": f"{n_registered} → {n_canonical} kanonisch" if n_registered else "leer",
+        },
+        {
+            "step_order": 4, "step_name": "Routing",
+            "n_total": n_canonical, "n_done": n_routed,
+            "n_failed": 0, "n_pending": max(0, n_canonical - n_routed),
+            "status": _status(n_routed, n_canonical),
+            "label": f"{n_routed} / {n_canonical}",
+        },
+        {
+            "step_order": 5, "step_name": "Extraction",
+            "n_total": n_routed, "n_done": n_extracted,
+            "n_failed": 0, "n_pending": max(0, n_routed - n_extracted),
+            "status": _status(n_extracted, n_routed),
+            "label": f"{n_extracted} / {n_routed}",
+        },
+        {
+            "step_order": 6, "step_name": "Suchindex",
+            "n_total": n_extracted, "n_done": n_indexed,
+            "n_failed": n_index_failed,
+            "n_pending": max(0, n_extracted - n_indexed - n_index_failed),
+            "status": _status(n_indexed, n_extracted, n_index_failed),
+            "label": f"{n_indexed} / {n_extracted}" + (f" ({n_index_failed} Fehler)" if n_index_failed else ""),
+        },
+    ]
+    return {"slug": slug, "steps": steps}
+
+
 @app.get("/api/projects/{slug}/chat/state")
 async def api_chat_state(slug: str):
     """Aktueller Chat-State eines Projekts (Token-Fill, Warn-Level)."""

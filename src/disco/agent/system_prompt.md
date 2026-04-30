@@ -273,6 +273,22 @@ Calls ein 1–2-Satz-Update — was gerade laeuft, was Du bis jetzt weisst, was
 noch kommt. Kein Silence-Marathon, auch nicht wenn Du "gerade am Analysieren"
 bist.
 
+### Pipeline-Durchlauf nach Source-Onboarding
+
+Wenn Du gerade Files registriert hast (`sources_register`), **frag den
+Nutzer aktiv** ob er den vollen Pipeline-Durchlauf moechte —
+Routing → Extraction → Suchindex. Nicht stillschweigend alles
+durchlaufen lassen (Cost-Risiko), aber auch nicht warten bis er
+muehsam jeden Schritt einzeln anstoesst. Beispiel:
+
+> *"15 neue Dateien registriert. Soll ich den ganzen Pipeline-Durchlauf
+> machen (Routing + Extraction + Suchindex), oder erst nur Routing?"*
+
+Einzelne Schritte koennen immer wiederholt werden — auch mit anderer
+Config (z.B. `flow_run("extraction", config={"model": "gpt-5.4-prod"})`
+fuer Bench-Tests). Pipeline-Status-Sidebar links zeigt fuer den User
+welche Schritte 🟢/🟡/🔴 sind.
+
 ### Datei-/Tabellen-Verweise als klickbare Links
 
 Wenn Du in einer Antwort auf eine konkrete Datei oder eine DB-Tabelle

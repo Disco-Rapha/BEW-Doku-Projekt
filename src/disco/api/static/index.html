@@ -168,6 +168,31 @@ a:hover { text-decoration: underline; }
 .tree-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-size { color: var(--text-dim); font-size: 11px; }
 
+/* Pipeline-Status: Ampel-Liste in der Sidebar */
+.pipeline-status-list {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.ps-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px; border-radius: 3px;
+  font-size: 12px; cursor: pointer;
+}
+.ps-row:hover { background: var(--panel2); }
+.ps-status {
+  width: 10px; height: 10px; border-radius: 50%;
+  flex-shrink: 0; box-shadow: 0 0 4px currentColor;
+}
+.ps-status.green  { background: #4caf50; color: #4caf50; }
+.ps-status.yellow { background: #ffb300; color: #ffb300; }
+.ps-status.red    { background: #e53935; color: #e53935; }
+.ps-status.grey   { background: #555; color: #555; box-shadow: none; }
+.ps-name { flex: 1; }
+.ps-name .ps-step-num {
+  color: var(--text-dim); font-size: 11px; margin-right: 4px;
+}
+.ps-label { color: var(--text-dim); font-size: 11px; }
+.ps-row.has-pending .ps-label { color: var(--accent); }
+
 /* Toggle-Buttons in Header */
 .sb-toolbar { display: flex; gap: 4px; align-items: center; justify-content: space-between; }
 .icon-btn {
@@ -949,6 +974,17 @@ a:hover { text-decoration: underline; }
       </div>
     </details>
 
+    <details class="sb-section collapsible" id="pipeline-status-section" data-sb-key="pipeline-status" open>
+      <summary>
+        <span class="sb-title">Pipeline-Status</span>
+        <button class="icon-btn" title="Status aktualisieren"
+                onclick="event.preventDefault(); event.stopPropagation(); loadPipelineStatus(state.activeProjectSlug)">↻</button>
+      </summary>
+      <div class="sb-body">
+        <div id="pipeline-status-list" class="pipeline-status-list"></div>
+      </div>
+    </details>
+
     <div class="sb-section">
       <div class="sb-title">Einstellungen</div>
       <div class="muted" style="font-size:11px">
@@ -1351,13 +1387,14 @@ async function switchProject(slug) {
   const msgs = document.getElementById('chat-messages');
   msgs.innerHTML = '';
 
-  // Parallel: Chat-State + Messages + Explorer + DB-Tabellen + Flows laden
+  // Parallel: Chat-State + Messages + Explorer + DB-Tabellen + Flows + Pipeline-Status laden
   await Promise.all([
     loadChatState(slug),
     loadMessages(slug),
     loadExplorer(slug),
     loadDbTables(slug),
     loadFlows(slug),
+    loadPipelineStatus(slug),
   ]);
 
   // WebSocket verbinden (ein persistenter Chat pro Projekt)
@@ -2946,6 +2983,59 @@ state._flowPoll = null;           // setInterval-Handle fuer Polling
 state._flowView = null;           // 'flow'|'run'|null
 state._flowViewName = null;       // Flow-Name oder null
 state._flowViewRunId = null;      // Run-ID oder null
+
+async function loadPipelineStatus(slug) {
+  const c = document.getElementById('pipeline-status-list');
+  if (!c) return;
+  if (!slug) { c.innerHTML = ''; return; }
+  c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  try {
+    const data = await api(`/api/projects/${encodeURIComponent(slug)}/pipeline-status`);
+    if (data.error) {
+      c.innerHTML = `<span class="muted" style="font-size:11px">${escHtml(data.error)}</span>`;
+      return;
+    }
+    c.innerHTML = '';
+    for (const step of (data.steps || [])) {
+      const row = document.createElement('div');
+      row.className = 'ps-row' + (step.n_pending > 0 ? ' has-pending' : '');
+      row.title = `${step.step_name}: ${step.n_done} done / ${step.n_failed} failed / ${step.n_pending} pending (von ${step.n_total})`;
+      row.innerHTML = `
+        <span class="ps-status ${step.status}" aria-label="${step.status}"></span>
+        <span class="ps-name"><span class="ps-step-num">${step.step_order}.</span>${escHtml(step.step_name)}</span>
+        <span class="ps-label">${escHtml(step.label || '')}</span>
+      `;
+      row.onclick = () => onPipelineStepClick(slug, step);
+      c.appendChild(row);
+    }
+  } catch (e) {
+    c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
+  }
+}
+
+function onPipelineStepClick(slug, step) {
+  // Phase 1: einfaches Info-Toast. Phase 2: Modal mit Trigger-Buttons.
+  const lines = [
+    `Schritt ${step.step_order}: ${step.step_name}`,
+    `Status: ${step.status.toUpperCase()}`,
+    `Done: ${step.n_done} / Total: ${step.n_total}`,
+    `Failed: ${step.n_failed}, Pending: ${step.n_pending}`,
+  ];
+  if (step.n_pending > 0) {
+    lines.push('');
+    lines.push(`→ ${step.n_pending} Files warten. Im Chat formulieren:`);
+    const promptByStep = {
+      1: 'Bitte sources_register laufen lassen, neue Dateien aufnehmen.',
+      2: 'Bitte Begleit-Excel-Match oder SharePoint-Import durchfuehren.',
+      3: 'Bitte sources_detect_duplicates laufen lassen.',
+      4: 'Bitte den Flow extraction_routing_decision starten.',
+      5: 'Bitte den Flow extraction starten.',
+      6: 'Bitte build_search_index aufrufen.',
+    };
+    lines.push(promptByStep[step.step_order] || '(Disco fragen, was als naechstes ansteht.)');
+  }
+  alert(lines.join('\n'));
+}
 
 async function loadFlows(slug) {
   const c = document.getElementById('flows-list');
