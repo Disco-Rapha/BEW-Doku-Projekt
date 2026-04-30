@@ -673,8 +673,18 @@ async def api_pipeline_status(slug: str):
         if not root_dir.is_dir():
             continue
         for f in root_dir.rglob("*"):
-            if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in INDEXABLE_EXT:
-                n_fs += 1
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in INDEXABLE_EXT:
+                continue
+            # Konvention: Files/Ordner mit _-Prefix oder .-Prefix sind intern
+            # (z.B. _meta/, _manifest.md, .DS_Store) und werden von
+            # sources_register ignoriert. Counter respektiert dasselbe Pattern.
+            rel = f.relative_to(proj_dir)
+            if any(part.startswith("_") or part.startswith(".")
+                   for part in rel.parts):
+                continue
+            n_fs += 1
     n_registered = _count("SELECT COUNT(*) FROM ds.agent_sources WHERE status='active'")
 
     # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
