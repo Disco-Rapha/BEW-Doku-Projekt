@@ -656,7 +656,25 @@ async def api_pipeline_status(slug: str):
         except _sqlite.OperationalError:
             return 0
 
-    # Schritt 1 — Registrierung: alle aktiven sources
+    # Schritt 1 — Registrierung: FS-Files vs agent_sources
+    # n_total = indexierbare Files unter sources/ + context/
+    # n_done  = aktive Eintraege in agent_sources
+    # n_pending = FS-Files die noch nicht registriert sind
+    INDEXABLE_EXT = {
+        ".pdf", ".md", ".markdown", ".txt",
+        ".xlsx", ".xlsm", ".xls",
+        ".dwg", ".dxf",
+        ".docx", ".pptx",
+        ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".gif",
+    }
+    n_fs = 0
+    for root_name in ("sources", "context"):
+        root_dir = proj_dir / root_name
+        if not root_dir.is_dir():
+            continue
+        for f in root_dir.rglob("*"):
+            if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in INDEXABLE_EXT:
+                n_fs += 1
     n_registered = _count("SELECT COUNT(*) FROM ds.agent_sources WHERE status='active'")
 
     # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
@@ -716,10 +734,10 @@ async def api_pipeline_status(slug: str):
     steps = [
         {
             "step_order": 1, "step_name": "Registrierung",
-            "n_total": n_registered, "n_done": n_registered,
-            "n_failed": 0, "n_pending": 0,
-            "status": "green" if n_registered > 0 else "grey",
-            "label": f"{n_registered} / {n_registered}" if n_registered else "leer",
+            "n_total": n_fs, "n_done": n_registered,
+            "n_failed": 0, "n_pending": max(0, n_fs - n_registered),
+            "status": _status(n_registered, n_fs),
+            "label": f"{n_registered} / {n_fs}" if n_fs else "leer",
         },
         {
             "step_order": 2, "step_name": "Externe Anreicherung",
@@ -733,31 +751,42 @@ async def api_pipeline_status(slug: str):
             "n_total": n_registered, "n_done": n_registered,
             "n_failed": 0, "n_pending": 0,
             "status": "green" if n_registered > 0 else "grey",
-            "label": f"{n_registered} → {n_canonical} kanonisch" if n_registered else "leer",
+            "label": (f"{n_registered} → {n_canonical} kanonisch"
+                      if n_registered and n_canonical < n_registered
+                      else (f"{n_registered}" if n_registered else "leer")),
         },
+    ]
+    # Maßstab fuer Schritte 4-6: bevorzugt kanonisch, fallback auf registriert.
+    # Defensive Clamping: n_done darf nicht groesser als n_total sein.
+    n_base = n_canonical if n_canonical > 0 else n_registered
+    routed_clamped = min(n_routed, n_base) if n_base else n_routed
+    extracted_clamped = min(n_extracted, n_base) if n_base else n_extracted
+    indexed_clamped = min(n_indexed, n_base) if n_base else n_indexed
+    steps.extend([
         {
             "step_order": 4, "step_name": "Routing",
-            "n_total": n_canonical, "n_done": n_routed,
-            "n_failed": 0, "n_pending": max(0, n_canonical - n_routed),
-            "status": _status(n_routed, n_canonical),
-            "label": f"{n_routed} / {n_canonical}",
+            "n_total": n_base, "n_done": routed_clamped,
+            "n_failed": 0, "n_pending": max(0, n_base - routed_clamped),
+            "status": _status(routed_clamped, n_base),
+            "label": f"{routed_clamped} / {n_base}" if n_base else "leer",
         },
         {
             "step_order": 5, "step_name": "Extraction",
-            "n_total": n_routed, "n_done": n_extracted,
-            "n_failed": 0, "n_pending": max(0, n_routed - n_extracted),
-            "status": _status(n_extracted, n_routed),
-            "label": f"{n_extracted} / {n_routed}",
+            "n_total": n_base, "n_done": extracted_clamped,
+            "n_failed": 0, "n_pending": max(0, n_base - extracted_clamped),
+            "status": _status(extracted_clamped, n_base),
+            "label": f"{extracted_clamped} / {n_base}" if n_base else "leer",
         },
         {
             "step_order": 6, "step_name": "Suchindex",
-            "n_total": n_extracted, "n_done": n_indexed,
+            "n_total": n_base, "n_done": indexed_clamped,
             "n_failed": n_index_failed,
-            "n_pending": max(0, n_extracted - n_indexed - n_index_failed),
-            "status": _status(n_indexed, n_extracted, n_index_failed),
-            "label": f"{n_indexed} / {n_extracted}" + (f" ({n_index_failed} Fehler)" if n_index_failed else ""),
+            "n_pending": max(0, n_base - indexed_clamped - n_index_failed),
+            "status": _status(indexed_clamped, n_base, n_index_failed),
+            "label": (f"{indexed_clamped} / {n_base}" + (f" ({n_index_failed} Fehler)" if n_index_failed else "")
+                      if n_base else "leer"),
         },
-    ]
+    ])
     return {"slug": slug, "steps": steps}
 
 
