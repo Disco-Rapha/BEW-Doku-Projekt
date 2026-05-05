@@ -39,13 +39,27 @@ def load_items(
       - Status='active' (nicht missing/superseded)
       - Extension in {pdf, xlsx, xlsm, xls, dwg, dxf, jpg, jpeg, png,
                       tif, tiff, webp, bmp, gif}
+      - **Kanonisch** (keine duplicate-of-Relation als from-Seite) —
+        Duplikate sollen nicht doppelt geroutet werden, das verbraucht
+        Kosten und macht die Pipeline-Statistik konfus. Wenn Disco
+        spaeter die Kanonik aendert (z.B. Begleit-Excel "replaces"),
+        koennen frueher als Duplikat markierte Files wieder kanonisch
+        werden — beim naechsten Run werden sie geroutet.
     """
+    canonical_filter = (
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM ds.agent_source_relations r "
+        "  WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'"
+        ")"
+    )
+
     if rerun_where_engine:
         sql = (
             "SELECT s.id AS file_id, s.rel_path, s.kind AS file_role, s.extension "
             "FROM ds.agent_sources s "
             "JOIN work_extraction_routing w ON w.file_id = s.id "
             "WHERE w.engine = ? AND s.status='active' "
+            f"{canonical_filter} "
             "ORDER BY RANDOM()"
         )
         rows = run.db.query(sql, [rerun_where_engine])
@@ -54,7 +68,7 @@ def load_items(
             items = items[:limit]
         run.log(
             f"Routing-Input (Rerun-Mode engine={rerun_where_engine!r}): "
-            f"{len(items)} Dateien werden neu geroutet."
+            f"{len(items)} kanonische Dateien werden neu geroutet."
         )
         return items
 
@@ -63,14 +77,15 @@ def load_items(
     processed_ids = {r["file_id"] for r in processed_rows}
 
     rows = run.db.query(
-        "SELECT id AS file_id, rel_path, kind AS file_role, extension "
-        "FROM ds.agent_sources "
-        "WHERE status='active' "
-        "  AND lower(extension) IN ("
+        "SELECT s.id AS file_id, s.rel_path, s.kind AS file_role, s.extension "
+        "FROM ds.agent_sources s "
+        "WHERE s.status='active' "
+        "  AND lower(s.extension) IN ("
         "    'pdf','xlsx','xlsm','xls','dwg','dxf',"
         "    'jpg','jpeg','png','tif','tiff','webp','bmp','gif'"
         "  ) "
-        "ORDER BY id"
+        f"  {canonical_filter} "
+        "ORDER BY s.id"
     )
 
     items = []
@@ -82,7 +97,7 @@ def load_items(
             break
 
     run.log(
-        f"Routing-Input: {len(items)} offene Dateien "
+        f"Routing-Input: {len(items)} offene kanonische Dateien "
         f"(limit={limit if limit is not None else 'none'}, "
         f"bereits geroutet={len(processed_ids)})"
     )
