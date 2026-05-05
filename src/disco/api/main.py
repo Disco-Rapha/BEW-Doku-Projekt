@@ -685,25 +685,44 @@ async def api_pipeline_status(slug: str):
                    for part in rel.parts):
                 continue
             n_fs += 1
-    n_registered = _count("SELECT COUNT(*) FROM ds.agent_sources WHERE status='active'")
+    # Defensiver SQL-Filter: Pfade mit '_' oder '.' als Prefix in irgendeinem
+    # Pfad-Part gelten als intern (Konvention, siehe sources.py _is_ignored).
+    # Bestandsdaten aus alten Code-Versionen koennen solche Eintraege noch als
+    # 'active' fuehren — beim naechsten regulaeren sources_register-Lauf werden
+    # sie automatisch auf status='deleted' gesetzt. Bis dahin haelt dieser
+    # Filter den Pipeline-Status konsistent zum FS-Counter (n_fs oben), der
+    # dieselbe Konvention anwendet.
+    NOT_INTERNAL = (
+        "(('/' || {col}) NOT LIKE '%/\\_%' ESCAPE '\\' "
+        "AND ('/' || {col}) NOT LIKE '%/.%')"
+    )
+    AS_F = NOT_INTERNAL.format(col="s.rel_path")    # agent_sources alias 's'
+    INV_F = NOT_INTERNAL.format(col="i.rel_path")   # agent_pdf_inventory alias 'i'
+    DM_F = NOT_INTERNAL.format(col="rel_path")      # agent_doc_markdown
+    SD_F = NOT_INTERNAL.format(col="rel_path")      # agent_search_docs
+
+    n_registered = _count(
+        f"SELECT COUNT(*) FROM ds.agent_sources s "
+        f"WHERE s.status='active' AND {AS_F}"
+    )
 
     # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
     # agent_source_metadata ODER agent_sharepoint_docs
-    has_meta = _count("""
+    has_meta = _count(f"""
         SELECT COUNT(DISTINCT s.id)
         FROM ds.agent_sources s
         JOIN ds.agent_source_metadata m ON m.source_id = s.id
-        WHERE s.status='active'
+        WHERE s.status='active' AND {AS_F}
     """)
-    has_sp = _count("""
+    has_sp = _count(f"""
         SELECT COUNT(DISTINCT s.id)
         FROM ds.agent_sources s
         JOIN agent_sharepoint_docs sp ON sp.FileName = s.filename
-        WHERE s.status='active'
+        WHERE s.status='active' AND {AS_F}
     """)
-    n_enriched = _count("""
+    n_enriched = _count(f"""
         SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
-        WHERE s.status='active' AND (
+        WHERE s.status='active' AND {AS_F} AND (
             EXISTS (SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id)
             OR EXISTS (SELECT 1 FROM agent_sharepoint_docs sp WHERE sp.FileName = s.filename)
         )
@@ -711,23 +730,30 @@ async def api_pipeline_status(slug: str):
     has_any_external = (has_meta + has_sp) > 0
 
     # Schritt 3 — Kanonik: Files OHNE duplicate-of-Relation
-    n_canonical = _count("""
+    n_canonical = _count(f"""
         SELECT COUNT(*) FROM ds.agent_sources s
-        WHERE s.status='active' AND NOT EXISTS (
+        WHERE s.status='active' AND {AS_F} AND NOT EXISTS (
             SELECT 1 FROM ds.agent_source_relations r
             WHERE r.source_id = s.id AND r.kind = 'duplicate-of'
         )
     """)
 
     # Schritte 4-6 nutzen kanonische Files als Maßstab
-    n_routed = _count("""
+    n_routed = _count(f"""
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
-        WHERE w.engine IS NOT NULL AND w.engine != ''
+        JOIN ds.agent_pdf_inventory i ON i.id = w.file_id
+        WHERE w.engine IS NOT NULL AND w.engine != '' AND {INV_F}
     """)
-    n_extracted = _count("SELECT COUNT(DISTINCT file_id) FROM ds.agent_doc_markdown")
-    n_indexed = _count("SELECT COUNT(*) FROM ds.agent_search_docs WHERE error IS NULL")
-    n_index_failed = _count("SELECT COUNT(*) FROM ds.agent_search_docs WHERE error IS NOT NULL")
+    n_extracted = _count(
+        f"SELECT COUNT(DISTINCT file_id) FROM ds.agent_doc_markdown WHERE {DM_F}"
+    )
+    n_indexed = _count(
+        f"SELECT COUNT(*) FROM ds.agent_search_docs WHERE error IS NULL AND {SD_F}"
+    )
+    n_index_failed = _count(
+        f"SELECT COUNT(*) FROM ds.agent_search_docs WHERE error IS NOT NULL AND {SD_F}"
+    )
 
     conn.close()
 
