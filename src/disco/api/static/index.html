@@ -2446,11 +2446,15 @@ function appendMessage(role, text, messageId, attachments) {
   if (messageId != null) div.dataset.messageId = String(messageId);
   const sender = role === 'user' ? 'Du' : role === 'agent' ? 'Disco' : 'System';
   // Anhang-Block (nur user/agent), wird oberhalb der Bubble angezeigt
-  const attachHtml = (Array.isArray(attachments) && attachments.length)
-    ? renderMessageAttachments(attachments)
-    : '';
-  // Bubble nur rendern wenn Text vorhanden — sonst zeigen wir nur die Anhaenge
-  const bubbleHtml = text ? `<div class="bubble">${renderMarkdown(text)}</div>` : '';
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  const attachHtml = hasAttachments ? renderMessageAttachments(attachments) : '';
+  // Bubble nur dann WEGLASSEN, wenn die Message KEINEN Text hat UND
+  // mindestens einen Anhang (User-Message "nur Bild ohne Begleittext").
+  // In allen anderen Faellen — auch bei Streaming-Init (text='', keine
+  // Attachments) — muss eine leere Bubble existieren, sonst findet der
+  // text_delta-Handler kein .bubble und wirft TypeError.
+  const showBubble = !!text || !hasAttachments;
+  const bubbleHtml = showBubble ? `<div class="bubble">${renderMarkdown(text || '')}</div>` : '';
   div.innerHTML = `
     <div class="sender">${sender}</div>
     ${attachHtml}
