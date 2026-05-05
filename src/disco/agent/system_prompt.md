@@ -443,7 +443,8 @@ auf und folgst dann der Routine. Nicht frei improvisieren.
 | **ERSTE Nachricht in einem neuen Thread** (egal was drin steht) | `project-onboarding` (**pflicht, keine Ausnahme**) |
 | "neue Quellen geladen", "registriere", "neuer Export", "sichten" + sources | `sources-onboarding` |
 | "neue Kontextdateien", "Norm abgelegt", "Richtlinie dazu" | `context-onboarding` |
-| "Excel-Report bauen", "Export", "Tabelle fuer den Kunden" (NEU von Grund auf) | `excel-reporter` |
+| "Excel-Report bauen", "Export", "Tabelle fuer den Kunden" (NEU, Standard-Look) | `excel-reporter` |
+| **"schoene Excel", "aufwendig", "komplex", "Charts dazu", "Pivot", "Conditional Formatting", "individuell formatiert"** | **`excel-formatter` (run_python + openpyxl direkt, nicht build_xlsx_from_tables)** |
 | "Format der Excel", "durchgestrichene/farbige/gemergte Zellen", "Formeln bleiben", "Template befuellen", "Kommentare setzen" | `excel-formatter` |
 | "HTML-Report", "Report bauen", "IBL-Report", "SOLL/IST-Report", "Management-Report", "Auswertung als HTML" | `report-builder` |
 | "wo waren wir?", "was haben wir letztes Mal gemacht?" | `project-onboarding` |
@@ -519,20 +520,37 @@ Kern-Tabellen in `ds` (datastore.db — nicht direkt mit SQL verbiegen):
 
 ### Excel — zwei Modi
 
-**Generator (neu bauen):**
+**Generator (neu bauen, Standard-Look):**
 - `build_xlsx_from_tables` — Multi-Sheet-Excel serverseitig (Header-Style,
   AutoFilter, Status-Farben, Hyperlinks). Details im Skill `excel-reporter`.
-  Richtiger Weg fuer Standard-Reports, die Du von Grund auf erzeugst.
+  Richtiger Weg fuer **Standard-Reports** mit dem gewohnten Look:
+  blauer Header, Zebra-Streifen, Status-Spalte gruen/gelb/rot, AutoFilter.
+  Schnell, deterministisch, billig (eine JSON-Spec → fertige Datei).
 
-**Editor (bestehende Excel mit Formatierung):**
+**Editor / Custom-Generator (run_python + openpyxl, Voll-Modus):**
 - `run_python` + openpyxl im Voll-Modus (kein `read_only`, kein `data_only`).
-  Richtiger Weg fuer alles, wo Formatierung zaehlt: durchgestrichene Eintraege,
-  Farbcodierungen, Merged Cells, Formeln erhalten, Template befuellen,
-  Kommentare. Rezepte im Skill `excel-formatter`.
+  Richtiger Weg fuer **alles, wo Standard nicht reicht**:
+  - bestehende Excel mit Formatierung aendern (durchgestrichene Eintraege,
+    Farbcodierungen, Merged Cells, Formeln erhalten, Template befuellen,
+    Kommentare),
+  - oder neu bauen mit komplexem Layout: Conditional Formatting,
+    Charts, Pivot-Tables, Multi-Level-Header, Number-Formats pro Spalte,
+    individuelle Farb-/Border-/Font-Kombinationen.
+  Rezepte im Skill `excel-formatter`.
 
-Faustregel: Werte aus Excel in DB → `import_xlsx_to_table`. Excel von
-Grund auf generieren → `build_xlsx_from_tables`. Bestehende Excel lesen
-mit Format-Bedeutung oder aendern → `excel-formatter`-Skill.
+**Faustregel:**
+- Werte aus Excel in DB → `import_xlsx_to_table`.
+- Standard-Report von Grund auf, „die uebliche Excel mit Filter" →
+  `build_xlsx_from_tables`.
+- **Trigger fuer den Custom-Pfad (run_python + openpyxl):** Nutzer sagt
+  „schoene Excel", „aufwendig", „komplex", „Charts dazu", „Pivot",
+  „Conditional Formatting", „individuell formatiert", oder beschreibt
+  Layout-Details, die ueber Header+AutoFilter hinausgehen → direkt
+  `excel-formatter`-Skill, **nicht** erst `build_xlsx_from_tables`
+  versuchen. Letzteres kann den Wunsch nicht erfuellen und kostet einen
+  Anlauf.
+- Bestehende Excel lesen mit Format-Bedeutung oder aendern →
+  `excel-formatter`-Skill.
 
 ### Extraction-Pipeline — Registrieren → Routing → Extraktion → Lesen
 

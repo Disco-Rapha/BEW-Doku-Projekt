@@ -1,14 +1,17 @@
 ---
 name: excel-formatter
-description: Bestehende Excels mit Formatierung lesen oder ändern (Strike, Farben, Merges, Formeln, Kommentare) via run_python + openpyxl.
-when_to_use: Du sollst eine bestehende Excel-Datei lesen ODER ändern, bei der Formatierung zählt — durchgestrichene Zellen, Farbcodierungen, Merged Cells, Formeln, Template-Befüllung, Kommentare.
+description: Excels via run_python + openpyxl — bestehende lesen/ändern (Strike, Farben, Merges, Formeln, Kommentare) ODER komplexe Reports von Grund auf neu bauen (Conditional Formatting, Charts, Pivot, Multi-Level-Header, Number-Formats, individuelle Borders/Fonts).
+when_to_use: Immer wenn Excel-Formatierung über den Standard-Look von `build_xlsx_from_tables` hinausgeht — bestehende Excel mit Format-Bedeutung, Template-Befüllung, oder neuer Report mit individuellem Layout. Trigger im Nutzer-Satz "schöne Excel", "aufwendig", "komplex", "Charts dazu", "Pivot", "Conditional Formatting".
 ---
 
 # Skill: excel-formatter
 
-Für **bestehende** Excels, bei denen Formatierung zählt. Du öffnest die
-Datei mit **openpyxl** im Voll-Modus (nicht `read_only`, nicht `data_only`),
-liest/änderst, speicherst zurück. Ausführung über `run_python` — Skript
+Für alle Excel-Aufgaben, bei denen Formatierung zählt — sei es **lesen/
+ändern** einer bestehenden Datei, **Template** befüllen, oder einen
+**neuen Report mit komplexem Layout** bauen, der über den Standard-
+Look von `build_xlsx_from_tables` hinausgeht. Du öffnest die Datei mit
+**openpyxl** im Voll-Modus (nicht `read_only`, nicht `data_only`),
+liest/änderst/baust, speicherst. Ausführung über `run_python` — Skript
 schreiben, ausführen, Ergebnis in die DB oder als neue Datei.
 
 ## Abgrenzung zu den anderen Excel-Werkzeugen
@@ -17,12 +20,17 @@ schreiben, ausführen, Ergebnis in die DB oder als neue Datei.
 |---|---|
 | Werte aus Excel in die DB importieren, Formatierung egal | `import_xlsx_to_table` (direkt, kein Skill) |
 | Excel schnell anschauen (Sheets + Header + 3 Zeilen) | `xlsx_inspect` (direkt, kein Skill) |
-| Neuen Multi-Sheet-Report von Grund auf bauen | Skill `excel-reporter` + `build_xlsx_from_tables` |
-| **Bestehende Excel lesen mit Format, oder ändern, oder Template befüllen** | **dieser Skill** |
+| **Standard-Report neu bauen** (blauer Header, AutoFilter, Status-Farben — der Look der meisten Disco-Exports) | Skill `excel-reporter` + `build_xlsx_from_tables` |
+| **Bestehende Excel lesen mit Format, oder ändern, oder Template befüllen** | **dieser Skill (Editor-Modus)** |
+| **Neuer Report mit komplexem Layout** — Conditional Formatting, Charts, Pivot, Multi-Level-Header, Number-Formats pro Spalte, individuelle Farben/Borders/Fonts | **dieser Skill (Custom-Generator-Modus)** |
 
-Wenn Du unsicher bist: der Bauch-Test — hängt die Bedeutung der Daten an
-der Formatierung (Strike = verworfen, Farbe = Status, Merged = Gruppe)?
-Dann hier. Geht's nur um nackte Werte? Dann `import_xlsx_to_table`.
+Wenn Du unsicher bist: der Bauch-Test —
+- Hängt die Bedeutung von Format ab (Strike = verworfen, Farbe = Status,
+  Merged = Gruppe)? **→ hier.**
+- Verlangt der Nutzer „schöne", „aufwendige" oder „komplexe" Excel,
+  oder nennt explizit Charts/Pivot/Conditional Formatting? **→ hier.**
+- Geht's nur um nackte Werte → `import_xlsx_to_table`.
+- Geht's um Standard-Look mit Header+Filter+Status → `build_xlsx_from_tables`.
 
 ## Verbindlicher Workflow
 
