@@ -584,6 +584,13 @@ a:hover { text-decoration: underline; }
   padding: 10px 14px;
   flex-shrink: 0;
   display: flex; flex-direction: column; gap: 6px;
+  position: relative;
+  transition: background 0.12s;
+}
+#chat-input-area.dragover {
+  background: rgba(64, 144, 255, 0.10);
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
 }
 #chat-input {
   width: 100%; min-height: 40px; max-height: 200px;
@@ -593,6 +600,92 @@ a:hover { text-decoration: underline; }
   padding: 8px 10px;
 }
 #chat-input:focus { outline: 1px solid var(--accent); }
+.attachments-strip {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 4px 2px;
+}
+.attachments-strip.hidden { display: none; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 4px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  max-width: 220px;
+}
+.attach-chip.error {
+  border-color: #c0392b;
+  background: rgba(192, 57, 43, 0.08);
+  color: #e07b6c;
+}
+.attach-chip-thumb {
+  width: 32px; height: 32px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: #1a1a1a;
+  flex-shrink: 0;
+}
+.attach-chip-icon {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  background: #1a1a1a;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.attach-chip-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1;
+}
+.attach-chip-meta {
+  font-size: 10px; color: var(--text-dim);
+}
+.attach-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 3px;
+}
+.attach-chip-remove:hover { color: #fff; background: rgba(255,255,255,0.1); }
+.btn-attach {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 4px 10px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-attach:hover { color: var(--accent); border-color: var(--accent); }
+/* Anhang-Bubbles in der Chat-History */
+.msg-attachments {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 6px 0 4px;
+}
+.msg-attach-image {
+  max-width: 320px; max-height: 240px;
+  border-radius: 6px; cursor: zoom-in;
+  border: 1px solid var(--border);
+}
+.msg-attach-textfile {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 280px;
+}
+.msg-attach-textfile-icon { font-size: 14px; }
+.msg-attach-textfile-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .chat-actions {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 11px; color: var(--text-dim);
@@ -1020,11 +1113,16 @@ a:hover { text-decoration: underline; }
       <div class="msg system"><div class="bubble">Verbindung wird hergestellt …</div></div>
     </div>
 
-    <div id="chat-input-area">
-      <textarea id="chat-input" placeholder="Nachricht an Disco …  (Enter senden, Shift+Enter Zeilenumbruch)"></textarea>
+    <div id="chat-input-area" ondragover="onComposerDragOver(event)" ondragleave="onComposerDragLeave(event)" ondrop="onComposerDrop(event)">
+      <div id="attachments-strip" class="attachments-strip hidden"></div>
+      <textarea id="chat-input" placeholder="Nachricht an Disco …  (Enter senden, Shift+Enter Zeilenumbruch — Datei via + / Drag-Drop / Strg+V anhaengen)" onpaste="onComposerPaste(event)"></textarea>
+      <input type="file" id="attachment-file-input" hidden multiple
+             accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.py,.sql,.sh,.js,.ts,.html,.css"
+             onchange="onAttachmentFilesSelected(event)" />
       <div class="chat-actions">
         <span id="chat-status" class="muted">Bereit</span>
         <span class="chat-actions-right">
+          <button id="btn-attach" class="btn-attach" title="Datei anhaengen (Bilder, Text-Files)" onclick="document.getElementById('attachment-file-input').click()">+</button>
           <label class="chat-model-label" title="Reasoning-Effort fuer Disco (gpt-5.4-Stufen). Hoeher = tieferes Nachdenken, langsamer + teurer. Aenderung pusht eine neue Agent-Version ins Foundry-Portal (~3s).">
             Reasoning:
             <select id="reasoning-select" onchange="onReasoningChange()" disabled>
@@ -1808,7 +1906,7 @@ async function loadMessages(slug) {
       } catch (e) { feedbackMap = {}; }
     }
     for (const m of items) {
-      if (m.role === 'user') appendMessage('user', m.content || '');
+      if (m.role === 'user') appendMessage('user', m.content || '', undefined, m.attachments);
       else if (m.role === 'assistant') {
         if (m.content) {
           const el = appendMessage('agent', m.content, m.id);
@@ -1913,16 +2011,222 @@ function initChatInput() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Chat-Attachments (Bilder + kleine Textfiles via Drag-Drop, Cmd+V, +-Button)
+// ---------------------------------------------------------------------------
+// state.pendingAttachments: Liste der hochgeladenen aber noch nicht gesendeten
+// Anhaenge. Jeder Eintrag ist {id, filename, mime_type, size, kind, rel_path}
+// — exakt das, was der /chat/upload-Endpoint zurueckliefert + ein optionales
+// thumbDataUrl fuer Bild-Vorschau im Strip.
+state.pendingAttachments = [];
+const MAX_ATTACHMENTS = 5;
+
+const ALLOWED_IMAGE_MIME = new Set(['image/png','image/jpeg','image/jpg','image/webp','image/gif']);
+const ALLOWED_TEXT_EXTS = new Set([
+  '.txt','.md','.markdown','.csv','.json',
+  '.log','.xml','.yaml','.yml',
+  '.py','.sql','.sh','.js','.ts','.html','.css',
+]);
+
+function _attachExt(filename) {
+  const i = (filename || '').lastIndexOf('.');
+  return i >= 0 ? filename.slice(i).toLowerCase() : '';
+}
+
+function _isImageFile(file) {
+  return ALLOWED_IMAGE_MIME.has((file.type || '').toLowerCase());
+}
+
+function _isTextFile(file) {
+  if (_isImageFile(file)) return false;
+  return ALLOWED_TEXT_EXTS.has(_attachExt(file.name));
+}
+
+async function uploadAttachment(file) {
+  if (!state.activeProjectSlug) {
+    setStatus('Kein aktives Projekt — Anhang abgewiesen', 'warn');
+    return null;
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch(
+      `/api/projects/${encodeURIComponent(state.activeProjectSlug)}/chat/upload`,
+      { method: 'POST', body: fd },
+    );
+    const data = await r.json();
+    if (data.error) {
+      setStatus('Upload-Fehler: ' + data.error, 'warn');
+      return null;
+    }
+    return data;
+  } catch (e) {
+    setStatus('Upload-Fehler: ' + e.message, 'warn');
+    return null;
+  }
+}
+
+async function addAttachmentFile(file) {
+  if (!file) return;
+  if (state.pendingAttachments.length >= MAX_ATTACHMENTS) {
+    setStatus(`Max ${MAX_ATTACHMENTS} Anhaenge pro Nachricht`, 'warn');
+    return;
+  }
+  if (!_isImageFile(file) && !_isTextFile(file)) {
+    setStatus(`Datei-Typ nicht unterstuetzt: ${file.name}`, 'warn');
+    return;
+  }
+  // Optimistisch: Pending-Chip schon anzeigen, waehrend Upload laeuft
+  const tmpId = 'tmp-' + Math.random().toString(36).slice(2, 10);
+  const tmpEntry = {
+    id: tmpId,
+    filename: file.name,
+    mime_type: file.type || '',
+    size: file.size,
+    kind: _isImageFile(file) ? 'image' : 'text',
+    pending: true,
+  };
+  // Bild-Thumbnail aus dem File-Blob erzeugen (lokal, vor Upload)
+  if (tmpEntry.kind === 'image') {
+    try {
+      tmpEntry.thumbDataUrl = await _readFileAsDataUrl(file);
+    } catch (_) { /* ignore */ }
+  }
+  state.pendingAttachments.push(tmpEntry);
+  renderAttachmentsStrip();
+
+  const uploaded = await uploadAttachment(file);
+  // Pending durch echten Eintrag ersetzen (oder bei Fehler entfernen)
+  const idx = state.pendingAttachments.findIndex(a => a.id === tmpId);
+  if (idx === -1) return;  // wurde inzwischen entfernt
+  if (!uploaded) {
+    state.pendingAttachments.splice(idx, 1);
+  } else {
+    state.pendingAttachments[idx] = { ...uploaded, thumbDataUrl: tmpEntry.thumbDataUrl };
+  }
+  renderAttachmentsStrip();
+}
+
+function _readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+function removeAttachment(id) {
+  state.pendingAttachments = state.pendingAttachments.filter(a => a.id !== id);
+  renderAttachmentsStrip();
+}
+
+function renderAttachmentsStrip() {
+  const strip = document.getElementById('attachments-strip');
+  if (!strip) return;
+  if (!state.pendingAttachments.length) {
+    strip.classList.add('hidden');
+    strip.innerHTML = '';
+    return;
+  }
+  strip.classList.remove('hidden');
+  strip.innerHTML = state.pendingAttachments.map(a => {
+    const sizeStr = a.size > 1024 * 1024
+      ? (a.size / (1024 * 1024)).toFixed(1) + ' MB'
+      : (a.size / 1024).toFixed(0) + ' KB';
+    const previewHtml = a.kind === 'image'
+      ? (a.thumbDataUrl
+          ? `<img class="attach-chip-thumb" src="${a.thumbDataUrl}" alt="">`
+          : `<div class="attach-chip-icon">🖼️</div>`)
+      : `<div class="attach-chip-icon">📄</div>`;
+    const pendingTag = a.pending ? ' (lade...)' : '';
+    return `
+      <div class="attach-chip${a.pending ? ' pending' : ''}">
+        ${previewHtml}
+        <span class="attach-chip-name" title="${escHtml(a.filename)}">${escHtml(a.filename)}</span>
+        <span class="attach-chip-meta">${sizeStr}${pendingTag}</span>
+        <button class="attach-chip-remove" title="Anhang entfernen" onclick="removeAttachment('${a.id}')">×</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function clearAttachments() {
+  state.pendingAttachments = [];
+  renderAttachmentsStrip();
+}
+
+function onAttachmentFilesSelected(event) {
+  const files = Array.from(event.target.files || []);
+  for (const f of files) addAttachmentFile(f);
+  // Input zuruecksetzen, damit dieselbe Datei nochmal waehlbar ist
+  event.target.value = '';
+}
+
+function onComposerPaste(event) {
+  const items = Array.from(event.clipboardData?.items || []);
+  // Wenn Clipboard ein Bild oder eine File enthaelt → Anhang. Plain-Text
+  // bleibt normaler Textareal-Paste (nicht verhindern).
+  let handled = false;
+  for (const it of items) {
+    if (it.kind === 'file') {
+      const f = it.getAsFile();
+      if (f) {
+        addAttachmentFile(f);
+        handled = true;
+      }
+    }
+  }
+  if (handled) event.preventDefault();
+}
+
+function onComposerDragOver(event) {
+  // Nur reagieren wenn Files gedraggt werden, nicht z.B. Text-Selektion
+  if (event.dataTransfer?.types?.includes('Files')) {
+    event.preventDefault();
+    document.getElementById('chat-input-area')?.classList.add('dragover');
+  }
+}
+function onComposerDragLeave(event) {
+  // Drag verlaesst nur wirklich, wenn kein relatedTarget innerhalb des Containers
+  const area = document.getElementById('chat-input-area');
+  if (area && !area.contains(event.relatedTarget)) {
+    area.classList.remove('dragover');
+  }
+}
+function onComposerDrop(event) {
+  event.preventDefault();
+  document.getElementById('chat-input-area')?.classList.remove('dragover');
+  const files = Array.from(event.dataTransfer?.files || []);
+  for (const f of files) addAttachmentFile(f);
+}
+
 function sendMessage() {
   if (!state.wsReady) { setStatus('Nicht verbunden', 'warn'); return; }
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
-  if (!text) return;
+  // Nur "wirkliche" (nicht-pending) Anhaenge senden
+  const ready = state.pendingAttachments.filter(a => !a.pending);
+  const stillPending = state.pendingAttachments.length - ready.length;
+  if (stillPending > 0) {
+    setStatus(`Bitte warten — ${stillPending} Anhang/Anhaenge laden noch`, 'warn');
+    return;
+  }
+  if (!text && !ready.length) return;
+  // Nur die Server-Refs senden, keine thumbDataUrl
+  const payload = {
+    text,
+    attachments: ready.map(a => ({
+      id: a.id, filename: a.filename, mime_type: a.mime_type,
+      size: a.size, kind: a.kind, rel_path: a.rel_path,
+    })),
+  };
   input.value = '';
   input.style.height = '';
-  appendMessage('user', text);
+  appendMessage('user', text, undefined, ready);
+  clearAttachments();
   typingEl = appendTyping();
-  state.ws.send(JSON.stringify({ text }));
+  state.ws.send(JSON.stringify(payload));
   currentBubble = null; currentText = '';
   state._isStreaming = true;
   showStopButton(true);
@@ -2097,15 +2401,22 @@ function handleEvent(ev) {
 // =========================================================================
 // Render-Helfer Chat
 // =========================================================================
-function appendMessage(role, text, messageId) {
+function appendMessage(role, text, messageId, attachments) {
   const msgs = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = `msg ${role}`;
   if (messageId != null) div.dataset.messageId = String(messageId);
   const sender = role === 'user' ? 'Du' : role === 'agent' ? 'Disco' : 'System';
+  // Anhang-Block (nur user/agent), wird oberhalb der Bubble angezeigt
+  const attachHtml = (Array.isArray(attachments) && attachments.length)
+    ? renderMessageAttachments(attachments)
+    : '';
+  // Bubble nur rendern wenn Text vorhanden — sonst zeigen wir nur die Anhaenge
+  const bubbleHtml = text ? `<div class="bubble">${renderMarkdown(text)}</div>` : '';
   div.innerHTML = `
     <div class="sender">${sender}</div>
-    <div class="bubble">${renderMarkdown(text)}</div>
+    ${attachHtml}
+    ${bubbleHtml}
   `;
   if (role === 'agent' && messageId != null) {
     // Feedback-Leiste als eigenes Kind von .msg (NICHT in .sender), damit die
@@ -2116,6 +2427,23 @@ function appendMessage(role, text, messageId) {
   msgs.appendChild(div);
   scrollChat();
   return div;
+}
+
+function renderMessageAttachments(attachments) {
+  const slug = state.activeProjectSlug;
+  const items = attachments.map(a => {
+    if (a.kind === 'image' && a.id) {
+      const url = `/api/projects/${encodeURIComponent(slug)}/chat/attachments/${a.id}`;
+      return `<a href="${url}" target="_blank" title="${escHtml(a.filename || '')}"><img class="msg-attach-image" src="${url}" alt="${escHtml(a.filename || '')}"></a>`;
+    }
+    return `
+      <div class="msg-attach-textfile" title="${escHtml(a.filename || '')}">
+        <span class="msg-attach-textfile-icon">📄</span>
+        <span class="msg-attach-textfile-name">${escHtml(a.filename || '(unbenannt)')}</span>
+      </div>
+    `;
+  }).join('');
+  return `<div class="msg-attachments">${items}</div>`;
 }
 
 function buildFeedbackIcons(messageId) {
