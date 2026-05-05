@@ -685,7 +685,7 @@ async def api_pipeline_status(slug: str):
                    for part in rel.parts):
                 continue
             n_fs += 1
-    # Defensiver SQL-Filter: Pfade mit '_' oder '.' als Prefix in irgendeinem
+    # Defensiver SQL-Filter (1): Pfade mit '_' oder '.' als Prefix in irgendeinem
     # Pfad-Part gelten als intern (Konvention, siehe sources.py _is_ignored).
     # Bestandsdaten aus alten Code-Versionen koennen solche Eintraege noch als
     # 'active' fuehren — beim naechsten regulaeren sources_register-Lauf werden
@@ -701,9 +701,24 @@ async def api_pipeline_status(slug: str):
     DM_F = NOT_INTERNAL.format(col="rel_path")      # agent_doc_markdown
     SD_F = NOT_INTERNAL.format(col="rel_path")      # agent_search_docs
 
+    # Defensiver SQL-Filter (2): Symmetrie zum FS-Counter — nur Files mit
+    # indexierbarer Extension zaehlen. Walker (sources_register) registriert
+    # bewusst breiter (alles ausser '_'/'.'/Suffix-Patterns), damit auch
+    # .res/.job/.zip/etc. fuer den Bestandsbericht erfasst sind. Aber die
+    # Pipeline (Routing/Extraction/Suchindex) verarbeitet nur INDEXABLE_EXT,
+    # also zaehlt sie auch nur dort. Ohne diesen Filter waere n_done > n_total
+    # in Bestandsprojekten mit gemischten Extensions.
+    EXT_LIST = ",".join(f"'{e.lstrip('.')}'" for e in sorted(INDEXABLE_EXT))
+    EXT_AS = f"LOWER(s.extension) IN ({EXT_LIST})"
+    # Fuer agent_pdf_inventory/doc_markdown/search_docs ist der Extension-
+    # Filter nicht noetig: agent_pdf_inventory enthaelt nur PDFs (immer
+    # indexable), agent_doc_markdown nur Dokumente, die schon extrahiert
+    # wurden (per Definition indexable), agent_search_docs nur indizierte
+    # Dokumente. → Extension-Filter nur auf agent_sources noetig.
+
     n_registered = _count(
         f"SELECT COUNT(*) FROM ds.agent_sources s "
-        f"WHERE s.status='active' AND {AS_F}"
+        f"WHERE s.status='active' AND {AS_F} AND {EXT_AS}"
     )
 
     # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
@@ -712,17 +727,17 @@ async def api_pipeline_status(slug: str):
         SELECT COUNT(DISTINCT s.id)
         FROM ds.agent_sources s
         JOIN ds.agent_source_metadata m ON m.source_id = s.id
-        WHERE s.status='active' AND {AS_F}
+        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
     """)
     has_sp = _count(f"""
         SELECT COUNT(DISTINCT s.id)
         FROM ds.agent_sources s
         JOIN agent_sharepoint_docs sp ON sp.FileName = s.filename
-        WHERE s.status='active' AND {AS_F}
+        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
     """)
     n_enriched = _count(f"""
         SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
-        WHERE s.status='active' AND {AS_F} AND (
+        WHERE s.status='active' AND {AS_F} AND {EXT_AS} AND (
             EXISTS (SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id)
             OR EXISTS (SELECT 1 FROM agent_sharepoint_docs sp WHERE sp.FileName = s.filename)
         )
@@ -732,7 +747,7 @@ async def api_pipeline_status(slug: str):
     # Schritt 3 — Kanonik: Files OHNE duplicate-of-Relation
     n_canonical = _count(f"""
         SELECT COUNT(*) FROM ds.agent_sources s
-        WHERE s.status='active' AND {AS_F} AND NOT EXISTS (
+        WHERE s.status='active' AND {AS_F} AND {EXT_AS} AND NOT EXISTS (
             SELECT 1 FROM ds.agent_source_relations r
             WHERE r.source_id = s.id AND r.kind = 'duplicate-of'
         )
