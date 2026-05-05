@@ -726,38 +726,53 @@ async def api_pipeline_status(slug: str):
     # Soll-Menge = kanonische Files (Duplikate brauchen keine separate
     # Anreicherung, sie zeigen ueber duplicate-of auf das kanonische
     # Original).
+    # agent_sharepoint_docs existiert nur in Projekten mit SP-Connector;
+    # deshalb erst pruefen, sonst wuerde die ganze EXISTS-Klausel die
+    # n_enriched-Query abreissen (OperationalError → _count=0).
+    sp_table_exists = bool(_count(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type='table' AND name='agent_sharepoint_docs'"
+    ))
+    canonical_filter_for_enrich = (
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM ds.agent_source_relations r "
+        "  WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'"
+        ")"
+    )
     has_meta = _count(f"""
         SELECT COUNT(DISTINCT s.id)
         FROM ds.agent_sources s
         JOIN ds.agent_source_metadata m ON m.source_id = s.id
         WHERE s.status='active' AND {AS_F} AND {EXT_AS}
-        AND NOT EXISTS (
-            SELECT 1 FROM ds.agent_source_relations r
-            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
-        )
+        {canonical_filter_for_enrich}
     """)
-    has_sp = _count(f"""
-        SELECT COUNT(DISTINCT s.id)
-        FROM ds.agent_sources s
-        JOIN agent_sharepoint_docs sp ON sp.FileName = s.filename
-        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
-        AND NOT EXISTS (
-            SELECT 1 FROM ds.agent_source_relations r
-            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
-        )
-    """)
-    n_enriched = _count(f"""
-        SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
-        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
-        AND NOT EXISTS (
-            SELECT 1 FROM ds.agent_source_relations r
-            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
-        )
-        AND (
-            EXISTS (SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id)
-            OR EXISTS (SELECT 1 FROM agent_sharepoint_docs sp WHERE sp.FileName = s.filename)
-        )
-    """)
+    if sp_table_exists:
+        has_sp = _count(f"""
+            SELECT COUNT(DISTINCT s.id)
+            FROM ds.agent_sources s
+            JOIN agent_sharepoint_docs sp ON sp.FileName = s.filename
+            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+            {canonical_filter_for_enrich}
+        """)
+        n_enriched = _count(f"""
+            SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
+            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+            {canonical_filter_for_enrich}
+            AND (
+                EXISTS (SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id)
+                OR EXISTS (SELECT 1 FROM agent_sharepoint_docs sp WHERE sp.FileName = s.filename)
+            )
+        """)
+    else:
+        has_sp = 0
+        n_enriched = _count(f"""
+            SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
+            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+            {canonical_filter_for_enrich}
+            AND EXISTS (
+                SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id
+            )
+        """)
     has_any_external = (has_meta + has_sp) > 0
 
     # Schritt 3 — Kanonik: Files OHNE duplicate-of-Relation als from-Seite.
