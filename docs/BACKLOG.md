@@ -3248,3 +3248,36 @@ Expandable Section unter `FLOWS` in der Sidebar:
 User-Quote (2026-04-30): *"Ich haette das ampelsystem aber gerne
 praktisch auf extraction pipeline step ebene. Eine art process ampel
 fuer jeden prozessschritt."*
+
+### Phase 6 (spaeter) — Pipeline-Status-Schaerfung (Beobachtung 2026-05-05)
+
+Aktuell unterscheidet die Step-Ampel nur zwischen "done" (gruen),
+"pending" (rot) und "failed im Suchindex" (gelb). Drei Schwaechen,
+die in der Praxis beim PROD-Lagerhalle-Test auftauchten:
+
+1. **Unsupported-Klasse fehlt.** INDEXABLE_EXT enthaelt heute auch
+   docx/pptx/txt/md, fuer die es keinen Routing-Engine gibt. Diese
+   Files bleiben in n_total von Schritt 4-6, kriegen aber nie einen
+   Routing-/Extraction-Eintrag → Schritte sind dauerhaft falsch-rot.
+   Vorschlag: Files ohne Engine-Mapping aus n_total ausnehmen, oder
+   als ⚪ "ohne Engine" zaehlen (Tooltip "3 ohne Engine").
+
+2. **Failed vs Pending nicht unterscheidbar in Schritt 4 + 5.**
+   `work_extraction_routing` und `agent_doc_markdown` haben keine
+   error-Spalte. Failed Routings/Extractions tauchen einfach nicht
+   auf → werden als pending (rot) gezaehlt. Nur Schritt 6 (Suchindex)
+   kann ehrlich gelb werden, weil `agent_search_docs.error` existiert.
+   Vorschlag: `error` und `attempt_count` in beide Tabellen
+   nachruesten, dann auch Schritt 4 + 5 mit 🟡 fuer "abgehakt mit
+   Fehlern" anzeigen.
+
+3. **Aufschluesselung im Frontend fehlt.** Heute steht da nur
+   "1816/1819" — ohne Hinweis warum 3 fehlen. Vorschlag: Tooltip auf
+   der Pille mit Aufschluesselung "1816 done / 0 pending / 0 failed /
+   3 unsupported".
+
+Ergaenzend (separat, schon gefixt):
+- Routing-Counter jointe faelschlicherweise auf agent_pdf_inventory
+  statt agent_sources.id (Schema-Kommentar veraltet) — gefixt
+  2026-05-05, Lagerhalle ging von 1516/1819 auf 1816/1819 als sich
+  alle non-PDF-Routings (DWG/JPG/PNG/XLSX) wieder zeigten.
