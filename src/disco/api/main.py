@@ -744,43 +744,103 @@ async def api_pipeline_status(slug: str):
     """)
     has_any_external = (has_meta + has_sp) > 0
 
-    # Schritt 3 — Kanonik: Files OHNE duplicate-of-Relation
-    n_canonical = _count(f"""
-        SELECT COUNT(*) FROM ds.agent_sources s
-        WHERE s.status='active' AND {AS_F} AND {EXT_AS} AND NOT EXISTS (
+    # Schritt 3 — Kanonik: Files OHNE duplicate-of-Relation als from-Seite.
+    # Schema-Spalte ist `from_source_id`, NICHT `source_id` (frueherer Bug:
+    # SQLite warf OperationalError, _count fing ihn ab und lieferte 0 →
+    # n_canonical immer 0 → Maßstab fuer Schritte 4-6 fiel auf n_registered
+    # zurueck, was Duplikate mitzaehlte).
+    CANONICAL_SUBQUERY = f"""
+        SELECT s.id FROM ds.agent_sources s
+        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+        AND NOT EXISTS (
             SELECT 1 FROM ds.agent_source_relations r
-            WHERE r.source_id = s.id AND r.kind = 'duplicate-of'
+            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
         )
-    """)
+    """
+    n_canonical = _count(f"SELECT COUNT(*) FROM ({CANONICAL_SUBQUERY}) c")
 
-    # Schritte 4-6 nutzen kanonische Files als Maßstab
-    # Achtung: work_extraction_routing.file_id verweist auf agent_sources.id,
-    # NICHT auf agent_pdf_inventory.id (Schema-Kommentar in alten Migrations
-    # ist veraltet — pdf_inventory enthaelt nur PDFs, routing aber alle
-    # Formate inkl. DWG/JPG/PNG/XLSX). Wir filtern daher direkt auf
-    # work_extraction_routing.rel_path, ohne JOIN.
-    n_routed = _count(f"""
+    # Schritte 4-6 — neuer Maßstab pro Schritt:
+    #   Schritt 4 Routing:    Soll-Menge = kanonische Files
+    #   Schritt 5 Extraction: Soll-Menge = kanonisch UND mit Engine
+    #   Schritt 6 Suchindex:  Soll-Menge = extrahierte Files (kanonisch)
+    #
+    # work_extraction_routing.file_id verweist auf agent_sources.id (nicht
+    # auf pdf_inventory). Wir joinen via IN ( ... canonical_subquery ... ),
+    # damit Routings fuer Duplikate ausgeschlossen sind. Files OHNE Engine
+    # (engine NULL/leer) gelten als 'unsupported' — sie wurden vom
+    # Routing-Flow gesehen, konnten aber keiner Engine zugeordnet werden
+    # (z.B. PDFs mit unklarer Diagnose, Office-Formate ohne Engine).
+    # Unsupported zaehlt NICHT als pending — der Schritt kann sie nicht
+    # weiter bearbeiten; das ist kein Bug, sondern ein Bestand.
+
+    # Routing
+    n_routed_supported = _count(f"""
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
-        WHERE w.engine IS NOT NULL AND w.engine != '' AND {WR_F}
+        WHERE w.engine IS NOT NULL AND w.engine != ''
+        AND w.file_id IN ({CANONICAL_SUBQUERY})
     """)
-    n_extracted = _count(
-        f"SELECT COUNT(DISTINCT file_id) FROM ds.agent_doc_markdown WHERE {DM_F}"
+    n_routed_unsupported = _count(f"""
+        SELECT COUNT(DISTINCT w.file_id)
+        FROM work_extraction_routing w
+        WHERE (w.engine IS NULL OR w.engine = '')
+        AND w.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    # Pending Routing = kanonisch − bereits bewertet (mit oder ohne Engine)
+    n_routed_pending = max(
+        0, n_canonical - n_routed_supported - n_routed_unsupported,
     )
-    n_indexed = _count(
-        f"SELECT COUNT(*) FROM ds.agent_search_docs WHERE error IS NULL AND {SD_F}"
-    )
-    n_index_failed = _count(
-        f"SELECT COUNT(*) FROM ds.agent_search_docs WHERE error IS NOT NULL AND {SD_F}"
+
+    # Extraction — nur kanonische Files mit Engine sind verarbeitbar
+    n_extracted_canonical = _count(f"""
+        SELECT COUNT(DISTINCT d.file_id)
+        FROM ds.agent_doc_markdown d
+        WHERE d.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    # Soll-Menge fuer Extraction = kanonisch ohne unsupported. Wenn Routing
+    # noch nicht durch ist, kennen wir die finalen unsupported nicht — dann
+    # nehmen wir vorlaeufig die ganze kanonische Menge und der Schritt zeigt
+    # mehr Pending. Sobald Routing 100% durch ist, bekommen wir den exakten
+    # Maßstab.
+    extraction_total = max(0, n_canonical - n_routed_unsupported)
+    extracted_clamped = min(n_extracted_canonical, extraction_total) if extraction_total else 0
+    n_extracted_pending = max(0, extraction_total - extracted_clamped)
+
+    # Suchindex — Soll-Menge = bereits extrahierte kanonische Files.
+    # agent_search_docs.rel_path matcht agent_doc_markdown.rel_path
+    # (beide projekt-relativ mit sources/-/context/-Praefix dank Migration 009).
+    n_indexed_canonical = _count(f"""
+        SELECT COUNT(*) FROM ds.agent_search_docs sd
+        WHERE sd.error IS NULL
+        AND sd.rel_path IN (
+            SELECT d.rel_path FROM ds.agent_doc_markdown d
+            WHERE d.file_id IN ({CANONICAL_SUBQUERY})
+        )
+    """)
+    n_indexed_failed_canonical = _count(f"""
+        SELECT COUNT(*) FROM ds.agent_search_docs sd
+        WHERE sd.error IS NOT NULL
+        AND sd.rel_path IN (
+            SELECT d.rel_path FROM ds.agent_doc_markdown d
+            WHERE d.file_id IN ({CANONICAL_SUBQUERY})
+        )
+    """)
+    indexed_total = n_extracted_canonical
+    indexed_clamped = min(n_indexed_canonical, indexed_total) if indexed_total else 0
+    n_indexed_pending = max(
+        0, indexed_total - indexed_clamped - n_indexed_failed_canonical,
     )
 
     conn.close()
 
-    def _status(n_done: int, n_total: int, n_failed: int = 0) -> str:
-        n_pending = max(0, n_total - n_done - n_failed)
+    def _status(*, n_done: int, n_total: int, n_failed: int = 0,
+                n_pending: int | None = None) -> str:
         if n_total == 0:
             return "grey"
-        if n_pending > 0:
+        pending = n_pending if n_pending is not None else max(
+            0, n_total - n_done - n_failed,
+        )
+        if pending > 0:
             return "red"
         if n_failed > 0:
             return "yellow"
@@ -790,59 +850,103 @@ async def api_pipeline_status(slug: str):
         {
             "step_order": 1, "step_name": "Registrierung",
             "n_total": n_fs, "n_done": n_registered,
-            "n_failed": 0, "n_pending": max(0, n_fs - n_registered),
-            "status": _status(n_registered, n_fs),
+            "n_failed": 0, "n_unsupported": 0,
+            "n_pending": max(0, n_fs - n_registered),
+            "status": _status(n_done=n_registered, n_total=n_fs),
             "label": f"{n_registered} / {n_fs}" if n_fs else "leer",
         },
         {
             "step_order": 2, "step_name": "Externe Anreicherung",
-            "n_total": n_registered, "n_done": n_enriched,
-            "n_failed": 0, "n_pending": max(0, n_registered - n_enriched),
-            "status": "grey" if not has_any_external else _status(n_enriched, n_registered),
+            # Wenn keine externe Quelle existiert (Begleit-Excel/SP), ist
+            # der Schritt n.a. — n_total=0 hält die Zahlen ehrlich.
+            "n_total": n_registered if has_any_external else 0,
+            "n_done": n_enriched,
+            "n_failed": 0, "n_unsupported": 0,
+            "n_pending": max(0, n_registered - n_enriched) if has_any_external else 0,
+            "status": "grey" if not has_any_external else _status(
+                n_done=n_enriched, n_total=n_registered,
+            ),
             "label": "n.a." if not has_any_external else f"{n_enriched} / {n_registered}",
         },
         {
             "step_order": 3, "step_name": "Kanonik",
-            "n_total": n_registered, "n_done": n_registered,
-            "n_failed": 0, "n_pending": 0,
+            # Kanonik ist ein Reduktions-Schritt, kein Pending-Schritt:
+            # Disco markiert Duplikate (oder eben nicht) — beides ist OK.
+            # Status: gruen wenn etwas registriert ist, grau wenn nichts.
+            "n_total": n_registered, "n_done": n_canonical,
+            "n_failed": 0, "n_unsupported": 0,
+            "n_pending": 0,
             "status": "green" if n_registered > 0 else "grey",
-            "label": (f"{n_registered} → {n_canonical} kanonisch"
-                      if n_registered and n_canonical < n_registered
-                      else (f"{n_registered}" if n_registered else "leer")),
+            "label": (
+                f"{n_registered} → {n_canonical} kanonisch"
+                if n_registered and n_canonical < n_registered
+                else (f"{n_registered} kanonisch" if n_registered else "leer")
+            ),
         },
-    ]
-    # Maßstab fuer Schritte 4-6: bevorzugt kanonisch, fallback auf registriert.
-    # Defensive Clamping: n_done darf nicht groesser als n_total sein.
-    n_base = n_canonical if n_canonical > 0 else n_registered
-    routed_clamped = min(n_routed, n_base) if n_base else n_routed
-    extracted_clamped = min(n_extracted, n_base) if n_base else n_extracted
-    indexed_clamped = min(n_indexed, n_base) if n_base else n_indexed
-    steps.extend([
         {
             "step_order": 4, "step_name": "Routing",
-            "n_total": n_base, "n_done": routed_clamped,
-            "n_failed": 0, "n_pending": max(0, n_base - routed_clamped),
-            "status": _status(routed_clamped, n_base),
-            "label": f"{routed_clamped} / {n_base}" if n_base else "leer",
+            "n_total": n_canonical, "n_done": n_routed_supported,
+            "n_failed": 0, "n_unsupported": n_routed_unsupported,
+            "n_pending": n_routed_pending,
+            "status": _status(
+                n_done=n_routed_supported,
+                n_total=n_canonical,
+                n_pending=n_routed_pending,
+            ),
+            "label": _bucket_label(
+                n_canonical, n_routed_supported, n_routed_pending,
+                n_failed=0, n_unsupported=n_routed_unsupported,
+            ),
         },
         {
             "step_order": 5, "step_name": "Extraction",
-            "n_total": n_base, "n_done": extracted_clamped,
-            "n_failed": 0, "n_pending": max(0, n_base - extracted_clamped),
-            "status": _status(extracted_clamped, n_base),
-            "label": f"{extracted_clamped} / {n_base}" if n_base else "leer",
+            "n_total": extraction_total, "n_done": extracted_clamped,
+            "n_failed": 0, "n_unsupported": 0,
+            "n_pending": n_extracted_pending,
+            "status": _status(
+                n_done=extracted_clamped,
+                n_total=extraction_total,
+                n_pending=n_extracted_pending,
+            ),
+            "label": _bucket_label(
+                extraction_total, extracted_clamped, n_extracted_pending,
+                n_failed=0, n_unsupported=0,
+            ),
         },
         {
             "step_order": 6, "step_name": "Suchindex",
-            "n_total": n_base, "n_done": indexed_clamped,
-            "n_failed": n_index_failed,
-            "n_pending": max(0, n_base - indexed_clamped - n_index_failed),
-            "status": _status(indexed_clamped, n_base, n_index_failed),
-            "label": (f"{indexed_clamped} / {n_base}" + (f" ({n_index_failed} Fehler)" if n_index_failed else "")
-                      if n_base else "leer"),
+            "n_total": indexed_total, "n_done": indexed_clamped,
+            "n_failed": n_indexed_failed_canonical, "n_unsupported": 0,
+            "n_pending": n_indexed_pending,
+            "status": _status(
+                n_done=indexed_clamped,
+                n_total=indexed_total,
+                n_failed=n_indexed_failed_canonical,
+                n_pending=n_indexed_pending,
+            ),
+            "label": _bucket_label(
+                indexed_total, indexed_clamped, n_indexed_pending,
+                n_failed=n_indexed_failed_canonical, n_unsupported=0,
+            ),
         },
-    ])
+    ]
     return {"slug": slug, "steps": steps}
+
+
+def _bucket_label(n_total: int, n_done: int, n_pending: int,
+                  *, n_failed: int = 0, n_unsupported: int = 0) -> str:
+    """Formatiert die Pillen-Beschriftung. Hauptanzeige `done / total`,
+    Zusatz-Tag bei Failed/Unsupported (`+N nicht unterstuetzt`).
+    """
+    if n_total == 0 and n_unsupported == 0:
+        return "leer"
+    base = f"{n_done} / {n_total}"
+    extras = []
+    if n_failed > 0:
+        extras.append(f"{n_failed} Fehler")
+    if n_unsupported > 0:
+        extras.append(f"{n_unsupported} ohne Engine")
+    return base + (f" ({', '.join(extras)})" if extras else "")
 
 
 @app.get("/api/projects/{slug}/chat/state")

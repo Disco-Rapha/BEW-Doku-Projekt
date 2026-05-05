@@ -3431,7 +3431,13 @@ async function loadPipelineStatus(slug) {
     for (const step of (data.steps || [])) {
       const row = document.createElement('div');
       row.className = 'ps-row' + (step.n_pending > 0 ? ' has-pending' : '');
-      row.title = `${step.step_name}: ${step.n_done} done / ${step.n_failed} failed / ${step.n_pending} pending (von ${step.n_total})`;
+      // Tooltip mit Bucket-Aufschluesselung — done / pending / failed / unsupported.
+      const buckets = [];
+      buckets.push(`${step.n_done} done`);
+      if (step.n_pending > 0) buckets.push(`${step.n_pending} pending`);
+      if (step.n_failed > 0)  buckets.push(`${step.n_failed} failed`);
+      if (step.n_unsupported > 0) buckets.push(`${step.n_unsupported} ohne Engine`);
+      row.title = `${step.step_name}: ${buckets.join(' · ')} (von ${step.n_total} Soll)`;
       row.innerHTML = `
         <span class="ps-status ${step.status}" aria-label="${step.status}"></span>
         <span class="ps-name"><span class="ps-step-num">${step.step_order}.</span>${escHtml(step.step_name)}</span>
@@ -3453,6 +3459,9 @@ function onPipelineStepClick(slug, step) {
     `Done: ${step.n_done} / Total: ${step.n_total}`,
     `Failed: ${step.n_failed}, Pending: ${step.n_pending}`,
   ];
+  if (step.n_unsupported > 0) {
+    lines.push(`Ohne Engine: ${step.n_unsupported} (nicht verarbeitbar — Format hat keine passende Engine)`);
+  }
   if (step.n_pending > 0) {
     lines.push('');
     lines.push(`→ ${step.n_pending} Files warten. Im Chat formulieren:`);
