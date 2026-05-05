@@ -168,6 +168,83 @@ def _is_model_invalid_content_error(exc: BaseException) -> bool:
     return any(p in msg for p in _MODEL_INVALID_CONTENT_PATTERNS)
 
 
+def _build_user_content(
+    user_text: str,
+    attachments: list[dict[str, Any]] | None,
+    project_slug: str,
+) -> str | list[dict[str, Any]]:
+    """Baut den `content`-Teil einer User-Message — String oder Liste von Blocks.
+
+    Ohne Attachments: einfacher String — das ist die schlankste Form fuer
+    Foundry und entspricht dem bisherigen Verhalten.
+
+    Mit Attachments: Liste von Blocks im Foundry-Responses-API-Format.
+    - Bilder: `{"type": "input_image", "image_url": "data:image/png;base64,..."}`
+    - Text-Files (max 100 KB): inline als zusaetzlicher `input_text`-Block
+      mit Filename-Header — Disco "liest" sie wie geschriebenen Text mit.
+    Der eigentliche User-Prompt wird der ERSTE Text-Block; Attachments
+    danach. Falls user_text leer ist, wird ein neutraler Hinweis-Text
+    eingefuegt, damit das Modell ueberhaupt einen Anker hat.
+    """
+    if not attachments:
+        return user_text
+
+    import base64 as _b64
+    blocks: list[dict[str, Any]] = []
+
+    leading_text = user_text or "[Anhaenge ohne Begleittext]"
+    blocks.append({"type": "input_text", "text": leading_text})
+
+    project_root = settings.projects_dir / project_slug
+    for att in attachments:
+        kind = att.get("kind")
+        rel = att.get("rel_path")
+        filename = att.get("filename") or "(unbenannt)"
+        if not rel:
+            continue
+        abs_path = project_root / rel
+        if not abs_path.is_file():
+            blocks.append({
+                "type": "input_text",
+                "text": f"[Anhang '{filename}' nicht mehr verfuegbar — Datei fehlt im Filesystem]",
+            })
+            continue
+
+        if kind == "image":
+            mime = att.get("mime_type") or "image/png"
+            try:
+                data = abs_path.read_bytes()
+                b64 = _b64.b64encode(data).decode("ascii")
+                blocks.append({
+                    "type": "input_image",
+                    "image_url": f"data:{mime};base64,{b64}",
+                })
+            except Exception as exc:
+                logger.warning("Anhang-Bild lesbar fehlgeschlagen %s: %s", filename, exc)
+                blocks.append({
+                    "type": "input_text",
+                    "text": f"[Bild-Anhang '{filename}' konnte nicht geladen werden]",
+                })
+        elif kind == "text":
+            try:
+                content = abs_path.read_text(encoding="utf-8", errors="replace")
+                size_kb = att.get("size", len(content)) / 1024
+                blocks.append({
+                    "type": "input_text",
+                    "text": (
+                        f"\n\nAnhang \"{filename}\" ({size_kb:.1f} KB):\n"
+                        f"```\n{content}\n```"
+                    ),
+                })
+            except Exception as exc:
+                logger.warning("Anhang-Text lesbar fehlgeschlagen %s: %s", filename, exc)
+                blocks.append({
+                    "type": "input_text",
+                    "text": f"[Text-Anhang '{filename}' konnte nicht geladen werden]",
+                })
+    return blocks
+
+
 # ---------------------------------------------------------------------------
 # Event-Typen fuer den AgentService-Stream
 # ---------------------------------------------------------------------------
@@ -447,6 +524,7 @@ class AgentService:
         project_slug: str,
         user_text: str,
         file_search_vector_store_ids: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         _system_trigger: dict[str, Any] | None = None,
     ) -> Iterator[AgentEvent]:
         """Fuehrt einen kompletten Turn aus (User-Nachricht -> Assistant-Antwort).
@@ -500,7 +578,12 @@ class AgentService:
                 content=_system_trigger.get("summary") or "[System-Trigger]",
             )
         else:
-            chat_repo.append_message(project_slug, role="user", content=user_text)
+            chat_repo.append_message(
+                project_slug,
+                role="user",
+                content=user_text,
+                attachments=attachments or None,
+            )
 
         logger.info(
             "run_turn project=%s prev_response_id=%s token_estimate=%d%s (Sandbox aktiv)",
@@ -680,10 +763,20 @@ class AgentService:
             )
         else:
             # Chain-Modus: developer + neue user-Message genuegen.
+            user_content = _build_user_content(
+                user_text, attachments, project_slug,
+            )
             if developer_ctx_items:
                 current_input = [
                     *developer_ctx_items,
-                    {"type": "message", "role": "user", "content": user_text},
+                    {"type": "message", "role": "user", "content": user_content},
+                ]
+            elif attachments:
+                # Mit Anhaengen muessen wir ein message-Item bauen, weil ein
+                # einfacher String die input_image/input_text-Blocks nicht
+                # transportiert.
+                current_input = [
+                    {"type": "message", "role": "user", "content": user_content},
                 ]
             else:
                 current_input = user_text

@@ -874,6 +874,144 @@ async def api_chat_messages(slug: str, include_compacted: bool = False):
     return chat_repo.list_active_messages(slug)
 
 
+# ===========================================================================
+# Chat-Anhaenge: Upload + statische Auslieferung
+# ===========================================================================
+# Limits — bewusst eng, damit der Token-Bomb-Risiko klein bleibt.
+CHAT_ATTACH_MAX_IMAGE_BYTES = 10 * 1024 * 1024     # 10 MB pro Bild
+CHAT_ATTACH_MAX_TEXT_BYTES = 100 * 1024            # 100 KB pro Text-File
+CHAT_ATTACH_MAX_PER_MESSAGE = 5                    # max Anhaenge pro Nachricht
+CHAT_ATTACH_IMAGE_MIMES = {
+    "image/png", "image/jpeg", "image/jpg",
+    "image/webp", "image/gif",
+}
+# MIME-Type → erlaubte Extension (Whitelist fuer Text-Files)
+CHAT_ATTACH_TEXT_EXTS = {
+    ".txt", ".md", ".markdown", ".csv", ".json",
+    ".log", ".xml", ".yaml", ".yml",
+    ".py", ".sql", ".sh", ".js", ".ts", ".html", ".css",
+}
+
+
+def _chat_attach_dir(slug: str) -> Path:
+    """Pfad fuer Chat-Anhaenge eines Projekts (`<project>/.disco/chat-attachments/`)."""
+    return settings.projects_dir / slug / ".disco" / "chat-attachments"
+
+
+@app.post("/api/projects/{slug}/chat/upload")
+async def api_chat_upload(slug: str, file: UploadFile = File(...)):
+    """Nimmt eine einzelne Datei entgegen und legt sie unter
+    `<project>/.disco/chat-attachments/<uuid>.<ext>` ab.
+
+    Liefert die Attachment-Ref zurueck — Frontend speichert die in seinem
+    Composer-State und sendet sie beim WebSocket-Send mit.
+
+    Validierung:
+    - Bilder: <= CHAT_ATTACH_MAX_IMAGE_BYTES, MIME in CHAT_ATTACH_IMAGE_MIMES
+    - Text:   <= CHAT_ATTACH_MAX_TEXT_BYTES, Extension in CHAT_ATTACH_TEXT_EXTS
+    Sonst 413 / 415.
+    """
+    import uuid as _uuid
+    from ..workspace import validate_slug
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    if not (settings.projects_dir / slug).is_dir():
+        return {"error": f"Projekt {slug!r} existiert nicht."}
+
+    # MIME + Extension auswerten
+    raw_name = file.filename or "unbekannt"
+    ext = Path(raw_name).suffix.lower()
+    mime = (file.content_type or "").lower()
+
+    is_image = mime in CHAT_ATTACH_IMAGE_MIMES
+    is_text = (ext in CHAT_ATTACH_TEXT_EXTS) and not is_image
+
+    if not (is_image or is_text):
+        return {
+            "error": (
+                f"Datei-Typ nicht unterstuetzt: {raw_name!r} (MIME={mime!r}). "
+                f"Erlaubt: Bilder (PNG/JPEG/WebP/GIF) oder Text-Dateien "
+                f"({', '.join(sorted(CHAT_ATTACH_TEXT_EXTS))})."
+            ),
+            "status": 415,
+        }
+
+    # Datei lesen + Groesse pruefen
+    blob = await file.read()
+    size = len(blob)
+    if is_image and size > CHAT_ATTACH_MAX_IMAGE_BYTES:
+        return {
+            "error": (
+                f"Bild zu gross ({size / (1024 * 1024):.1f} MB). "
+                f"Limit: {CHAT_ATTACH_MAX_IMAGE_BYTES // (1024 * 1024)} MB."
+            ),
+            "status": 413,
+        }
+    if is_text and size > CHAT_ATTACH_MAX_TEXT_BYTES:
+        return {
+            "error": (
+                f"Textdatei zu gross ({size / 1024:.1f} KB). "
+                f"Limit: {CHAT_ATTACH_MAX_TEXT_BYTES // 1024} KB."
+            ),
+            "status": 413,
+        }
+
+    # Speichern
+    attach_id = _uuid.uuid4().hex
+    target_dir = _chat_attach_dir(slug)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # Extension normieren — fallback auf MIME-basiert wenn keine im Namen
+    if not ext:
+        if mime == "image/png":
+            ext = ".png"
+        elif mime in ("image/jpeg", "image/jpg"):
+            ext = ".jpg"
+        elif mime == "image/webp":
+            ext = ".webp"
+        elif mime == "image/gif":
+            ext = ".gif"
+        else:
+            ext = ".bin"
+    target_path = target_dir / f"{attach_id}{ext}"
+    target_path.write_bytes(blob)
+
+    rel_path = str(target_path.relative_to(settings.projects_dir / slug))
+    return {
+        "id": attach_id,
+        "filename": raw_name,
+        "mime_type": mime,
+        "size": size,
+        "kind": "image" if is_image else "text",
+        "rel_path": rel_path,
+    }
+
+
+@app.get("/api/projects/{slug}/chat/attachments/{attach_id}")
+async def api_chat_attachment_get(slug: str, attach_id: str):
+    """Liefert eine Anhang-Datei zurueck (fuer Frontend-Render von alten
+    Chat-Verlaeufen mit Bild-Thumbnails)."""
+    from ..workspace import validate_slug
+    from fastapi.responses import FileResponse
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    # attach_id muss hex-uuid sein (Sicherheit gegen Path-Traversal)
+    if not all(c in "0123456789abcdef" for c in attach_id) or len(attach_id) != 32:
+        return {"error": "Ungueltige Attachment-ID."}
+    attach_dir = _chat_attach_dir(slug)
+    if not attach_dir.is_dir():
+        return {"error": "Keine Anhaenge."}
+    # ID kann mit beliebiger Extension liegen — finde die passende Datei
+    matches = list(attach_dir.glob(f"{attach_id}.*"))
+    if not matches:
+        return {"error": "Anhang nicht gefunden."}
+    return FileResponse(str(matches[0]))
+
+
 @app.post("/api/projects/{slug}/chat/compact")
 async def api_chat_compact(slug: str, body: dict | None = None):
     """Compaction v2 — Handover-Brief + letzte Dialog-Paare erhalten.
@@ -1891,7 +2029,12 @@ async def ws_chat(
             data = await websocket.receive_text()
             payload = json.loads(data)
             user_text = (payload.get("text") or "").strip()
-            if not user_text:
+            attachments = payload.get("attachments") or []
+            # Sanity-Cap: nie mehr als CHAT_ATTACH_MAX_PER_MESSAGE durchlassen.
+            if isinstance(attachments, list) and len(attachments) > CHAT_ATTACH_MAX_PER_MESSAGE:
+                attachments = attachments[:CHAT_ATTACH_MAX_PER_MESSAGE]
+            # Eine Message muss mindestens Text ODER mindestens einen Anhang haben.
+            if not user_text and not attachments:
                 continue
 
             # Lock pro Projekt: verhindert, dass ein System-Trigger-Turn
@@ -1909,7 +2052,9 @@ async def ws_chat(
 
                 def _worker() -> None:
                     try:
-                        for event in svc.run_turn(project_slug, user_text):
+                        for event in svc.run_turn(
+                            project_slug, user_text, attachments=attachments,
+                        ):
                             loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
                     except Exception as exc:
                         logger.exception("AgentService-Fehler")
