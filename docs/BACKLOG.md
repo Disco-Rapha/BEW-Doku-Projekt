@@ -1255,46 +1255,17 @@ gesehen und bearbeitet werden"*
 Beobachtet 2026-04-25 nach den Run-Strip-Updates (Commits 829fd65,
 6200002, 0e04dc9, 77f71ea):
 
-### Bug 1: gleicher Run wird doppelt angezeigt — **Ursache identifiziert 2026-05-05**
+### Bug 1: gleicher Run wird doppelt angezeigt — **GEFIXT 2026-05-05** (Commit 15ee0c2)
 
-Beobachtet 2026-04-25: `#3 extraction_routing_decision` zweimal im
-Strip. Wieder beobachtet 2026-05-05 nach Pipeline-Lauf in rea-denox:
-Run #25 zweimal, einmal mit slug-Tag `bew-rsd-rea-denox`, einmal ohne
-sichtbares Tag.
+Ursache: Field-Inkonsistenz zwischen `/api/workspace/active-runs`
+(recent_finished mit `project_slug`) und `/api/workspace/projects/{slug}/runs/{id}`
+(`project_slug=None`). Der Frontend-Dedup-Key ueber
+`${project_slug}:${id}` matchte daher 'null:25' nicht mit
+'bew-rsd-rea-denox:25' → derselbe Run landete zweimal im finished-Strip.
 
-**Ursache (verifiziert 2026-05-05):** Field-Inkonsistenz zwischen den
-beiden Backend-Endpoints, die den finished-Strip fuettern:
-
-| Endpoint | `project_slug` |
-|---|---|
-| `/api/workspace/active-runs` → `recent_finished[]` | `'bew-rsd-rea-denox'` ✅ |
-| `/api/workspace/projects/{slug}/runs/{id}` (fading-active-Pfad) | `None` ❌ |
-
-`_runStripAddFinished` baut den Dedup-Key als `${project_slug}:${id}`:
-
-1. Pfad B (`recent_finished`) liefert ein vollstaendiges Run-Objekt
-   → fkey = `'bew-rsd-rea-denox:25'` → unshift, Eintrag #1 mit Tag.
-2. Pfad A (fading-active, async via `runStripFetchFinal`) liefert
-   `project_slug: None` → fkey = `'null:25'` → findIndex matched
-   Eintrag #1 nicht (anderer Key) → unshift, Eintrag #2 ohne Tag.
-
-Daher der Doppel: erst der saubere Eintrag mit Tag, dann der
-verkrueppelte mit fehlendem Slug. Beim Reload verschwindet's, weil
-`runStripPoll` ohne aktiven Run kein Pfad-A-Trigger hat — nur Pfad B
-laeuft, und der ist sauber.
-
-**Fix-Ansatz (zwei Optionen, eine reicht):**
-- **Backend (sauberer):** `/api/workspace/projects/{slug}/runs/{id}`
-  soll `project_slug` aus dem URL-Parameter mitliefern.
-- **Frontend (defensiv):** in `runStripFetchFinal` den Slug aus `prev`
-  nachtragen, wenn fehlt:
-  ```js
-  finalRun.project_slug = finalRun.project_slug || prev.project_slug;
-  ```
-
-Empfehlung: **beide**. Backend-Fix korrigiert die API-Inkonsistenz
-generell (relevant fuer kuenftige Konsumenten); Frontend-Fix als
-Belt-and-Suspenders gegen aehnliche Reports-Drifts.
+Behoben mit Backend-Fix (`api_run_status` faellt auf URL-Parameter
+zurueck) + Frontend-Defensiv-Patch (`runStripFetchFinal` traegt Slug
+aus prev nach).
 
 ### Bug 2: Counter springt nicht auf 100% (1720/1721 bleibt)
 
@@ -3270,35 +3241,28 @@ User-Quote (2026-04-30): *"Ich haette das ampelsystem aber gerne
 praktisch auf extraction pipeline step ebene. Eine art process ampel
 fuer jeden prozessschritt."*
 
-### Phase 6 (spaeter) — Pipeline-Status-Schaerfung (Beobachtung 2026-05-05)
+### Phase 6 (Pipeline-Status-Schaerfung) — TEILWEISE GEFIXT 2026-05-05
 
-Aktuell unterscheidet die Step-Ampel nur zwischen "done" (gruen),
-"pending" (rot) und "failed im Suchindex" (gelb). Drei Schwaechen,
-die in der Praxis beim PROD-Lagerhalle-Test auftauchten:
+Erledigt am 2026-05-05 (Commits c7287e7 + c9b6374):
+- ✅ **Schema-Bug** in n_canonical-SQL (`r.source_id` →
+  `r.from_source_id`) — Schritt 3 zeigte immer "→ 0 kanonisch", jetzt
+  korrekt (rea-denox: 5790 → 1775).
+- ✅ **Maßstab pro Schritt** statt einheitlich n_registered:
+  Schritt 4 = kanonisch, Schritt 5 = kanonisch − unsupported,
+  Schritt 6 = bereits extrahierte Files. Duplikate fallen aus
+  Pendings raus.
+- ✅ **Unsupported-Klasse** sichtbar: Files mit engine NULL/leer
+  zaehlen als n_unsupported (eigener Bucket), nicht als pending.
+- ✅ **Tooltip-Aufschluesselung** im Frontend: done · pending ·
+  failed · ohne Engine.
+- ✅ **Routing-Flow** filtert Duplikate beim Input
+  (extraction_routing_decision/runner.py).
 
-1. **Unsupported-Klasse fehlt.** INDEXABLE_EXT enthaelt heute auch
-   docx/pptx/txt/md, fuer die es keinen Routing-Engine gibt. Diese
-   Files bleiben in n_total von Schritt 4-6, kriegen aber nie einen
-   Routing-/Extraction-Eintrag → Schritte sind dauerhaft falsch-rot.
-   Vorschlag: Files ohne Engine-Mapping aus n_total ausnehmen, oder
-   als ⚪ "ohne Engine" zaehlen (Tooltip "3 ohne Engine").
-
-2. **Failed vs Pending nicht unterscheidbar in Schritt 4 + 5.**
-   `work_extraction_routing` und `agent_doc_markdown` haben keine
-   error-Spalte. Failed Routings/Extractions tauchen einfach nicht
-   auf → werden als pending (rot) gezaehlt. Nur Schritt 6 (Suchindex)
-   kann ehrlich gelb werden, weil `agent_search_docs.error` existiert.
-   Vorschlag: `error` und `attempt_count` in beide Tabellen
-   nachruesten, dann auch Schritt 4 + 5 mit 🟡 fuer "abgehakt mit
-   Fehlern" anzeigen.
-
-3. **Aufschluesselung im Frontend fehlt.** Heute steht da nur
-   "1816/1819" — ohne Hinweis warum 3 fehlen. Vorschlag: Tooltip auf
-   der Pille mit Aufschluesselung "1816 done / 0 pending / 0 failed /
-   3 unsupported".
-
-Ergaenzend (separat, schon gefixt):
-- Routing-Counter jointe faelschlicherweise auf agent_pdf_inventory
-  statt agent_sources.id (Schema-Kommentar veraltet) — gefixt
-  2026-05-05, Lagerhalle ging von 1516/1819 auf 1816/1819 als sich
-  alle non-PDF-Routings (DWG/JPG/PNG/XLSX) wieder zeigten.
+Offen (Phase B):
+- ❌ **Failed vs Pending in Schritt 4 + 5.** `work_extraction_routing`
+  und `agent_doc_markdown` haben keine error-Spalte. Failed
+  Routings/Extractions tauchen einfach nicht auf → werden als pending
+  (rot) gezaehlt. Nur Schritt 6 (Suchindex) kann ehrlich gelb werden.
+  Erfordert Schema-Migration (error TEXT + retry_count INTEGER) und
+  Code-Aenderungen in beiden Flows zum Befuellen. Damit dann auch
+  🟡 in Schritt 4 + 5 moeglich.
