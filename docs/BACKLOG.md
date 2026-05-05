@@ -116,30 +116,54 @@ Das Frontend reagiert: Viewer öffnet sich rechts, zeigt Sheet 3-IBL.
 
 ## Report-Format / Analyse-Ergebnisse
 
-### Excel mit openpyxl auf Cowork-Niveau verwenden (Priorität: hoch)
+### Excel mit openpyxl auf Cowork-Niveau verwenden (DONE Routing-Teil 2026-05-05)
 
 Disco hat `run_python` + openpyxl an Bord und kann damit alles, was
 Claude Cowork mit Excel macht — Formatierung lesen, Farben/Fonts/
 Borders setzen, Merged Cells, Formeln, Hyperlinks, Bilder. Die
 Infrastruktur steht.
 
-**Was fehlt:** Der Reflex. Disco greift heute zu `import_xlsx_to_table`
-(Tabelle in DB), weil das Tool bequem ist — und sieht dadurch keine
-Formatierung. Wir brauchen:
+**Erledigt 2026-05-05:**
+- ✅ Skill `excel-formatter.md` deckt jetzt Editor-Modus UND
+  Custom-Generator-Modus ab (komplexer Report von Grund auf neu bauen).
+- ✅ Trigger-Tabelle im System-Prompt: „schoene Excel", „aufwendig",
+  „komplex", „Charts dazu", „Pivot", „Conditional Formatting",
+  „individuell formatiert" → direkt `excel-formatter`, nicht erst
+  `build_xlsx_from_tables`.
+- ✅ Tool-Description von `build_xlsx_from_tables` listet explizit, was
+  es NICHT kann + verweist auf den richtigen Pfad. Damit sieht der LLM
+  die Grenze schon im Schema.
 
-- **Skill `excel-formatter.md`** mit den Patterns: `load_workbook`
-  ohne `read_only`/`data_only`, Fills/Fonts/Borders-Rezepte, Merged-
-  Cells-Handling, Formel-Preservation, `wb.save()`-Pflicht.
-- **Trigger-Tabelle im System-Prompt:** „Excel-Formatierung lesen oder
-  ändern, Farben, Formeln, Merges → Skill `excel-formatter` laden und
-  `run_python` verwenden. Tabellen-Import in die DB nur, wenn
-  Formatierung irrelevant ist."
-- Optional: `xlsx_inspect_full` — Read-Tool, das Styles/Merges/Formeln
-  strukturiert als JSON liefert, damit Disco fürs reine Anschauen
-  nicht jedes Mal 15 Zeilen Python schreiben muss.
+**Optional, nicht entschieden:** `xlsx_inspect_full` — Read-Tool, das
+Styles/Merges/Formeln strukturiert als JSON liefert, damit Disco fuers
+reine Anschauen nicht jedes Mal 15 Zeilen Python schreiben muss.
 
-Ziel: Disco nutzt openpyxl routiniert wie Cowork — kein eigenes
-„Formatierungs-Tool", sondern freies Python mit einem guten Playbook.
+---
+
+### build_xlsx_from_tables erweitern (Prioritaet: mittel — zurueckgestellt 2026-05-05)
+
+Heute deckt das Tool nur den Standard-Look ab (Header-Style, Zebra,
+AutoFilter, Status-Farben, Hyperlinks). Sobald der Nutzer mehr will
+(Conditional Formatting, Number-Formats pro Spalte, Multi-Level-
+Header, Cell Comments, gezielte Freeze-Pane-Position), greift Disco
+korrekt zu `excel-formatter` + run_python — aber das kostet Tokens
+und ist langsamer als ein Spec-Tool.
+
+**Vorgeschlagene v2-Spec-Felder pro Sheet:**
+- `number_formats` — `{column_key: "#,##0.00" | "0.00%" | "yyyy-mm-dd"}`
+- `conditional_formatting` — Liste von Regeln pro Spalte (greater_than,
+  contains, older_than_days etc. → fill/font_bold)
+- `cell_comments` — `{column_key: "Tooltip"}` fuer Header oder Werte
+- `freeze_pane` — explizit setzbar (Default A2)
+- `multi_header` — zwei Header-Zeilen mit Spalten-Gruppen
+- `widen_columns` / `fix_column_width` — Override gegen Auto-Breite
+
+Bewusst NICHT in v2: Charts, Pivot-Tables. Die bleiben im
+`excel-formatter`-Pfad (zu spezifisch fuer Spec-Tool).
+
+**Status:** Entwurf steht. Wartet auf User-Praxis-Feedback nach den
+Routing-Aenderungen — wenn der openpyxl-Pfad in der Praxis bequem
+genug ist, koennen wir die Spec-Erweiterung evtl. ganz sparen.
 
 ---
 
