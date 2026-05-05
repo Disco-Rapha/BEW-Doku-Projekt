@@ -54,8 +54,9 @@ sources_register({"scan_type": "<typ>"})
 
 Das Tool:
 - Walkt den gewaehlten Scope-Root rekursiv (ausser `_meta/`).
-  Default `scope='sources'` scannt `sources/`. Mit `scope='context'`
-  scannst Du `context/`, mit `scope='both'` beides nacheinander.
+  Default `scope='both'` scannt `sources/` UND `context/` nacheinander —
+  in der Regel das Gewuenschte. Mit `scope='sources'` bzw.
+  `scope='context'` schraenkst Du auf einen einzelnen Unterbaum ein.
 - Berechnet SHA-256 fuer jede Datei
 - Vergleicht mit `agent_sources`:
   - Pfad unbekannt → **neu**

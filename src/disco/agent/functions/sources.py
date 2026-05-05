@@ -395,12 +395,12 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
                 "enum": ["sources", "context", "both"],
                 "description": (
                     "Welcher Unterbaum gescannt wird. "
-                    "'sources' (Default, bisheriges Verhalten) scannt nur "
-                    "sources/ und tagged die Zeilen kind='source'. "
-                    "'context' scannt context/ und tagged kind='context' — "
-                    "Context-PDFs werden dadurch auch ins agent_pdf_inventory "
-                    "gespiegelt und koennen durch die Pipeline laufen. "
-                    "'both' scannt nacheinander beides."
+                    "'both' (Default) scannt nacheinander sources/ UND context/ "
+                    "— in der Regel das, was man will, damit context-PDFs auch "
+                    "ins agent_pdf_inventory wandern und durch die Pipeline "
+                    "laufen koennen. "
+                    "'sources' scannt nur sources/ und tagged kind='source'. "
+                    "'context' scannt nur context/ und tagged kind='context'."
                 ),
             },
             "subpath": {
@@ -408,8 +408,8 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
                 "description": (
                     "Optionaler Unterordner unter dem scope-Root "
                     "(z.B. 'Elektro' bei scope='sources'). "
-                    "Leer = ganzer Baum. Bei scope='both' wirkt subpath in beiden "
-                    "Baeumen gleich — in der Praxis meist leer lassen."
+                    "Leer = ganzer Baum. Bei scope='both' (Default) wirkt subpath "
+                    "in beiden Baeumen gleich — in der Praxis meist leer lassen."
                 ),
             },
             "skip_hash_if_unchanged": {
@@ -434,7 +434,7 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
 )
 def _sources_register(
     *,
-    scope: str = "sources",
+    scope: str = "both",
     subpath: str = "",
     skip_hash_if_unchanged: bool = True,
     scan_type: str = "incremental",
