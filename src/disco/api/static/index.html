@@ -673,6 +673,44 @@ a:hover { text-decoration: underline; }
   border-radius: 6px; cursor: zoom-in;
   border: 1px solid var(--border);
 }
+/* Lightbox-Overlay fuer Bilder in voller Groesse */
+.image-lightbox {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+  cursor: zoom-out;
+  backdrop-filter: blur(2px);
+}
+.image-lightbox img {
+  max-width: 95vw; max-height: 95vh;
+  object-fit: contain;
+  border-radius: 4px;
+  cursor: default;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+}
+.image-lightbox .lb-close {
+  position: absolute; top: 16px; right: 20px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 22px; line-height: 1;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.image-lightbox .lb-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+.image-lightbox .lb-caption {
+  position: absolute; bottom: 16px; left: 20px; right: 20px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
 .msg-attach-textfile {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 8px;
@@ -2434,7 +2472,10 @@ function renderMessageAttachments(attachments) {
   const items = attachments.map(a => {
     if (a.kind === 'image' && a.id) {
       const url = `/api/projects/${encodeURIComponent(slug)}/chat/attachments/${a.id}`;
-      return `<a href="${url}" target="_blank" title="${escHtml(a.filename || '')}"><img class="msg-attach-image" src="${url}" alt="${escHtml(a.filename || '')}"></a>`;
+      const fname = escHtml(a.filename || '');
+      // data-Attribute + globaler Click-Listener (s.u.) — robuster als
+      // inline onclick mit Quote-Escapes bei Filenames mit Sonderzeichen.
+      return `<img class="msg-attach-image" data-lightbox-url="${url}" data-lightbox-caption="${fname}" src="${url}" alt="${fname}" title="${fname}">`;
     }
     return `
       <div class="msg-attach-textfile" title="${escHtml(a.filename || '')}">
@@ -2444,6 +2485,65 @@ function renderMessageAttachments(attachments) {
     `;
   }).join('');
   return `<div class="msg-attachments">${items}</div>`;
+}
+
+// Event-Delegation: ein zentraler Click-Listener faengt alle
+// .msg-attach-image-Klicks im Chat — funktioniert auch fuer dynamisch
+// nachgeladene Messages (loadMessages, neue User-Bubbles).
+document.addEventListener('click', (ev) => {
+  const img = ev.target.closest && ev.target.closest('.msg-attach-image');
+  if (!img) return;
+  const url = img.dataset.lightboxUrl;
+  if (!url) return;
+  ev.preventDefault();
+  openImageLightbox(url, img.dataset.lightboxCaption || '');
+});
+
+// ---------------------------------------------------------------------------
+// In-App-Lightbox fuer Bild-Anhaenge
+// ---------------------------------------------------------------------------
+// Schliesst per X-Button, Backdrop-Klick oder Esc-Taste. Mehrfachaufruf
+// schliesst eine evtl. offene Lightbox vorher (kein Stapeln).
+function openImageLightbox(url, caption) {
+  closeImageLightbox();  // idempotent
+  const lb = document.createElement('div');
+  lb.className = 'image-lightbox';
+  // Caption immer escaped einfuegen, src ist der Server-Pfad (sicher)
+  const capHtml = caption ? `<div class="lb-caption">${escHtml(caption)}</div>` : '';
+  lb.innerHTML = `
+    <button class="lb-close" title="Schliessen (Esc)">×</button>
+    <img alt="${escHtml(caption || '')}">
+    ${capHtml}
+  `;
+  // src per .src-Property setzen, nicht via Markup → kein HTML-Escape-Risiko
+  const imgEl = lb.querySelector('img');
+  imgEl.src = url;
+  // Klick aufs Bild verhindert Backdrop-Close
+  imgEl.addEventListener('click', (ev) => ev.stopPropagation());
+  // X-Button schliesst
+  lb.querySelector('.lb-close').addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    closeImageLightbox();
+  });
+  // Klick auf Backdrop (nicht aufs Bild) schliesst
+  lb.addEventListener('click', (ev) => {
+    if (ev.target === lb) closeImageLightbox();
+  });
+  document.body.appendChild(lb);
+  // Esc schliesst
+  document.addEventListener('keydown', _lightboxEscHandler);
+}
+
+function _lightboxEscHandler(ev) {
+  if (ev.key === 'Escape') {
+    closeImageLightbox();
+  }
+}
+
+function closeImageLightbox(ev) {
+  if (ev) ev.stopPropagation();
+  document.querySelectorAll('.image-lightbox').forEach(el => el.remove());
+  document.removeEventListener('keydown', _lightboxEscHandler);
 }
 
 function buildFeedbackIcons(messageId) {
