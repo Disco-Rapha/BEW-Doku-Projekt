@@ -3899,7 +3899,17 @@ async function runStripFetchFinal(prev) {
   // prev ist ein Run aus dem letzten aktiven Snapshot. Wir holen seinen
   // finalen Status (done/failed/cancelled) einmalig fuer den Toast.
   try {
-    return await api(`/api/workspace/projects/${encodeURIComponent(prev.project_slug)}/runs/${prev.id}`);
+    const finalRun = await api(`/api/workspace/projects/${encodeURIComponent(prev.project_slug)}/runs/${prev.id}`);
+    if (!finalRun) return null;
+    // Defensiv: wenn der Endpoint project_slug nicht mitliefert (alte
+    // Backend-Version), den slug aus prev nachtragen — sonst entsteht
+    // ein 'null:<id>'-Dedup-Key, der mit dem regulaeren
+    // '<slug>:<id>'-Eintrag aus recent_finished kollidiert →
+    // Doppelanzeige im Strip.
+    if (!finalRun.project_slug) {
+      finalRun.project_slug = prev.project_slug;
+    }
+    return finalRun;
   } catch (_e) {
     return null;
   }

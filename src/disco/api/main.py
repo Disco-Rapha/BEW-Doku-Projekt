@@ -1901,7 +1901,15 @@ async def api_run_status(slug: str, run_id: int):
         run = flow_service.get_run(project_root, run_id)
     except KeyError as exc:
         return {"error": str(exc)}
-    return _run_info_to_dict(run)
+    info = _run_info_to_dict(run)
+    # project_slug aus dem URL-Parameter mitliefern — _run_info_to_dict
+    # kennt das Projekt nicht und laesst die Spalte sonst NULL. Frontend
+    # (Run-Strip) baut Dedup-Keys ueber `${project_slug}:${id}`; ohne
+    # diesen Wert kollidieren die Eintraege aus dem fading-active-Pfad
+    # mit denen aus recent_finished → Doppelanzeige.
+    if not info.get("project_slug"):
+        info["project_slug"] = slug
+    return info
 
 
 @app.get("/api/workspace/projects/{slug}/runs/{run_id}/items")
