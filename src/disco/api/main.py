@@ -697,7 +697,7 @@ async def api_pipeline_status(slug: str):
         "AND ('/' || {col}) NOT LIKE '%/.%')"
     )
     AS_F = NOT_INTERNAL.format(col="s.rel_path")    # agent_sources alias 's'
-    INV_F = NOT_INTERNAL.format(col="i.rel_path")   # agent_pdf_inventory alias 'i'
+    WR_F = NOT_INTERNAL.format(col="w.rel_path")    # work_extraction_routing alias 'w'
     DM_F = NOT_INTERNAL.format(col="rel_path")      # agent_doc_markdown
     SD_F = NOT_INTERNAL.format(col="rel_path")      # agent_search_docs
 
@@ -754,11 +754,15 @@ async def api_pipeline_status(slug: str):
     """)
 
     # Schritte 4-6 nutzen kanonische Files als Maßstab
+    # Achtung: work_extraction_routing.file_id verweist auf agent_sources.id,
+    # NICHT auf agent_pdf_inventory.id (Schema-Kommentar in alten Migrations
+    # ist veraltet — pdf_inventory enthaelt nur PDFs, routing aber alle
+    # Formate inkl. DWG/JPG/PNG/XLSX). Wir filtern daher direkt auf
+    # work_extraction_routing.rel_path, ohne JOIN.
     n_routed = _count(f"""
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
-        JOIN ds.agent_pdf_inventory i ON i.id = w.file_id
-        WHERE w.engine IS NOT NULL AND w.engine != '' AND {INV_F}
+        WHERE w.engine IS NOT NULL AND w.engine != '' AND {WR_F}
     """)
     n_extracted = _count(
         f"SELECT COUNT(DISTINCT file_id) FROM ds.agent_doc_markdown WHERE {DM_F}"
