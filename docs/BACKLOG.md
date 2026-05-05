@@ -1255,25 +1255,46 @@ gesehen und bearbeitet werden"*
 Beobachtet 2026-04-25 nach den Run-Strip-Updates (Commits 829fd65,
 6200002, 0e04dc9, 77f71ea):
 
-### Bug 1: gleicher Run wird doppelt angezeigt
+### Bug 1: gleicher Run wird doppelt angezeigt — **Ursache identifiziert 2026-05-05**
 
-Beobachtet: `#3 extraction_routing_decision` erscheint zweimal im
-Strip (einmal mit slug-Badge `bew-rsd-lager-halle`, einmal ohne).
+Beobachtet 2026-04-25: `#3 extraction_routing_decision` zweimal im
+Strip. Wieder beobachtet 2026-05-05 nach Pipeline-Lauf in rea-denox:
+Run #25 zweimal, einmal mit slug-Tag `bew-rsd-rea-denox`, einmal ohne
+sichtbares Tag.
 
-Vermutete Ursache: derselbe Run-Eintrag liegt sowohl in
-`state._runStripFinished` (lokal, localStorage-persisted) als auch in
-`data.recent_finished` (Backend-Antwort). `_runStripAddFinished` hat
-einen Dedup-Lookup ueber `${project_slug}:${id}`, aber wenn das
-project_slug-Feld in einer der zwei Quellen fehlt oder anders
-formatiert ist (z.B. leer vs. richtiger slug), wird der Lookup nicht
-matchen und der Eintrag landet zweimal.
+**Ursache (verifiziert 2026-05-05):** Field-Inkonsistenz zwischen den
+beiden Backend-Endpoints, die den finished-Strip fuettern:
 
-**Fix-Ansatz**: 
-- Dedup robuster machen: nicht nur Key vergleichen, sondern bei leerem
-  slug auf `flow_name + id` fallback
-- Im Backend sicherstellen, dass `project_slug` in `recent_finished`
-  immer gefuellt ist (heute haben wir das via Slug-Resolution, sollte
-  klappen — Logging im Backend bei NULL)
+| Endpoint | `project_slug` |
+|---|---|
+| `/api/workspace/active-runs` → `recent_finished[]` | `'bew-rsd-rea-denox'` ✅ |
+| `/api/workspace/projects/{slug}/runs/{id}` (fading-active-Pfad) | `None` ❌ |
+
+`_runStripAddFinished` baut den Dedup-Key als `${project_slug}:${id}`:
+
+1. Pfad B (`recent_finished`) liefert ein vollstaendiges Run-Objekt
+   → fkey = `'bew-rsd-rea-denox:25'` → unshift, Eintrag #1 mit Tag.
+2. Pfad A (fading-active, async via `runStripFetchFinal`) liefert
+   `project_slug: None` → fkey = `'null:25'` → findIndex matched
+   Eintrag #1 nicht (anderer Key) → unshift, Eintrag #2 ohne Tag.
+
+Daher der Doppel: erst der saubere Eintrag mit Tag, dann der
+verkrueppelte mit fehlendem Slug. Beim Reload verschwindet's, weil
+`runStripPoll` ohne aktiven Run kein Pfad-A-Trigger hat — nur Pfad B
+laeuft, und der ist sauber.
+
+**Fix-Ansatz (zwei Optionen, eine reicht):**
+- **Backend (sauberer):** `/api/workspace/projects/{slug}/runs/{id}`
+  soll `project_slug` aus dem URL-Parameter mitliefern.
+- **Frontend (defensiv):** in `runStripFetchFinal` den Slug aus `prev`
+  nachtragen, wenn fehlt:
+  ```js
+  finalRun.project_slug = finalRun.project_slug || prev.project_slug;
+  ```
+
+Empfehlung: **beide**. Backend-Fix korrigiert die API-Inkonsistenz
+generell (relevant fuer kuenftige Konsumenten); Frontend-Fix als
+Belt-and-Suspenders gegen aehnliche Reports-Drifts.
 
 ### Bug 2: Counter springt nicht auf 100% (1720/1721 bleibt)
 
