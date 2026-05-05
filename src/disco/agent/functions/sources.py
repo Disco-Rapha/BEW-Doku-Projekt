@@ -62,12 +62,20 @@ def _iso_mtime(epoch: float) -> str:
 
 
 def _is_ignored(rel_path: Path) -> bool:
-    """True wenn dieser Pfad beim Scan uebersprungen wird."""
+    """True wenn dieser Pfad beim Scan uebersprungen wird.
+
+    Konvention (siehe CLAUDE.md): Pfad-Parts mit '_'- oder '.'-Prefix sind
+    INTERN und werden generell ignoriert — egal ob Ordner (_meta/, .git/)
+    oder Datei (_manifest.md, .DS_Store, .gitignore). Das haelt die
+    Registry konsistent mit dem Pipeline-Status-Filter, der dieselbe
+    Konvention anwendet.
+    """
     parts = rel_path.parts
-    # Top-Level-Ignore (z.B. _meta/)
-    if parts and parts[0] in SCAN_IGNORE_TOP:
-        return True
-    # Sonder-Pattern irgendwo im Pfad
+    # '_'- oder '.'-Prefix in irgendeinem Pfad-Part: intern, ignorieren
+    for p in parts:
+        if p.startswith("_") or p.startswith("."):
+            return True
+    # Sonder-Pattern irgendwo im Pfad (zusaetzlich zu Prefix-Filter)
     for p in parts:
         if p in SCAN_IGNORE_PATTERNS:
             return True
@@ -381,11 +389,13 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
         "Scannt den gewaehlten Scope (sources/, context/ oder beides) rekursiv "
         "und aktualisiert die agent_sources-Registry. Erkennt neue, geaenderte "
         "und geloeschte Dateien ueber sha256-Hash-Vergleich. Idempotent — "
-        "Wiederholung auf unveraendertem Stand liefert 0 Delta. Ordner '_meta' "
-        "wird ignoriert. Nach dem Scan wird agent_pdf_inventory (Input der "
-        "PDF-Pipeline) automatisch synchronisiert — damit laufen Context-PDFs "
-        "durch *dieselben* Flows (extraction_routing_decision, extraction) wie "
-        "Source-PDFs, nur mit kind='context'."
+        "Wiederholung auf unveraendertem Stand liefert 0 Delta. Pfad-Parts "
+        "mit '_'- oder '.'-Prefix (z.B. _meta/, _manifest.md, .DS_Store) "
+        "gelten als intern und werden ignoriert. Nach dem Scan wird "
+        "agent_pdf_inventory (Input der PDF-Pipeline) automatisch synchroni- "
+        "siert — damit laufen Context-PDFs durch *dieselben* Flows "
+        "(extraction_routing_decision, extraction) wie Source-PDFs, nur "
+        "mit kind='context'."
     ),
     parameters={
         "type": "object",
@@ -393,14 +403,17 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
             "scope": {
                 "type": "string",
                 "enum": ["sources", "context", "both"],
+                "default": "both",
                 "description": (
                     "Welcher Unterbaum gescannt wird. "
-                    "'both' (Default) scannt nacheinander sources/ UND context/ "
-                    "— in der Regel das, was man will, damit context-PDFs auch "
-                    "ins agent_pdf_inventory wandern und durch die Pipeline "
-                    "laufen koennen. "
-                    "'sources' scannt nur sources/ und tagged kind='source'. "
-                    "'context' scannt nur context/ und tagged kind='context'."
+                    "**Lass diesen Parameter in der Regel weg** — der "
+                    "Default 'both' scannt sources/ UND context/ nacheinander, "
+                    "was fast immer das Gewuenschte ist (damit context-PDFs "
+                    "auch ins agent_pdf_inventory wandern und durch die "
+                    "Pipeline laufen koennen). "
+                    "Setze scope NUR explizit, wenn der Nutzer ausdruecklich "
+                    "nur einen Unterbaum will: 'sources' nur sources/ "
+                    "(kind='source'), 'context' nur context/ (kind='context')."
                 ),
             },
             "subpath": {
