@@ -722,22 +722,38 @@ async def api_pipeline_status(slug: str):
     )
 
     # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
-    # agent_source_metadata ODER agent_sharepoint_docs
+    # agent_source_metadata ODER agent_sharepoint_docs.
+    # Soll-Menge = kanonische Files (Duplikate brauchen keine separate
+    # Anreicherung, sie zeigen ueber duplicate-of auf das kanonische
+    # Original).
     has_meta = _count(f"""
         SELECT COUNT(DISTINCT s.id)
         FROM ds.agent_sources s
         JOIN ds.agent_source_metadata m ON m.source_id = s.id
         WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+        AND NOT EXISTS (
+            SELECT 1 FROM ds.agent_source_relations r
+            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
+        )
     """)
     has_sp = _count(f"""
         SELECT COUNT(DISTINCT s.id)
         FROM ds.agent_sources s
         JOIN agent_sharepoint_docs sp ON sp.FileName = s.filename
         WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+        AND NOT EXISTS (
+            SELECT 1 FROM ds.agent_source_relations r
+            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
+        )
     """)
     n_enriched = _count(f"""
         SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
-        WHERE s.status='active' AND {AS_F} AND {EXT_AS} AND (
+        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+        AND NOT EXISTS (
+            SELECT 1 FROM ds.agent_source_relations r
+            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
+        )
+        AND (
             EXISTS (SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id)
             OR EXISTS (SELECT 1 FROM agent_sharepoint_docs sp WHERE sp.FileName = s.filename)
         )
@@ -859,14 +875,16 @@ async def api_pipeline_status(slug: str):
             "step_order": 2, "step_name": "Externe Anreicherung",
             # Wenn keine externe Quelle existiert (Begleit-Excel/SP), ist
             # der Schritt n.a. — n_total=0 hält die Zahlen ehrlich.
-            "n_total": n_registered if has_any_external else 0,
+            # Sonst: Soll = kanonische Files (Duplikate brauchen keine
+            # separate Anreicherung).
+            "n_total": n_canonical if has_any_external else 0,
             "n_done": n_enriched,
             "n_failed": 0, "n_unsupported": 0,
-            "n_pending": max(0, n_registered - n_enriched) if has_any_external else 0,
+            "n_pending": max(0, n_canonical - n_enriched) if has_any_external else 0,
             "status": "grey" if not has_any_external else _status(
-                n_done=n_enriched, n_total=n_registered,
+                n_done=n_enriched, n_total=n_canonical,
             ),
-            "label": "n.a." if not has_any_external else f"{n_enriched} / {n_registered}",
+            "label": "n.a." if not has_any_external else f"{n_enriched} / {n_canonical}",
         },
         {
             "step_order": 3, "step_name": "Kanonik",
