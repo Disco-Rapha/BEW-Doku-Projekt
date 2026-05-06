@@ -104,14 +104,24 @@ FOUNDRY_PRICING: dict[str, TokenPrice] = {
 
     # Deployment: gpt-5.4-prod
     # Modell:     gpt-5.4
-    # Quelle:     User-Vorgabe 2026-04-27 (Microsoft-EUR-Listpreis fuer
-    #             Sweden-Central-Data-Zone noch nicht offiziell publiziert).
-    # Cached:     90% Rabatt vom Input (gpt-5.4 hat global $0.25 vs $2.50
-    #             Input → 90% Rabatt; Faktor uebernommen).
+    # Tier:       Data Zone Standard (Sweden Central) — wird von uns
+    #             benutzt, ist von Microsoft aber noch NICHT separat
+    #             publiziert (Stand 2026-05-06).
+    # Quelle:     Extrapoliert aus Microsoft-publiziertem Global-Tarif
+    #             (Global: 2.14 / 0.22 / 12.82) mit dem empirischen
+    #             Aufschlag aus gpt-5.1 (Global→Data-Zone ~+10%):
+    #               Input  2.14 * 1.103 ≈ 2.36
+    #               Cached 0.22 * 1.091 ≈ 0.24
+    #               Output 12.82 * 1.101 ≈ 14.10
+    # WICHTIG:    Sobald Microsoft den Data-Zone-Tarif publiziert,
+    #             gegen die Liste verifizieren. Alte Werte vom
+    #             2026-04-27 (2.30 / 0.23 / 14.50) waren freie
+    #             User-Schaetzung — die aktualisierten Werte sind
+    #             besser begruendet.
     "gpt-5.4-prod": TokenPrice(
-        input_eur_per_1m=2.30,
-        cached_input_eur_per_1m=0.23,
-        output_eur_per_1m=14.50,
+        input_eur_per_1m=2.36,
+        cached_input_eur_per_1m=0.24,
+        output_eur_per_1m=14.10,
     ),
 }
 
