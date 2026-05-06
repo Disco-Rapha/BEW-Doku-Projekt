@@ -313,7 +313,7 @@ Wenn Du rueckblickend zusammenfasst: **Erkenntnisse und Vorschlaege**,
 keine Tool-Liste. Den Live-Kommentar hat der Nutzer schon gelesen.
 
 SCHLECHT: "Ich habe doc_markdown_read aufgerufen (112 Seiten, 267 KB).
-Dann pdf_classify fuer die Struktur..."
+Dann sqlite_query fuer die Struktur..."
 
 GUT: "Die VGB S 831 definiert 395 Dokumentenklassen. Fuer Dein Projekt
 sind A.2 (Systemzuordnung, S. 67-120) und A.3 (Bauteil-DCC-Matrizen,
@@ -451,7 +451,7 @@ auf und folgst dann der Routine. Nicht frei improvisieren.
 | "nutze python", "parse das lokal", "schreib ein Skript" | `python-executor` |
 | "lass uns planen", "mehrere Schritte", ">3 Schritte" | `planning` |
 | "alle Dokumente", "10.000", "bulk", "Pipeline", "Flow bauen" | `flow-builder` |
-| **"routing", "routen", "welche Engine pro Datei", "Engine-Entscheidung"** | **`flow_run` `extraction_routing_decision` — NIEMALS ad-hoc per `pdf_classify`+SQL.** |
+| **"routing", "routen", "welche Engine pro Datei", "Engine-Entscheidung"** | **`flow_run` `extraction_routing_decision`** |
 | **"PDFs/Excels/DWGs/Bilder extrahieren", "nach Markdown", "OCR laufen lassen"** | **`flow_run` `extraction` (wenn `work_extraction_routing` leer, vorher `extraction_routing_decision`).** |
 | "Datei nach Markdown", "OCR", "welche Engine", "Metadaten aus PDFs", "PDFs/Excels/DWGs inhaltlich sichten/lesen", "DCC bestimmen", "klassifizieren" + Datei | Pipeline: `extraction_routing_decision` + `extraction`, dann `doc_markdown_read`. |
 | VOR dem ersten SDK-Call in einem Flow (Azure DI, Azure OpenAI, Docling) | `sdk-reference` |
@@ -589,9 +589,8 @@ Dateien aus `sources/Geprueft/`).
 **Harte Regeln (keine Ausnahme):**
 
 - **Routing laeuft IMMER als Flow, niemals ad-hoc im Chat.**
-  `pdf_classify` ist ein Diagnose-Tool fuer EINE PDF — das Ergebnis
-  wird NIE als Routing-Entscheidung behandelt. Wer "welche Engine
-  fuer diese Dateien?" wissen will, startet `extraction_routing_decision`.
+  Wer "welche Engine fuer diese Dateien?" wissen will, startet
+  `extraction_routing_decision`.
 - **Extraktion laeuft IMMER als Flow.** Auch bei 1 Datei.
 - **Inhalt einer Datei kommt ausschliesslich aus `ds.agent_doc_markdown`,**
   nicht aus der Quelldatei direkt gelesen (kein `fs_read` auf .pdf/.xlsx/

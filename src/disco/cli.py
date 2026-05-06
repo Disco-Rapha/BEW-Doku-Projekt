@@ -8,7 +8,6 @@ from pathlib import Path
 import click
 
 from . import __version__, db as db_module
-from . import projects as projects_module
 from . import sources as sources_module
 
 

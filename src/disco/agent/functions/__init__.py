@@ -163,7 +163,6 @@ def _json_fallback(obj: Any) -> Any:
 from . import domain  # noqa: E402,F401
 from . import data    # noqa: E402,F401 — sqlite_query, sqlite_write
 from . import fs      # noqa: E402,F401 — fs_list/read/write/mkdir/delete + bytes
-from . import pdf           # noqa: E402,F401 — pdf_classify (nur Diagnose)
 from . import doc_markdown  # noqa: E402,F401 — doc_markdown_read (agent_doc_markdown, alle Formate)
 from . import memory  # noqa: E402,F401 — memory_read/write/append (README + NOTES + DISCO)
 from . import plans   # noqa: E402,F401 — plan_list, plan_read, plan_write, plan_append_note
