@@ -564,8 +564,7 @@ Der Workflow ist fuer jedes Format identisch — nur die Engine wechselt.
    schreibt pro Datei eine Engine-Entscheidung nach
    `work_extraction_routing` (`file_kind`, `engine`, `reason`).
    Engines pro Format:
-   - **PDF:** `pdf-azure-di` (Default), `pdf-azure-di-hr` (Plaene/Bilder),
-     `pdf-docling-standard` (lokal, opt-in)
+   - **PDF:** `pdf-azure-di` (Default), `pdf-azure-di-hr` (Plaene/Bilder)
    - **Excel:** `excel-table-import` (in `context/`), `excel-openpyxl` (in `sources/`)
    - **DWG/DXF:** `dwg-ezdxf-local`
    - **Bild:** `image-gpt5-vision`

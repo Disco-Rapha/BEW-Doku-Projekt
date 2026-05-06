@@ -930,22 +930,6 @@ Gesammelt direkt nach der PDF-Pipeline-Umstellung (Routing-Flow +
 pdf_to_markdown + agent_pdf_markdown). Geordnet nach Risiko, nicht
 nach Aufwand.
 
-### Setup-Fallstrick: Offline-Default vs. frischer HF-Cache (Priorität: hoch)
-
-Default in `.env.example` + `src/disco/config.py` ist
-`HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 / HF_DATASETS_OFFLINE=1`.
-Die `docling-standard`-Engine braucht aber beim ersten Gebrauch die
-Modelle (DocLayNet + TableFormer + EasyOCR) lokal im
-`~/.cache/huggingface/` — auf einer frischen Maschine laeuft der erste
-`pdf_to_markdown`-Run mit Offline-Flags ins Leere.
-
-Heute: Erst-Priming haendisch dokumentiert (config.py-Docstring,
-.env.example) — User muss einmalig `HF_HUB_OFFLINE=0 ...` fahren.
-
-Offen: sauberes `disco models prime`-Kommando (oder Check beim ersten
-Flow-Start: "Cache fehlt, soll ich die Modelle jetzt ziehen?"). Ohne
-das wird jeder neue Entwickler einmal stolpern.
-
 ### Keine automatisierten Tests fuer die PDF-Pipeline (Priorität: hoch)
 
 `tests/` existiert nur als leeres Gerüst (`tests/uat/`), keine

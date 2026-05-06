@@ -27,23 +27,20 @@ fuer alle Bestandseintraege.
 
 | file_kind | Engines (Default zuerst)                                   |
 |-----------|------------------------------------------------------------|
-| pdf       | `pdf-azure-di`, `pdf-azure-di-hr`, `pdf-docling-standard`  |
+| pdf       | `pdf-azure-di`, `pdf-azure-di-hr`                          |
 | excel     | `excel-openpyxl` (sources), `excel-table-import` (context) |
 | dwg       | `dwg-ezdxf-local`                                          |
 | image     | `image-gpt5-vision`                                        |
 
 ## Heuristiken
 
-### PDF (3-Tier wie bisher, Stand 2026-04-25)
-
-Sticky-Rules (strikte Reihenfolge):
+### PDF (Sticky-Rules, strikte Reihenfolge)
 
 1. `n_vdrawing_pages > 0` → `pdf-azure-di-hr` (KKS-Labels, Zeichnungskopf)
 2. `max_page_width_pt > 1000` → `pdf-azure-di-hr` (A3+, feine Schriften)
 3. `n_large_image_pages > 0` → `pdf-azure-di-hr` (Grossbild-OCR)
 4. `n_scan_pages > 0` → `pdf-azure-di` (A4-Standard-OCR)
-5. else → `pdf-azure-di` (Default seit Bench-Entscheid 2026-04-25, statt
-   `pdf-docling-standard` wegen 4% Halluzinations-Rate)
+5. else → `pdf-azure-di` (Default)
 
 ### Excel
 

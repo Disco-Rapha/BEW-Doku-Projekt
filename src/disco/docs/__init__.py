@@ -14,7 +14,6 @@ Engine-Naming-Konvention:
 
   pdf-azure-di          (Standard-OCR)
   pdf-azure-di-hr       (4x DPI High-Resolution)
-  pdf-docling-standard  (lokal, MPS)
   excel-openpyxl        (Sheets als Markdown-Tabellen)
   excel-table-import    (Sheets direkt als SQL-Tabellen, fuer context/)
   dwg-ezdxf-local       (DXF/DWG via ezdxf, ODA File Converter fuer DWG)
@@ -61,7 +60,7 @@ def file_kind_from_path(path: Path | str) -> str:
 
 # Engine-Listen pro file_kind — die Default-Engine steht jeweils zuerst.
 ENGINES_BY_KIND: dict[str, list[str]] = {
-    "pdf": ["pdf-azure-di", "pdf-azure-di-hr", "pdf-docling-standard"],
+    "pdf": ["pdf-azure-di", "pdf-azure-di-hr"],
     "excel": ["excel-openpyxl", "excel-table-import"],
     "dwg": ["dwg-ezdxf-local"],
     "image": ["image-gpt5-vision"],

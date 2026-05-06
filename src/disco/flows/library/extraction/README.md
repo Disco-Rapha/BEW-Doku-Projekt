@@ -30,7 +30,6 @@ Bestand bleibt erhalten (`file_kind='pdf'` als Default).
 |-----------------------------|--------|---------------------------------|--------------------|
 | `pdf-azure-di`              | pdf    | `disco.docs.pdf` → azure-di      | 8,68 EUR / 1000 p  |
 | `pdf-azure-di-hr`           | pdf    | `disco.docs.pdf` → azure-di-hr   | 13,89 EUR / 1000 p |
-| `pdf-docling-standard`      | pdf    | `disco.docs.pdf` → docling-standard | 0 EUR (lokal)   |
 | `excel-openpyxl`            | excel  | `disco.docs.excel`              | 0 EUR              |
 | `excel-table-import`        | excel  | `disco.docs.excel` + Tabellen-Side-Effect | 0 EUR     |
 | `dwg-ezdxf-local`           | dwg    | `disco.docs.dwg`                | 0 EUR              |
@@ -79,7 +78,7 @@ mit Spalten + Zeilenanzahl.
 ```json
 {
   "limit": 100,                          // optional, Testlauf
-  "only_engine": "pdf-docling-standard", // optional, eine Engine isoliert
+  "only_engine": "pdf-azure-di-hr",       // optional, eine Engine isoliert
   "only_kind": "excel",                  // optional, ein Format isoliert
   "force_rerun": true,                    // optional, Skip-Logik aushebeln
   "model": "gpt-5.4-prod"                 // optional, LLM-Modell-Override

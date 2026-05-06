@@ -244,13 +244,8 @@ def _decide_pdf(abs_path: Path) -> tuple[str, str, dict[str, Any]]:
         engine = "pdf-azure-di"
         reason = f"{n_scan} A4-Scan-Seite(n) ohne Plan/Grossbild"
     else:
-        # Bench 2026-04-25 hat bestaetigt: docling halluziniert auf
-        # ~4% der Text-PDFs. Default bleibt deshalb azure-di.
         engine = "pdf-azure-di"
-        reason = (
-            f"text-dominant ({n_text}t/{n_mixed}m) → azure-di "
-            f"(Default seit Bench-Entscheid 2026-04-25)"
-        )
+        reason = f"text-dominant ({n_text}t/{n_mixed}m) → azure-di"
 
     heur = {
         "n_pages": n_pages,

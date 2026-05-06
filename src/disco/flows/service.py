@@ -426,14 +426,8 @@ def start_run(project_root: Path, run_id: int) -> RunInfo:
         "--project-root",
         str(project_root),
     ]
-    # Env fuer den Subprocess: erbt alles vom Parent, aber wir garantieren
-    # hier die Offline-Flags (HF_HUB_OFFLINE etc.) — Defence-in-Depth gegen
-    # den Fall, dass das Parent-os.environ sie nicht hat. Siehe config.py
-    # `_apply_offline_env`.
+    # Env fuer den Subprocess: erbt alles vom Parent.
     child_env = dict(os.environ)
-    child_env.setdefault("HF_HUB_OFFLINE", "1")
-    child_env.setdefault("TRANSFORMERS_OFFLINE", "1")
-    child_env.setdefault("HF_DATASETS_OFFLINE", "1")
 
     # Detached starten: start_new_session (Posix) bzw. DETACHED (Windows).
     popen_kwargs: dict[str, Any] = {
