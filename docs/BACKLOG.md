@@ -1001,185 +1001,38 @@ Kosmetisch, nicht funktional.
 
 ---
 
-## Pipeline-Vollstaendigkeits-Sicht (Prioritaet: hoch)
+## Pipeline-Vollstaendigkeits-Sicht — DONE 2026-05-04
 
-Heute zerfaellt der Pipeline-Status auf vier Tabellen:
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL (siehe unten).
+Phase 1 (View + Sidebar-UI) live seit 2026-05-04, Phase-6-Schaerfung
+(Maßstab pro Schritt + Schema-Bug + Unsupported-Klasse) live seit
+2026-05-05/06.
 
-- `ds.agent_sources` — registriert
-- `work_extraction_routing` — Engine entschieden
-- `ds.agent_doc_markdown` — extrahiert
-- `ds.agent_search_docs` — im FTS-Index
+## Flow-UI im Chat-Fenster — DONE 2026-04-25
 
-Der User hat keinen einfachen Weg zu sehen "ist alles durchgelaufen?".
-Bei vielen Files (>100) wird das schnell unuebersichtlich.
-
-**Drei Ausbaustufen, kann inkrementell:**
-
-1. **Status-View pro Datei (V1, niedriger Aufwand)** — eine SQL-View
-   ueber die vier Tabellen, zeigt pro Datei vier Boolean-Spalten:
-   ```
-   rel_path | registered | routed | extracted | indexed | last_step_at
-   ```
-   Disco kann das per `sqlite_query` jederzeit zeigen, UI-seitig als
-   Ampel-Spalte in der Sidebar denkbar. Genau bei kleinen-bis-mittleren
-   Projekten ausreichend.
-
-2. **Lifecycle-Tabelle (V2, wenn V1 zu viele LEFT JOINs hat)** — eine
-   zentrale `agent_pipeline_status` mit einer Zeile pro Datei, Status
-   explizit gespeichert. Plus: bessere Filter wie "alle deren
-   Extraction aelter als die letzte Source-Hash-Aenderung". Kostet
-   Migration + Sync-Logik in jedem Pipeline-Schritt.
-
-3. **Hintergrund-Sync (V3, optional)** — `sources_register` triggert
-   automatisch `routing` + `extraction` + `indexing` als Flow-Chain.
-   "Self-healing" Pipeline. Caveat: weniger Kontrolle, hoehere Cloud-
-   Kosten ohne explizites Go vom User.
-
-**Empfehlung:** mit (1) starten. Bei Bedarf (2) drauflegen, (3) als
-opt-in fuer Standard-Workflows.
-
-User-Quote (2026-04-25): *"Wir werden uns darüber Gedanken machen
-müssen, wie wir wissen ob alle dateien registriert, geroutet,
-extrahiert und indexiert sind. Ich weiß nicht ob das demnächst
-einfach eine Hintergrundaktivität werden sollte, oder ob es ein
-Ampel-System gibt oder sowas."*
-
----
-
-## Flow-UI im Chat-Fenster (DONE 2026-04-25)
-
-*Erledigt: Commits 829fd65 + 6200002 + 0e04dc9 + 77f71ea. Alle vier Punkte umgesetzt — auffaelligeres Strip, finished-Runs bleiben mit Status-Badge + X-Button, Klick auf ganze Zeile, Runs im Flow-Detail nach oben. Plus Bonus: schnelle Runs (<3s) per recent_finished-API eingefangen, done-with-failures als Pseudo-Status (orange).*
-
-Beobachtungen aus dem Pipeline-Fulltest 2026-04-25 — kleine UX-
-Verbesserungen am Run-Strip oben im Chat:
-
-1. **Auffaelligkeit erhoehen** — die Run-Indikatoren oben im Chat-
-   Fenster sind heute leise. Wenn ein Flow laeuft, soll man das mit
-   einem Blick sehen (Hintergrund, Animation, Farbe).
-
-2. **Nach Ende sichtbar bleiben** — heute verschwindet ein Run aus
-   dem Strip, sobald er fertig ist. Soll: mit finalem Status (done /
-   failed / cancelled) **oben stehen bleiben, bis der User es weg-
-   klickt** (X-Button). So merkt man auch ueber Lange Pausen, dass
-   ein Flow durchgelaufen ist.
-
-3. **Klick auf Run-Indikator** soll:
-   - falls man nicht im richtigen Projekt ist: ins Projekt des
-     Flows springen, dann
-   - den Run selbst im Viewer oeffnen (gleiche View wie wenn man
-     im Flow → Liste-aller-Runs auf den Run klickt).
-
-4. **Run-Liste im Viewer (Flow-Detailansicht)** — die Runs eines
-   Flows sollen **oben** stehen (neueste zuerst), nicht unten am Ende
-   der Seite. Aktuell muss man zum Flow-Detailview scrollen.
-
-Quelle: User-Feedback waehrend Pipeline-Fulltest 2026-04-25.
+Erledigt: Commits 829fd65 + 6200002 + 0e04dc9 + 77f71ea. Run-Strip
+auffaelliger, finished-Runs bleiben mit Status-Badge, Klick auf
+ganze Zeile oeffnet Run, schnelle Runs <3s via recent_finished-API.
 
 ---
 
 ## Office-Formate in die Extraction-Pipeline (Prioritaet: hoch)
 
-Vergessen: **PowerPoint (.pptx)** und **Word (.docx)** muessen auch
-durch die Extraction-Pipeline. Heute wuerden sie:
-- in `agent_sources` registriert (extension wird gespeichert)
-- aber im `extraction_routing_decision`-Flow als `file_kind='other'` →
-  Routing-Engine `'skip'` → keine Extraktion, kein Suchindex
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL Phase 2 (siehe unten).
+DOCX/PPTX brauchen Engines (`python-docx`/`python-pptx`, MIT, lokal,
+0 EUR). Heute fallen sie als `file_kind='other'` durchs Raster.
 
-Heisst: Word- und PowerPoint-Dateien sind heute fuer Disco unsichtbar.
+User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir
+total vergessen :D Die muessen auch noch in die Pipeline."*
 
-### Was zu tun ist
+## Extraction nur auf kanonische Dateien — DONE 2026-05-05
 
-**Engines:**
-- `docx-python-docx` — mit [python-docx](https://github.com/python-openxml/python-docx) (MIT). Ueberschriften, Absaetze, Tabellen, Listen → Markdown.
-- `pptx-python-pptx` — mit [python-pptx](https://github.com/scanny/python-pptx) (MIT). Pro Slide ein Markdown-Block: Titel + Body-Text + Notes + Tabellen.
-- Ggf. ein DOCX-Konverter ueber **mammoth** (MIT) als 2. Engine fuer komplexeres Markup.
+Erledigt: `extraction_routing_decision/runner.py` filtert seit
+Commit c9b6374 Files mit `duplicate-of`-Relation (from-Seite) aus
+dem Input. Effekt rea-denox: 5790 → 1775 kanonische Routings.
 
-**Schema:**
-- Erweiterung `disco/docs/__init__.py`:
-  - `_KIND_BY_EXT` um `'docx': 'office'`, `'pptx': 'office'`
-  - oder `'docx': 'docx'`, `'pptx': 'pptx'` als eigene Kinds
-  - `ENGINES_BY_KIND` entsprechend erweitern
-- Routing in `disco/docs/routing.py`: `_decide_office()` (oder pro Format)
-- Neue Module `disco/docs/docx.py`, `disco/docs/pptx.py` analog zu `excel.py` / `dwg.py`
-- INDEXABLE_EXTENSIONS in `search.py` um `.docx`, `.pptx` erweitern, in `_FROM_DOC_MARKDOWN_EXTS` (lesen aus agent_doc_markdown)
-
-**Unit-Modell:**
-- DOCX: pro Section (Heading-1) ein unit, oder ganzes Dokument als unit_label='document'
-- PPTX: pro Slide ein unit (label = Slide-Titel oder "slide-N")
-
-**Cost:** lokal, 0 EUR. Bei DOCX mit eingebetteten Bildern spaeter ggf. Bilder per VLM-Engine extrahieren (Phase 2).
-
-**Auswirkung auf bestehende Projekte:** keine breaking changes. Bestand-Files mit `file_kind='other'` werden bei naechstem Routing-Run als `docx` / `pptx` neu klassifiziert.
-
-User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir total vergessen :D Die muessen auch noch in die Pipeline."*
-
----
-
-## Extraction nur auf kanonische Dateien (Prioritaet: hoch)
-
-Heute extrahiert die Pipeline **alle** aktiven `agent_sources`-Eintraege —
-auch Duplikate (gleicher Hash, anderer Pfad), abgeloeste Vorgaenger
-(`replaces`/`replaced-by`-Relation) und Format-Konversionen
-(`format-conversion-of`). Das verschwendet Cost und macht den Suchindex
-mehrdeutig.
-
-**Soll-Zustand:** Extraction laeuft nur auf den **kanonischen** Repraesentanten.
-Disco weiss das und der Routing-Flow filtert entsprechend.
-
-### Was "kanonisch" konkret heisst
-
-Eine Datei ist kanonisch, wenn fuer ihren Inhalt kein anderer Eintrag
-in `agent_source_relations` mit groesserer "Praeferenz" existiert:
-
-- **NICHT** `duplicate-of` einer anderen aktiven Datei (dann ist die andere kanonisch)
-- **NICHT** `replaces`-Source eines anderen Eintrags (dann ist die neuere kanonisch)
-- **NICHT** `format-conversion-of` (z.B. PDF aus DWG konvertiert — wenn die Original-DWG da ist, ist das DWG kanonisch)
-- Status `active`
-
-### Was zu tun ist
-
-1. **Routing-Filter**: Im `extraction_routing_decision`-Item-Loader Sub-Query
-   gegen `agent_source_relations` einbauen, nicht-kanonische Files skippen.
-2. **System-Prompt**: Disco-Regel dass er bei Pipeline-Vorschlaegen auf die
-   Kanonik-Logik hinweist ("ich extrahiere nur die kanonischen N Dateien
-   von M registrierten").
-3. **Heuristik fuer "neueste Revision"**: bei `replaces`-Ketten den Endknoten
-   nehmen. Bei `format-conversion-of` Mehrfachkanten klar definieren
-   (z.B. DWG-Original > PDF-Plot > JPEG-Screenshot).
-4. **Pipeline-Vollstaendigkeits-Sicht** (V1, anderer Backlog-Eintrag) muss
-   das beruecksichtigen: "registriert" vs "kanonisch" vs "extrahiert".
-
-### Auswirkung
-
-- Spart Cost (Schaetzung: 20-40% bei Projekten mit Revisions-Historie)
-- Sauberer Suchindex (keine doppelten Treffer auf identischem Inhalt)
-- Reasoning-Sicherheit (keine Verwirrung welche Version "die richtige" ist)
-
-### Begriffsklaerung (2026-04-26)
-
-Drei Counts pro Projekt — alle nuetzlich, leicht zu verwechseln:
-
-| Begriff | Definition | SQL |
-|---|---|---|
-| **registered** | aktive Eintraege in `agent_sources` | `COUNT(*) WHERE status='active'` |
-| **unique** / **distinct** | Anzahl eindeutiger sha256-Hashes | `COUNT(DISTINCT sha256)` |
-| **kanonisch** | bevorzugter Repraesentant nach Konsolidierung von Duplikaten + Versionen + Format-Konversionen | gefiltert ueber `agent_source_relations` |
-
-**Heute (Stand 2026-04-26):** `sources_detect_duplicates` schreibt nur
-`kind='duplicate-of'` (sha256-Gruppen). `replaces` und
-`format-conversion-of` sind im Schema vorgesehen, werden aber von keinem
-Tool gefuellt. Damit ist heute **kanonisch == unique-by-hash**, eine
-echte Konsolidierung ueber Versionen passiert nicht.
-
-Auswirkung auf den Filter: heute reicht ein Filter auf `duplicate-of`
-um den 80%-Effekt zu erreichen (siehe rea-denox: 5963 → 1883 Files,
-68% Reduktion). Sobald `replaces`/`format-conversion-of` gefuellt
-werden, wird der Filter strenger und reduziert nochmal.
-
----
-
-User-Quote (2026-04-25): *"Extraction machen wir nur auf kanonische
-dateien. Das sollte disco wissen."*
+`replaces` und `format-conversion-of` sind im Schema vorgesehen,
+aber noch nicht gefuellt — bleibt als Phase-3 in ★-Konsolidat.
 
 ---
 
@@ -1294,57 +1147,23 @@ durch ist. Der failed soll ja mitgezaehlt werden."*
 
 ---
 
-## Cost-Tracking fuer GPT-5.1-Vision-Aufrufe (Prioritaet: hoch)
+## Cost-Tracking fuer GPT-5.1-Vision-Aufrufe — DONE 2026-05-06
 
-Heute: `disco/docs/image.py` setzt `estimated_cost_eur = 0.0`
-hardcoded und speichert nur die Token-Counts in `meta_json`. Damit
-zeigen `agent_flow_runs.total_cost_eur` und der Run-Strip fuer
-Bild-Engines immer 0,00 €, obwohl jeder Vision-Call Foundry-Tokens
-verbraucht.
+Erledigt:
+- Zentrales `disco/pricing.py` mit Sweden-Central-Data-Zone-Standard-
+  EUR-Listpreisen (2026-05-06 von User gegen Microsoft-Pricing-Seite
+  verifiziert).
+- `disco/docs/image.py` rechnet seit Commit 7f33a8f mit echten
+  Tokens × Tarif.
+- `flows/sdk._extract_usage` extrahiert seit Commit dbbd725 auch
+  `cached_tokens` aus der Foundry-Antwort und reicht sie an
+  `compute_cost_eur` weiter — Cached-Input-Discount greift jetzt.
+- gpt-5.1-Tarife auf User-Verifikation (1.18/0.12/9.41) korrigiert
+  (Commit 84d68fe), gpt-5.4-prod aus Global-Tarif extrapoliert
+  (2.36/0.24/14.10, Commit 25f1c3b).
 
-Bestand-Beispiel (pipeline-fulltest, 3 Bilder):
-- ~3 151 prompt + 708 completion = **3 859 Tokens**, aber 0 EUR
-  ausgewiesen.
-
-### Was zu tun ist
-
-1. **Pricing-Modul**: `disco/pricing.py` mit zentraler Definition pro
-   Foundry-Modell. Beispiel-Struktur:
-   ```python
-   FOUNDRY_PRICING_EUR_PER_1M_TOKENS = {
-       "gpt-5.1": {"input": ..., "cached_input": ..., "output": ...},
-       "gpt-5":   {...},
-   }
-   ```
-   Mit Audit-Datum + EUR/USD-Wechselkurs-Annahme im Modul-Doc.
-2. **In `image.py`** Cost berechnen:
-   ```python
-   cost = (prompt_tokens * P["input"] + completion_tokens * P["output"]) / 1_000_000
-   meta["estimated_cost_eur"] = round(cost, 5)
-   ```
-3. **Cached-Input-Tokens beruecksichtigen**: Foundry liefert in der
-   Usage `cached_tokens`. Cached zaehlt zu reduziertem Preis. Bei
-   wiederholtem Vision-Call auf identisches System-Prompt-Praefix
-   greift der Cache stark.
-4. **System-Prompt-Cache nutzen** (Backlog-Querverweis): wenn wir
-   Foundry-Cache-Hits drueben haben, koennen wir die System-Prompt-
-   Bytes als Cache-Praefix markieren — drastische Cost-Reduktion bei
-   Bulk-Vision-Laeufen ueber 100+ Bilder.
-
-### Auswirkung auf andere Engines
-
-- `pdf-azure-di` / `pdf-azure-di-hr`: rechnen heute korrekt mit
-  `_AZURE_DI_LAYOUT_EUR_PER_PAGE` (= 8,68 / 13,89 EUR pro 1000 p).
-- `pdf-docling-standard` / `excel-*` / `dwg-*`: 0 EUR ist korrekt
-  (lokal, keine Cloud).
-- `image-gpt5-vision`: hier sind wir schief.
-
-### Folge: Bestand korrigieren?
-
-Pro betroffenem Run koennten wir nachtraeglich aus `meta_json`
-(prompt_tokens / completion_tokens) den EUR-Betrag rechnen und in
-`agent_flow_runs.total_cost_eur` per Update korrigieren. Klein, aber
-historische Daten stimmen wieder.
+Bestand-Korrektur: nicht durchgefuehrt (cached_tokens sind nicht
+historisch persistiert). Neue Flow-Runs rechnen ab sofort korrekt.
 
 User-Quote (2026-04-25): *"tracken wir eigentlich schon was uns der
 gpt aufruf mit den bildern kostet im flow?"*
@@ -1353,97 +1172,11 @@ gpt aufruf mit den bildern kostet im flow?"*
 
 ## Anhaltspunkte fuer `replaces` und `format-conversion-of` (Vertiefung)
 
-Konkrete Erkennungs-Patterns als Implementierungs-Vorlage fuer den
-Filter "Extraction nur auf kanonische Dateien". Stufung von schnell
-(Filename-Heuristik, kein Inhalt) zu maechtig (Embeddings, LLM).
-
-### Replaces — Versionsketten
-
-**Stufe 1 — Filename-Versions-Suffixe** (deterministisch, lokal, schnell):
-
-| Pattern | Reihenfolge | In rea-denox-Pool gefunden |
-|---|---|---|
-| `_R0A_V00` / `_R0B_V00` / `_R0C_V00` | A→B→C | ja, sehr haeufig (Tekla/CAD-Konvention) |
-| `_R00_V00` / `_R00_V01` / `_R00_V03` | nu­merisch | ja (Statik-Berechnungen) |
-| `_R0A_V00` / `_R0A_V01` / `_R0A_V02` | nu­merisch | ja (Mehrfach-Iteration auf Rev.A) |
-| `_v1` / `_v2` / `_v2.0` | nu­merisch | ja (`_V01`, `_V02`) |
-| `_RevA` / `_RevB` | alpha­be­tisch | gelegentlich |
-| `_alt` / `_old` / `_obsolet` / `_neu` / `_aktuell` | semantisch | ja (`_obsolet!`-Suffix klar) |
-| ` (1)` / ` (2)` / ` (3)` | nu­merisch | ja (Windows-Copy-Suffix — meist Hash-Duplikat) |
-| ISO-Datum `_2024-09-19` / `_240919` | chrono­logisch | ja (`240607_`, `240816_`, `240919_` Praefixe) |
-
-**Vorgehen:**
-1. Stamm-Stem-Normalisierung: alle bekannten Suffixe entfernen
-2. Im selben Ordner gruppieren (Cross-Ordner ist riskant)
-3. Suffix-Reihenfolge → "neueste" gewinnt
-4. Schreibe `replaces`-Relations: alle alten verweisen auf die neueste
-
-**Stufe 2 — Pfad-Hinweise:**
-- Subordner `/archiv/`, `/alt/`, `/Rev_A/`, `/superseded/` → Datei darin ist nicht-kanonisch
-- GU-spezifische Konventionen ggf. via Projekt-Konfig
-
-**Stufe 3 — Begleit-Excel (sources_attach_metadata):**
-- GU-Lieferindex-Spalte "Revision", "ersetzt durch", "Status"
-- Ergibt explizite Relations ohne Heuristik
-
-**Stufe 4 — PDF-Inhalt (Schriftfeld):**
-- pypdf/PyMuPDF: `/ModDate`, `/Title` aus PDF-Metadata
-- LLM-Extraktion aus dem Schriftfeld: "Index/Revision: B"
-- Zeitlich-juengste Rev gewinnt
-
-**Stufe 5 — Embedding-Aehnlichkeit (Phase 2c):**
-- Bei Markdown-Embedding-Cosine >= 0.92 zwischen zwei Files mit
-  unterschiedlichem Hash, gleicher Top-Level-Domain (DCC-Code o.ae.):
-  Versions-Kandidat fuer LLM-Bestaetigung
-
-### Format-conversion-of
-
-**Stufe 1 — Stem + andere Extension** (Heuristik, sehr verlaesslich):
-
-In rea-denox live gefunden:
-- `VGB-S-831 Anlage_A1_IBL_Begleitdokumentation` als `.pdf` + `.xlsx`
-- `Errichterbescheinigung` als `.docx` + `.pdf`
-- `Uebersichtsliste Sicherung` als `.xlsx` + `.pdf`
-- `Handover_Takeover_Plan_V01` als `.docx` + `.pdf`
-
-**Hierarchie (was gewinnt):**
-
-| Original | Konversion | Begruendung |
-|---|---|---|
-| `.dwg` | `.pdf` | DWG ist editierbar, PDF ist Plot |
-| `.docx` | `.pdf` | Original > Export |
-| `.xlsx` | `.pdf` | Daten > Snapshot |
-| `.dwg` | `.dxf` | DWG ist Master, DXF ist Austauschformat |
-
-Bei Mehrdeutigkeit (z.B. `.docx` + `.xlsx` mit gleichem Stem): heute
-nicht typisch, ggf. via Projekt-Konfig.
-
-**Stufe 2 — PDF-Producer-Tag** (sehr verlaesslich, lokal):
-- pypdf: `reader.metadata["/Producer"]`
-- Patterns:
-  - `"AutoCAD"`, `"Bluebeam Revu"` -> DWG-Plot
-  - `"Microsoft Word"`, `"Adobe PDF Library Word"` -> DOCX-Export
-  - `"Microsoft Excel"` -> XLSX-Export
-- Wenn Producer auf Originalformat hinweist UND ein File mit gleichem
-  Stem in dem Format existiert: starker `format-conversion-of`-Hinweis
-
-**Stufe 3 — Inhaltsabgleich:**
-- Schriftfeld-Texte aus DWG (libredwg) vs. PDF-OCR
-- >= 80 % der DWG-Schriftfeld-Texte im PDF wiederfindbar -> bestaetigt
-
-### Implementierungs-Plan
-
-1. **Stamm-Stem-Funktion** in `disco/docs/canonik.py` (oder als Teil der
-   sources-Logik). Liste der Suffix-Patterns konfigurierbar.
-2. **`sources_detect_replaces`-Tool** analog zu `sources_detect_duplicates`:
-   gruppiert nach Stamm-Stem, schreibt `replaces`-Relations.
-3. **`sources_detect_format_conversions`-Tool**: Stem + andere
-   Extension finden, PDF-Producer-Tag pruefen, schreibt
-   `format-conversion-of`-Relations.
-4. **Filter im `extraction_routing_decision`-Item-Loader** (Backlog-
-   Eintrag oben): Items skippen, die nicht-kanonisch sind.
-5. **Optional: re-run-Mode**: bei neu detektierten Relations laesst
-   sich die Pipeline auf den (jetzt) kanonischen Files re-run.
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL Phase 3. Detail-
+Patterns (Filename-Versions-Suffixe `_R0A`/`_R0B`, Pfad-Hinweise
+`/archiv/`, PDF-Producer-Tag, Stem-Match ueber Extensions) bleiben
+als Implementierungs-Vorlage erhalten — siehe Git-History dieser
+Datei vor 2026-05-06.
 
 User-Quote (2026-04-26): *"Welche anhaltspunkte haetten wir um
 replaces und format_converson-of zu ermitteln?"*
@@ -1871,341 +1604,31 @@ Hier muessen wir uns was einfallen lassen. Sollte mindestens
 expandable sein."*
 
 
-## Extraction-Pipeline-UX: Ampelsystem, Auto-Pipeline, Batch-Mode (Prioritaet: hoch)
+## Extraction-Pipeline-UX: Ampelsystem, Auto-Pipeline, Batch-Mode — TEILWEISE DONE 2026-05-04/05/06
 
-**Heutige Realitaet** (live durchgelitten 2026-04-26/27): die
-Pipeline von "Datei in sources/ kopiert" bis "im FTS5-Suchindex
-findbar" funktioniert grundsaetzlich, aber jeder Schritt muss
-einzeln vom User angestossen werden, jeder Zwischenstand kann
-ohne klare Anzeige drift­en, und Fehlermeldungen kommen ad-hoc
-("Datei nicht in agent_doc_markdown", "context_length_exceeded",
-"Pfad ohne Prefix"). Disco kann zwar alle Schritte ausfuehren,
-aber das Bild "wo stehen wir gerade pro Datei" ist nicht sichtbar.
-
-Heutige Schritt-Sequenz pro Paket neuer Dateien:
-
-1. Files in `sources/` kopieren (manuell)
-2. `sources_register` aufrufen → Hash, Groesse, Eintrag in
-   `agent_sources`
-3. Optional `sources_attach_metadata` (Begleit-Excel)
-4. Optional `sources_detect_duplicates`
-5. Flow `extraction_routing_decision` starten (entscheidet
-   pro File welche Engine) → schreibt in `work_extraction_routing`
-6. Flow `extraction` starten → liest Routing, ruft Engine an,
-   schreibt in `agent_doc_markdown`
-7. `build_search_index` aufrufen → liest `agent_doc_markdown`,
-   baut FTS5-Index
-
-Zwischen jedem Schritt: User muss explizit triggern oder Disco
-darum bitten. Bei einem Restart oder Crash: kein einfaches
-"mach weiter wo ich war".
-
-### User-Anforderungen (2026-04-27)
-
-> "Da müssen wir ran:
-> - ganz klar strukturierter Ablauf mit Ampelsystem
-> - Vollstaendiger Durchlauf neuer Files sollte der Standard sein
-> - Batchprocessing ueber Nacht ueberlegung? (Kosten sparen moeglich)"
-
-### 1. Ampelsystem — pro Datei ein klarer Status
-
-Vorschlag: 4-Stufen-Status in `agent_sources` als zusaetzliche
-Spalte `pipeline_state`:
-
-| State | Bedeutung | DB-Indikator |
-|---|---|---|
-| 🔴 `registered` | Hash + Eintrag, sonst nichts | nur in `agent_sources` |
-| 🟠 `routed` | Routing-Engine entschieden | + in `work_extraction_routing` |
-| 🟡 `extracted` | Markdown vorhanden | + in `agent_doc_markdown` |
-| 🟢 `searchable` | im FTS5-Index | + in `agent_search_docs` |
-
-Anzeige: Ampel-Icon in Web-UI-Explorer neben jedem Filename.
-Tooltip mit Details (Engine, Cost, letzter Run, etc.). Ein
-Dashboard-Widget oben zeigt das Aggregat: "1708 von 1806 sind
-🟡, 0 sind 🟢". Klick → Filter auf "alle nicht-grünen".
-
-Plus eine fuenfte Stufe ⚫ `error` mit letzter Error-Message,
-wenn ein Schritt fehlgeschlagen ist (z.B. LibreDWG-SIGABRT).
-
-### 2. Vollstaendiger Durchlauf als Standard
-
-Heute muss der User vier Tools/Flows nacheinander triggern. Ziel:
-**ein Klick / ein Befehl** macht alles fuer neue Files.
-
-Vorschlaege:
-
-a) **Neuer Flow `pipeline`**, der intern register → routing →
-   extract → index orchestriert. Items sind Files (nicht Engine-
-   Aufrufe), pro Item laeuft die ganze Pipeline durch. Status
-   pro Item zeigt den aktuellen Schritt. Bei Fehler in einem
-   Schritt: Item failed mit klarer Phase ("failed: extraction
-   step on engine pdf-azure-di-hr").
-
-b) **Auto-Trigger beim Source-Onboarding**: `sources_register`
-   bekommt eine Option `auto_pipeline=true` (Default true), die
-   die Pipeline-Stufen direkt nach dem Registrieren startet.
-
-c) **Inotify/FS-Watcher** (Phase 2): Disco watch `sources/`-Folder,
-   erkennt neue Files automatisch, triggert Pipeline. Kein
-   manuelles Eingreifen mehr.
-
-Variante (a) ist der pragmatische Einstieg. (b) und (c) sind
-Komfort obendrauf.
-
-### 3. Batchprocessing ueber Nacht (Kosten-Reduktion)
-
-Azure-DI und Azure OpenAI bieten **Batch-APIs** mit ~50% Rabatt
-gegenueber den Real-time-Endpoints — Gegenleistung: bis zu 24h
-Bearbeitungszeit, kein Streaming.
-
-**Ueberschlagsrechnung** fuer ein typisches Onboarding-Paket:
-- 2000 PDFs × 0.014 EUR (Standard-Real-time-DI) = 28 EUR
-- mit Batch-API: ~14 EUR
-- Pro Onboarding-Tag also ~14 EUR Einsparung
-
-Bei 10 Projekten/Jahr mit grossen Paketen: ~140 EUR/Jahr. Nicht
-huge, aber sauber.
-
-**Implementation:**
-
-- Neue Engines `pdf-azure-di-batch`, `pdf-azure-di-hr-batch`,
-  `image-gpt5-vision-batch` parallel zu den Real-time-Engines.
-- Routing-Decision bekommt einen `prefer_batch=true|false`-Mode.
-  Default `false` (Real-time), `true` aktivierbar im Flow-Start
-  ("Diesen Run als Nacht-Batch laufen lassen").
-- Neue Tabelle `agent_batch_jobs` mit submit-Zeit, externem
-  Job-ID, Status, Result-Download-URL.
-- Neuer Flow `batch_poll`: laeuft alle ~30 min, fragt offene
-  Jobs ab, schreibt fertige Results in `agent_doc_markdown`,
-  closed Jobs in `agent_batch_jobs`.
-- UI: Batch-Run sieht aus wie ein normaler Flow-Run, aber mit
-  Statusangabe "Submitted, expected by 06:00".
-
-**Zu klaeren** vor Implementation:
-- Welche Items lohnen sich fuer Batch (klar: PDFs ueber Real-time
-  $$$, weniger klar: einzelne grosse Excels)?
-- Fallback wenn Batch-Job failed (Real-time-Re-Run?)
-- Wie verhalten wir uns bei einem Batch-Run, der teilweise da
-  ist (z.B. 1500 von 2000 Items fertig nach 18h)?
-
-### Weiteres aus der heutigen Schmerz-Session, was passend hier rein gehoert:
-
-- **Counter-Update-Bug nach Crash** (siehe Eintrag "Stabilitaets-
-  Bugs aus FTS5-Deadlock" oben): Pipeline-Status-Anzeige darf nicht
-  von Counter-Update-Bugs abhaengen — Source of Truth muss die
-  echte Daten-Existenz sein (z.B. COUNT von `agent_doc_markdown`
-  statt `agent_flow_runs.done_items`).
-- **Vorbedingungs-Pruefung**: heute prueft `build_search_index`
-  pro File ob `agent_doc_markdown` einen Eintrag hat. Bei 1500
-  Misses gibt's 1500 Errors. Das Pipeline-Konzept oben loest
-  das, weil Files erst in der Pipeline-Phase "extracted" sind
-  bevor sie indiziert werden.
-- **lager-halle Pfad-Bug** (siehe Vorgeschichte): hatte mit dem
-  Race zwischen Migration 009 und parallel laufendem alten
-  Extraktor zu tun. Pipeline mit klarem State-Modell verhindert,
-  dass solche Inkonsistenzen still untergehen.
-
-### 4. Retry-Strategie und Permanent-Fail-Markierung
-
-**User-Anforderung 2026-04-27**: *"Die Dateien die beim
-extraction failen sollen gleich 2 mal neu versucht werden und
-dann markiert und beim naechsten durchlauf nicht neu versucht
-werden."*
-
-Heute ist `max_retries=1` (Logs zeigen "Attempt 1/1 FEHLER" —
-ein Versuch, sofort als failed markiert). Aenderung:
-
-| Versuch | Verhalten |
-|---|---|
-| Attempt 1 | normal versuchen |
-| Attempt 2 | retry mit Exponential-Backoff (z.B. 30s, 2min) |
-| Attempt 3 | letzter retry |
-| Nach 3× failed | Item bekommt `pipeline_state='extraction_failed'` mit Timestamp + last_error + n_attempts |
-
-**Beim naechsten `pipeline`/`extraction`-Run**:
-- Items mit `pipeline_state='extraction_failed'` werden DEFAULT
-  geskippt (`reason="permanent_failed"`).
-- Force-Override via Flow-Config: `force_retry_failed=true`
-  (z.B. wenn LibreDWG ein Update hatte und man schauen will
-  ob die Files jetzt durchgehen).
-- UI zeigt diese Items als ⚫ (separates Icon vom 🔴 "noch nichts
-  passiert"-State), Tooltip zeigt last_error + Datum.
-- `agent_sources` bekommt zusaetzliche Spalten: `last_attempt_at`,
-  `attempt_count`, `last_error_message` (~250 chars truncated).
-
-**Differenzierung transient vs. permanent**:
-- Azure-DI `InternalServerError` → transient, retries lohnen sich
-- LibreDWG `SIGABRT` → permanent (Datei ist kaputt), retries
-  helfen nicht
-- pypdf-CID → permanent (jetzt aber nicht mehr relevant da v2)
-- Heuristik: nach 3× demselben Error-Pattern hintereinander
-  → als permanent markieren, sonst noch transient. Das verhindert
-  endloses Retry bei klar persistenten Bugs.
-
-**Querverweis zu "Stabilitaets-Bugs aus FTS5-Deadlock 2026-04-26"
-Section 3** ("Azure-DI HighRes: max_retries zu niedrig") — das
-hier ist die strukturierte User-Sicht-Variante davon und sollte
-zusammen umgesetzt werden.
-
-### Implementierungs-Reihenfolge
-
-1. **`pipeline_state`-Spalte** in `agent_sources` + Backfill-
-   Migration (idempotent, leitet aus existierenden Tabellen ab).
-   States: `registered`, `routed`, `extracted`, `searchable`,
-   `extraction_failed`. Plus Retry-Spalten (`attempt_count`,
-   `last_attempt_at`, `last_error_message`).
-2. **Web-UI-Explorer**: Ampel-Icon neben Filename, Aggregat-
-   Widget oben, separates ⚫-Icon fuer permanent-failed.
-3. **Flow `extraction`**: max_retries=3 mit Backoff, bei finalem
-   Fail Status auf `extraction_failed` setzen.
-4. **Flow `pipeline`**: orchestriert die 4 Schritte als One-Click,
-   skipped permanent-failed by default.
-5. **Auto-Trigger** in `sources_register`.
-6. **Batch-API-Engines** als optionaler Mode (Phase 2).
-7. **FS-Watcher** (Phase 3).
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL. Erledigt:
+- ✅ Ampelsystem in Sidebar (Phase 1, Commits ab 2026-05-04)
+- ✅ Schaerfung (Maßstab pro Schritt, Schema-Bug, Unsupported-Klasse,
+  Routing-Filter auf Kanonik) — Commits c7287e7 + c9b6374, heutige
+  Phase-2-Commits 4b086f7 + 67d5207 + 9fd053e
+- Offen: Auto-Pipeline-Trigger nach `sources_register` (Disco fragt
+  proaktiv), Batch-API-Engines, FS-Watcher (Phase 3)
 
 User-Quote (2026-04-27): *"Die gesamte extraction pipeline von
 registrierung bis hin zum fertigen suchindex funktioniert
-grundsetzlich, ist aber grade extrem! muehsam. Da muessen wir
-ran ..."*
+grundsetzlich, ist aber grade extrem! muehsam."*
 
 
-## File-Internal-Metadata bei Registrierung extrahieren (Prioritaet: hoch)
+## File-Internal-Metadata bei Registrierung extrahieren — siehe ★-Konsolidat
 
-**Beobachtung 2026-04-27**: PDFs, Excels, DWGs, JPEGs tragen
-**reichhaltige Metadaten in der Datei selbst** — Author, Creator-
-App, Erstell-/Aenderungsdatum, Custom-Properties (z.B. KKS-Tags
-im DWG-Schriftfeld), EXIF-GPS bei Fotos. Diese Daten sind:
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL Phase 2. Ungenutzter
+Datenkanal: PDF/Excel/DWG/JPEG tragen Author, Creator-App, Custom-
+Properties (KKS-Tags im DWG-Schriftfeld), EXIF-GPS — alles kostenlos
+lokal lesbar, von Disco aktuell nicht ausgewertet.
 
-- **kostenlos** (lokal mit pypdf/openpyxl/ezdxf/Pillow lesbar — kein Cloud-Call)
-- **portable** (bleiben beim Kopieren erhalten — anders als FS-mtime)
-- **bleibend** (im File-Bytestream, vom Filesystem unabhaengig)
-
-**Heutige Disco-Nutzung: praktisch nichts.** Disco kennt nur
-sha256, Groesse und Pfad. Ein riesiger ungenutzter Datenkanal.
-
-### Stichprobe aus lager-halle (live, 2026-04-27)
-
-**PDF (`/Info` + XMP):**
-```
-Anleitung zur Nutzung.pdf:
-  /Author        = Anastasia Schmitke
-  /CreationDate  = 2024-11-19 09:40:35 +01:00
-  /ModDate       = 2025-01-07 12:53:15 +01:00
-  /Creator       = Microsoft® Word für Microsoft 365
-  /Producer      = Microsoft® Word für Microsoft 365
-
-BE0497 Fachbauleitererklärung.pdf:
-  /Producer      = Foxit PhantomPDF Printer 9.3.0  ← Hinweis: Print-Output
-  /PXCViewerInfo = PDF-XChange Viewer 2.5.322       ← jemand hat annotiert
-  /CreationDate  = 2021-11-19  /ModDate = 2025-11-25 ← 4 Jahre alt, kuerzlich
-                                                       editiert
-```
-
-**Excel (DocProps `core.xml`):**
-```
-U-Wert-BE0497a-BTL50200.xlsx:
-  creator        = openpyxl     ← KEIN User! Programmatisch erzeugt
-  created        = 2025-06-20   modified = 2025-06-20
-```
-
-**DWG (`$HEADER`-Section):**
-```
-BE0497-5-OP-LA-XX-00100.dwg:
-  $ACADVER       = AC1024       ← AutoCAD 2010-Format
-  $TDCREATE      = JulianDate   $TDUPDATE = JulianDate
-  $DWGCODEPAGE   = ANSI_1252
-```
-
-**JPEG (EXIF — bei Fotos voll, bei Skizzen leer):**
-```
-1b.jpg: nur Resolution-Tags  (Skizze, kein Foto)
-echtes-Baustellenfoto.jpg: Make, Model, DateTime, GPSLatitude,
-                            GPSLongitude, Orientation, ISO, ...
-```
-
-### Warum das wichtig ist (Use-Cases)
-
-| Metadatum | Use-Case | Welcher anderer Backlog-Eintrag profitiert |
-|---|---|---|
-| `/ModDate` ueber Stamm-Stem | Versions-Erkennung ohne Filename-Heuristik | "replaces / format-conversion-of" Stufe 4 |
-| `/Producer = "AutoCAD"` | DWG → PDF Plot erkennen | "format-conversion-of" Stufe 2 |
-| `/CreationDate` (alt) | Lifecycle-Score (alte Dokumente weniger relevant) | "Relevance-Score / Document-Scoring" |
-| Excel `creator = openpyxl` | Auto-Erkennung Begleit-Excel vs. User-Excel | "Pipeline-UX" Routing |
-| DWG `$ACADVER` | LibreDWG-Kompatibilitaet vorab pruefen (Failrate-Reduktion) | "Stabilitaets-Bugs" Section 4 |
-| DWG `$CUSTOMPROPERTY` | KKS-Tags direkt aus Schriftfeld, ohne OCR | "Objekt-Inhalt-Modell" |
-| `/Author`, `lastModifiedBy` | Provenance-Header in Markdown, Verantwortliche tracken | "Provenance" |
-| EXIF `GPS` | Foto-Dokumentation auf Anlagenplan verorten | (neu) |
-| EXIF `DateTime` | Baustellen-Fortschritt zeitlich ordnen | (neu) |
-| `/Producer = "PDF-XChange Viewer"` | Annotations-Hinweis: Datei wurde manuell bearbeitet | (neu — Provenance) |
-
-### DB-Schema-Vorschlag
-
-Erweitere `agent_sources` mit "first-class"-Spalten fuer haeufig
-abgefragte Felder + JSON-Spalte fuer den Rest:
-
-```sql
-ALTER TABLE agent_sources ADD COLUMN file_author TEXT;
-ALTER TABLE agent_sources ADD COLUMN file_creation_date TEXT;  -- ISO 8601
-ALTER TABLE agent_sources ADD COLUMN file_modification_date TEXT;  -- ISO 8601
-ALTER TABLE agent_sources ADD COLUMN file_creator_app TEXT;    -- z.B. "Microsoft Word"
-ALTER TABLE agent_sources ADD COLUMN file_producer_app TEXT;   -- z.B. "Foxit PhantomPDF"
-ALTER TABLE agent_sources ADD COLUMN file_title TEXT;
-ALTER TABLE agent_sources ADD COLUMN file_format_version TEXT; -- z.B. "AC1024", "PDF-1.4"
-ALTER TABLE agent_sources ADD COLUMN file_metadata_json TEXT;  -- Rest als JSON (XMP, EXIF, $CUSTOM)
-```
-
-Vorteile:
-- Common Queries (Author, Datum, App) gehen ueber Spalten — schnell, indizierbar
-- Spezial-Felder (z.B. EXIF-GPS, PDF-XMP-Document-ID) bleiben in JSON erreichbar via `json_extract()`
-- Rueckwaertskompatibel: bestehende Spalten bleiben unangetastet
-
-### Implementierungs-Reihenfolge
-
-1. **Migration** datastore/010 mit den Spalten + JSON. Idempotent
-   via `CREATE TABLE IF NOT EXISTS` und `ALTER TABLE ADD COLUMN`
-   in einer Transaktion.
-
-2. **Extractor-Modul** `src/disco/sources/file_metadata.py`:
-   ```python
-   def extract_file_metadata(abs_path: Path, file_kind: str) -> dict:
-       """Liefert dict mit den first-class-Feldern + 'extra'-JSON."""
-       if file_kind == 'pdf': return _extract_pdf(abs_path)
-       if file_kind == 'excel': return _extract_excel(abs_path)
-       if file_kind == 'dwg': return _extract_dwg(abs_path)
-       if file_kind == 'image': return _extract_image(abs_path)
-       return {}
-   ```
-   Pro Engine eine Funktion. Errors silent (best-effort, blockiert
-   Registrierung nicht).
-
-3. **Hook in `sources_register`**: bei jedem neuen/geaenderten
-   File auch `extract_file_metadata` aufrufen, Ergebnis in
-   `agent_sources` schreiben. Bei Re-Register (sha256 unveraendert)
-   nicht erneut extrahieren.
-
-4. **Backfill-Script** `scripts/backfill_file_metadata.py` fuer
-   Bestandsprojekte: liest alle `agent_sources`-Eintraege mit
-   `file_author IS NULL`, extrahiert Metadata, schreibt zurueck.
-   Idempotent.
-
-5. **Verfuegbar machen** in:
-   - `doc_markdown_read`: Provenance-Header mit Author/Datum
-   - `search_index`: Filter nach `file_author`, `file_creator_app`
-   - Web-UI Explorer: Tooltip mit Metadaten beim Hover
-
-6. **Routing-Decision-Erweiterung**: `_decide_dwg` prueft `$ACADVER`
-   — bei AC1032+ Fallback auf eine andere Engine oder direkt skippen
-   (LibreDWG-SIGABRT vermeiden).
-
-7. **`format-conversion-of`-Detection** Stufe 2 (siehe entsprechender
-   Backlog): nutzt `/Producer` und `/Creator` aus den jetzt
-   verfuegbaren Spalten.
-
-User-Quote (2026-04-27): *"Da sind ja viele wichtige Daten dabei,
-die wir gleich bei der registrierung mit extrahieren koennten.
-Die sollten dann auch verfuegbar sein."*
-
+User-Quote (2026-04-27): "PDFs, Excels und DWGs haben Metadaten, die
+wir noch nicht nutzen — Autor, Custom-Properties, KKS-Tags. Lokal
+gratis lesbar."
 
 ## Cost-Tracking: Chat + Monatliche Gesamtsicht (Prioritaet: hoch)
 
@@ -3017,106 +2440,27 @@ und Analyseschritten wird die Datenhaltung chaotisch und Disco
 verzettelt sich mit den Daten, berechtigterweise."*
 
 
-## Klickbare Links + bewusste Thumbnails im Chat (Prioritaet: hoch)
+## Klickbare Links + bewusste Thumbnails im Chat — TEILWEISE DONE 2026-05-04
 
-**User-Anforderung 2026-04-29:** Disco soll in seinen Antworten Files und
-DB-Tabellen als anklickbare Links ausgeben (Klick → Viewer-Pane oeffnet die
-Datei/Tabelle). Zusaetzlich soll Disco bei visueller Relevanz **bewusst**
-Thumbnails einbinden — aber nicht jeder Datei-Verweis soll automatisch ein
-Thumbnail erzeugen.
+Erledigt:
+- ✅ Phase 1: `disco-file://` und `disco-table://` als Custom-URL-
+  Schemas im Frontend, Click-Handler oeffnet Viewer/Tabelle
+  (Commit fd99728).
 
-User-Quote: *"Ich möchte dass disco weiß, wann thumbnails verwendet. Also
-er soll die vorschau bewusst präsentieren wenn passend. Nicht einfach dass
-jedes zitat vom backend gerendert wird."*
+Offen Phase 2:
+- ❌ `disco-preview://`-Thumbnails im Chat. Backend-Endpoint
+  `/api/projects/{slug}/thumbnail?path=...&page=1` mit PDF-Rendern
+  via PyMuPDF, Cache unter `<projekt>/.disco/thumbnails/`. Aufwand
+  ~3h. User will Thumbnails bewusst (nicht jeder Link automatisch
+  als Bild — verhindert Bilder-Flut bei Listen).
 
-### Zwei klar getrennte Markdown-Patterns
+Offen Phase 3 (kein konkreter Auftrag):
+- DOCX/XLSX → LibreOffice-CLI → PDF → Thumbnail
+- DWG-`THUMBNAILIMAGE`-Section parsen
 
-| Disco schreibt | Frontend rendert |
-|---|---|
-| `[Schaltplan](disco-file://sources/Elektro/foo.pdf)` | klickbarer Link → Viewer |
-| `[agent_doc_markdown](disco-table://datastore/agent_doc_markdown)` | klickbarer Link → Tabellen-View |
-| `![](disco-preview://sources/Elektro/foo.pdf)` | echtes Thumbnail inline (bewusste Praesentation) |
-| `![](sources/foto.jpg)` (Standard-Markdown) | wird NICHT automatisch gerendert |
-
-Bewusste Trennung: nur das `disco-preview://`-Schema triggert Thumbnail-
-Generierung. Standard-Markdown-Images werden absichtlich nicht
-automatisch eingebunden — verhindert dass eine Liste mit 20 Filenames
-den Chat mit 20 Bildern flutet.
-
-### System-Prompt-Hinweise (bewusst schlank gehalten)
-
-```
-Bei Datei-Verweisen: [name](disco-file://<rel-pfad>)
-Bei Tabellen-Verweisen: [name](disco-table://<datastore|workspace>/<table>)
-Wenn Du eine visuelle Vorschau BEWUSST praesentieren willst (z.B. weil
-es um das Bild/Plan an sich geht, nicht nur eine Erwaehnung):
-  ![](disco-preview://<rel-pfad>)
-Default: Link, nicht Thumbnail. Thumbnails sparsam einsetzen.
-```
-
-3-4 Zeilen System-Prompt — passt zur User-Vorgabe "schlank halten".
-
-### Wann Thumbnails vs. Links — Disco's Heuristik
-
-| Kontext | Pattern |
-|---|---|
-| "Hier ist der Plan/das Foto, das du gesucht hast" | Thumbnail |
-| "Ich habe Datei X bearbeitet" | Link |
-| "Vergleich der drei Schaltplaene A/B/C" | drei Thumbnails (sehr explizit) |
-| "10 PDFs untersucht, hier die Treffer-Liste" | Links |
-
-### Phasenplan + Aufwand
-
-**Phase 1 (~1.5h) — Klickbare Links**:
-- Frontend: Custom-URL-Schema-Parser (`disco-file://`, `disco-table://`)
-  in markdown-it, `event.preventDefault()` + Click-Handler die existing
-  `openFileInViewer(path)` / `openTableInViewer(table, db)` aufrufen.
-- Backend: NICHTS neu — alle Endpoints existieren (`/api/files`, DB-API).
-- System-Prompt: 2 Zeilen Konvention.
-- Klick oeffnet im **rechten Viewer-Pane** (konsistent mit Explorer).
-
-**Phase 2 (~3h) — Bewusste Thumbnails**:
-- Backend-Endpoint `/api/projects/{slug}/thumbnail?path=...&page=1`:
-  - JPG/PNG: direkt als Image durchreichen (existierender file-Endpoint)
-  - PDF: PyMuPDF (fitz) rendert erste Seite als JPEG, Cache in
-    `<projekt>/.disco/thumbnails/<sha256>.jpg`
-  - Cache mit LRU-Cleanup (max 500 MB / 30 Tage)
-- Frontend: image-renderer-override in markdown-it — `disco-preview://`
-  → `<img src="/api/projects/<slug>/thumbnail?path=...">`. Andere Image-
-  URLs werden nicht expandiert (Sicherheitsnetz).
-- System-Prompt: 1-2 Zeilen Konvention "sparsam einsetzen".
-
-**Phase 3 (Backlog, kein konkreter Auftrag)** — Office-/CAD-Formate:
-- DOCX/XLSX → LibreOffice-CLI Conversion zu PDF, dann Thumbnail
-- DWG → embedded `THUMBNAILIMAGE`-Section parsen (manche DWGs haben das)
-- Hoher Setup-Aufwand (LibreOffice-Dependency etc.) vs. moderater Nutzen
-  → erst wenn Bedarf konkret entsteht.
-
-### Technische Details
-
-- DOMPurify (im Markdown-Renderer) muss `disco-file://` /
-  `disco-table://` / `disco-preview://` whitelisten via `validateLink`-Hook
-  in markdown-it. Custom-URL-Schemas sind sonst gefiltert.
-- Thumbnail-Cache: pro Projekt (`<projekt>/.disco/thumbnails/`) — passt
-  zur sandboxierten Projekt-Architektur (Konvention 4: Idempotenz).
-- Cache-Key = sha256 des absoluten Pfads + Page-Nummer + image-Format.
-  Bei File-Aenderung wird neuer Hash → neuer Cache-Eintrag.
-
-### Bezug zu anderen Backlog-Eintraegen
-
-- **Sidebar-Navigation skaliert nicht**: orthogonal — bessere Sichtbarkeit
-  fuer Files/Tabellen, aber UX-Pfad ist unterschiedlich (Sidebar = Browse,
-  Inline-Links = "Disco zeigt mir das hier")
-- **Data-Lineage**: bei klickbaren Tabellen-Links koennte ein Lineage-
-  Hover-Tooltip ergaenzt werden ("Diese Tabelle wurde erzeugt am ...
-  aus ... mit Zweck X")
-
-User-Quote (2026-04-29): *"Wie aufwendig waere es, wenn disco gleich
-im chat thumbnails der dokumenten anzeigen koennte... alle inhalte aus
-dem explorer und die einzelnen DBs als link aufrufbar..."*
-
-User-Quote-Klarstellung: *"Disco soll die vorschau bewusst praesentieren
-wenn passend. Nicht einfach dass jedes zitat vom backend gerendert wird."*
+User-Quote (2026-04-29): *"Disco soll die vorschau bewusst
+praesentieren wenn passend. Nicht einfach dass jedes zitat vom
+backend gerendert wird."*
 
 
 ## ★ EXTRACTION-PIPELINE OVERHAUL — Konsolidiertes Konzept (Prio: hoch, in Umsetzung 2026-04-30)
