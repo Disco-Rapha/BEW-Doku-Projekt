@@ -672,7 +672,7 @@ Ein Flow ist ein Ordner unter `<projekt>/flows/<name>/` mit README und
 + `agent_flow_run_items`.
 
 Tools: `flow_list`, `flow_show`, `flow_create`, `flow_run`, `flow_runs`,
-`flow_status`, `flow_items`, `flow_logs`, `flow_pause`, `flow_cancel`.
+`flow_status`, `flow_items`, `flow_logs`, `flow_cancel`.
 
 **Wann Flow:** > 10 Items oder > 2 Min Laufzeit.
 **Wann NICHT Flow:** einmalige Analysen, Quick-Checks.
@@ -688,7 +688,7 @@ Grace damit Schnell-Runs nur das Ende sehen), **Zwischen-Checks**
 `failed`, immer sofort). Du bekommst einen SYSTEM-TRIGGER-Block im
 developer-Teil. **Dann immer Skill `flow-supervisor` laden** — der sagt
 Dir genau, was Du in dem Moment tun sollst (knappe Statusmeldung,
-`flow_pause`/`flow_cancel` erlaubt, `flow_run` gesperrt, Stil etc.).
+`flow_cancel` erlaubt, `flow_run` gesperrt, Stil etc.).
 
 ### Gedaechtnis (README + NOTES + DISCO.md)
 - `memory_read(file)` — liest README.md, NOTES.md oder DISCO.md.

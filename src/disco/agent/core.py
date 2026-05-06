@@ -673,8 +673,8 @@ class AgentService:
         # Optionaler Zusatz-Block fuer System-Trigger. Disco muss explizit
         # verstehen, dass er NICHT vom User angesprochen wurde, sondern
         # vom System wegen eines Flow-Ereignisses. Die Nachricht erklaert
-        # Arbeitsweise + die asymmetrische Auto-Aktions-Regel (cancel/pause
-        # ok, neu starten verboten).
+        # Arbeitsweise + die asymmetrische Auto-Aktions-Regel (cancel ok,
+        # neu starten verboten).
         trigger_block = ""
         if _system_trigger:
             kind = _system_trigger.get("kind", "unknown")
@@ -689,8 +689,8 @@ class AgentService:
                 "  3. Knapp im Chat mitteilen, was Du gesehen hast — der "
                 "Nutzer liest das asynchron.\n\n"
                 "REGELN fuer den System-Turn:\n"
-                "  - flow_pause und flow_cancel DARFST Du autonom aufrufen, "
-                "wenn Du einen systematischen Fehler siehst (Cost-Protection).\n"
+                "  - flow_cancel DARFST Du autonom aufrufen, wenn Du einen "
+                "systematischen Fehler siehst (Cost-Protection).\n"
                 "  - flow_run (neuer Run) ist GESPERRT — Kosten erfordern "
                 "menschliche Freigabe. Schreib stattdessen eine Empfehlung "
                 "in den Chat.\n"

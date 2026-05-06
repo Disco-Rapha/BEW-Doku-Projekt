@@ -3649,12 +3649,7 @@ async function renderRunDetails() {
     // Controls je nach Status
     let ctl = '';
     if (run.status === 'running' || run.status === 'pending') {
-      ctl = `<button onclick="runPause(${id})">⏸ Pause</button>
-             <button onclick="runCancel(${id}, false)">■ Cancel</button>
-             <button class="btn-stop" onclick="runCancel(${id}, true)">✕ Force-Kill</button>`;
-    } else if (run.status === 'paused') {
-      ctl = `<button class="btn-primary" disabled title="Resume via CLI: disco flow run &lt;name&gt; (noch kein UI-Resume)">▶ Pausiert</button>
-             <button onclick="runCancel(${id}, false)">■ Cancel</button>
+      ctl = `<button onclick="runCancel(${id}, false)">■ Cancel</button>
              <button class="btn-stop" onclick="runCancel(${id}, true)">✕ Force-Kill</button>`;
     } else {
       ctl = `<span class="muted">Run beendet. Status: <span class="status-badge status-${escHtml(run.status)}">${escHtml(run.status)}</span></span>`;
@@ -3715,16 +3710,6 @@ async function renderRunDetails() {
   }
 }
 
-async function runPause(runId) {
-  const slug = state.activeProjectSlug;
-  try {
-    const r = await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/pause`, {method:'POST'});
-    const d = await r.json();
-    if (d.error && !d.id) alert('Pause-Fehler: ' + d.error);
-  } catch (e) { alert('Pause fehlgeschlagen: ' + e.message); }
-  await renderRunDetails();
-}
-
 async function runCancel(runId, force) {
   const slug = state.activeProjectSlug;
   const msg = force
@@ -3755,7 +3740,7 @@ function _startFlowPoll() {
     try {
       const slug = state.activeProjectSlug;
       const r = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${state._flowViewRunId}`);
-      if (['running','pending','paused'].includes(r.status)) {
+      if (['running','pending'].includes(r.status)) {
         await renderRunDetails();
         // Alle 4 Ticks (~10s) auch die Sidebar-Indikatoren aktualisieren.
         if (++tickCount % 4 === 0) loadFlows(slug);
@@ -3787,7 +3772,7 @@ function closeFlowView() {
 
 state._runStripPoll = null;       // setInterval handle
 state._runStripLastRuns = new Map();  // key = "slug:id" → last snapshot fuer Status-Wechsel-Erkennung
-state._runStripPending = new Set();   // "slug:id" — User hat Pause/Cancel geklickt, UI sperren
+state._runStripPending = new Set();   // "slug:id" — User hat Cancel geklickt, UI sperren
 // Beendete Runs (done/failed/cancelled) bleiben oben sichtbar, bis der User
 // sie per X-Button wegklickt. Persistiert in localStorage damit ein
 // Browser-Reload sie nicht verschluckt.
@@ -3970,10 +3955,6 @@ function runStripRenderRow(r, opts) {
   const overBudget = budget != null && (r.total_cost_eur || 0) > budget;
 
   const disabled = state._runStripPending.has(key) ? 'disabled' : '';
-  const pauseLabel = status === 'paused' ? '▶ Weiter' : '⏸ Pause';
-  const pauseAction = status === 'paused'
-    ? `runStripResume('${escAttr(r.project_slug)}', ${r.id})`
-    : `runStripPause('${escAttr(r.project_slug)}', ${r.id})`;
 
   const budgetStr = budget != null
     ? `${cost} / ${budget.toFixed(2)} €`
@@ -3989,13 +3970,11 @@ function runStripRenderRow(r, opts) {
     : '';
 
   // Finished: einzige Aktion ist X-Button (wegklicken). Aktive Runs:
-  // Pause + Cancel.
+  // Cancel (Pause wurde 2026-05-06 entfernt — funktionierte nicht zuverlaessig).
   const actionsHtml = isFinished
     ? `<button class="run-btn run-btn-danger" onclick="event.stopPropagation(); runStripDismissFinished('${escAttr(key)}')"
               title="Status-Eintrag wegklicken">✕</button>`
-    : `<button class="run-btn" onclick="event.stopPropagation(); ${pauseAction}" ${disabled}
-              title="${status === 'paused' ? 'Worker fortsetzen' : 'Worker pausieren — aktueller Item laeuft noch zu Ende'}">${pauseLabel}</button>
-       <button class="run-btn run-btn-danger" onclick="event.stopPropagation(); runStripCancel('${escAttr(r.project_slug)}', ${r.id})" ${disabled}
+    : `<button class="run-btn run-btn-danger" onclick="event.stopPropagation(); runStripCancel('${escAttr(r.project_slug)}', ${r.id})" ${disabled}
               title="Run abbrechen — Done-Items bleiben">✕ Cancel</button>`;
 
   // Klick auf die ganze Zeile → Run im Viewer oeffnen (Projekt wird
@@ -4044,39 +4023,12 @@ function _runStripElapsed(startedAtIso, finishedAtIso) {
   return `${h}h${m}m`;
 }
 
-async function runStripPause(slug, runId) {
-  const key = `${slug}:${runId}`;
-  state._runStripPending.add(key);
-  runStripPoll();  // UI-Update mit disabled Buttons
-  try {
-    await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/pause`, { method: 'POST' });
-  } catch (e) {
-    alert(`Pause fehlgeschlagen: ${e.message}`);
-  }
-  state._runStripPending.delete(key);
-  runStripPoll();
-}
-
-async function runStripResume(slug, runId) {
-  // Ein "paused"-Run hat worker_pid != NULL nur wenn Worker noch laeuft —
-  // bei Pause-Signal laeuft er zu Ende und beendet sich. Resume = neuer Run-Start
-  // mit gleichem Flow, der die noch-pending Items aufgreift (Idempotenz).
-  // Fuer MVP: einfachen Hinweis geben, tatsaechliches Resume macht der User ueber
-  // "Flow erneut starten" im Flow-Panel.
-  alert(
-    'Resume-Button: im MVP muss der Run neu gestartet werden ueber ' +
-    '„Neuen Run starten" im Flow-Panel. Done-Items werden dank Idempotenz uebersprungen.'
-  );
-}
-
 async function runStripCancel(slug, runId) {
   const ok = confirm(
     `Run #${runId} sofort abbrechen?\n\n` +
     `• Worker wird per SIGTERM beendet — aktuell laufender Item ist verloren.\n` +
     `• Bereits abgeschlossene Items bleiben in der DB.\n` +
     `• Pending-Items werden NICHT verarbeitet.\n\n` +
-    `Tipp: Wenn Du stattdessen sanft stoppen willst (Item zu Ende, dann halt),\n` +
-    `nimm „⏸ Pause".\n\n` +
     `Ok = sofort abbrechen, Abbrechen = weiterlaufen lassen.`
   );
   if (!ok) return;

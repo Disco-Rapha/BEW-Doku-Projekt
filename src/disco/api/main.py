@@ -1992,21 +1992,6 @@ async def api_run_logs(slug: str, run_id: int, tail: int = 100):
     }
 
 
-@app.post("/api/workspace/projects/{slug}/runs/{run_id}/pause")
-async def api_run_pause(slug: str, run_id: int):
-    """Signalisiert dem Worker: pausiere beim naechsten Item."""
-    from ..flows import service as flow_service
-
-    project_root, err = _resolve_project_path_or_error(slug)
-    if err:
-        return err
-    try:
-        run = flow_service.request_pause(project_root, run_id)
-    except (KeyError, ValueError) as exc:
-        return {"error": str(exc)}
-    return _run_info_to_dict(run)
-
-
 _RECENT_FINISHED_WINDOW_MIN = 15  # Minuten — done/failed/cancelled-Runs in
                                   # diesem Fenster landen mit im Strip, damit
                                   # schnelle Runs (<3s) durchs Polling-Raster
@@ -2017,7 +2002,7 @@ _RECENT_FINISHED_WINDOW_MIN = 15  # Minuten — done/failed/cancelled-Runs in
 async def api_active_runs():
     """Alle aktiven + kuerzlich beendete Runs projekt-uebergreifend.
 
-    - `runs`: aktive Runs (running/paused).
+    - `runs`: aktive Runs (running).
     - `recent_finished`: Runs mit Endstatus (done/failed/cancelled) aus den
       letzten 15 Minuten. Verhindert dass schnelle Runs durchs 3-Sekunden-
       Polling-Raster fallen, ohne dass das Frontend die Status-Detektion
@@ -2048,7 +2033,6 @@ async def api_active_runs():
         slug = proj["slug"]
         try:
             running = flow_service.list_runs(project_root, status="running", limit=50)
-            paused = flow_service.list_runs(project_root, status="paused", limit=50)
             done_recent = flow_service.list_runs(project_root, status="done", limit=30)
             failed_recent = flow_service.list_runs(project_root, status="failed", limit=30)
             cancelled_recent = flow_service.list_runs(project_root, status="cancelled", limit=30)
@@ -2056,7 +2040,7 @@ async def api_active_runs():
             # Projekt-DB nicht lesbar (z.B. Migrationen fehlen) — skip
             continue
 
-        for run in [*running, *paused]:
+        for run in running:
             runs_out.append({
                 **_run_info_to_dict(run),
                 "project_slug": slug,
