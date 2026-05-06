@@ -83,11 +83,17 @@ FOUNDRY_PRICING: dict[str, TokenPrice] = {
     # Modell:     gpt-5.1
     # Quelle:     Azure Pricing Sweden Central Data Zone Standard
     #             (Stand 2026-04-22, dokumentiert).
-    # Cached:     50% Rabatt vom Input (Schaetzung — Sweden-Central-EUR-
-    #             Cached-Listpreis nicht separat publiziert).
+    # Cached:     90% Rabatt vom Input — empirisch 2026-05-06 verifiziert
+    #             gegen Foundry-Rechnung im dcc_prediction-Run #28
+    #             (rea-denox): Disco rechnete 28.98 EUR fuer 23M Input-
+    #             Tokens (volltarif), Foundry 6.50 EUR. Daraus folgt
+    #             effektiver Input ~0.28 EUR/1M, was nur mit ~90%
+    #             gecached UND 90% Rabatt aufgeht (vorher hatten wir
+    #             50% Rabatt = 0.60 EUR/1M angenommen, ergab 4x zu viel).
+    #             Faktor identisch zu gpt-5.4-prod (0.23/2.30 = 10%).
     "gpt-5.1": TokenPrice(
         input_eur_per_1m=1.20,
-        cached_input_eur_per_1m=0.60,
+        cached_input_eur_per_1m=0.12,
         output_eur_per_1m=9.55,
     ),
 
@@ -96,7 +102,7 @@ FOUNDRY_PRICING: dict[str, TokenPrice] = {
     # Werte:     identisch zu gpt-5.1
     "gpt-5.1_prod": TokenPrice(
         input_eur_per_1m=1.20,
-        cached_input_eur_per_1m=0.60,
+        cached_input_eur_per_1m=0.12,
         output_eur_per_1m=9.55,
     ),
 

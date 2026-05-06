@@ -125,31 +125,38 @@ HEARTBEAT_MAX_SEC = 14400  # 4 h
 # weiterhin aus dem Azure-Portal exportieren. Hier geht es um Live-Budget-
 # Anzeige im UI, nicht um die Finanzbuchhaltung.
 #
-# Cached-Input-Rabatt ist bewusst NICHT implementiert (Backlog-Punkt
-# "Cached-Input-Rabatt in Kostenberechnung"). Jeder Input-Token zaehlt
-# derzeit zum Voll-Tarif — konservativ, Live-Tracker liegt ueber echter
-# Azure-Rechnung.
+# Cached-Input-Rabatt ist seit 2026-05-06 implementiert: _extract_usage
+# liefert (prompt, completion, cached) und compute_cost_eur reicht den
+# cached-Anteil an pricing.compute_cost_eur durch. Davor zaehlte jeder
+# Input-Token zum Voll-Tarif, Disco-Cost lag um Faktor ~4 ueber der
+# echten Azure-Rechnung.
 # ---------------------------------------------------------------------------
 
 # Pricing wird zentral aus disco.pricing geholt — EINE Source-of-Truth
 # fuer alle Cost-Berechnungen (Image-Engine, Flow-LLM-Calls, Chat-Tracking).
-# compute_cost_eur unten ist nur ein dünner Wrapper, der die alte sdk-
-# Signatur (model, tokens_in, tokens_out) weiterhin unterstuetzt — neue
-# Caller sollten direkt disco.pricing.compute_cost_eur() nutzen, weil
-# das auch cached_prompt_tokens-Discount kennt.
+# compute_cost_eur unten ist ein duenner Wrapper, der die sdk-Signatur
+# (model, tokens_in, tokens_out, cached_tokens=...) weiter anbietet.
 
 
-def compute_cost_eur(model: str, tokens_in: int, tokens_out: int) -> float:
+def compute_cost_eur(
+    model: str,
+    tokens_in: int,
+    tokens_out: int,
+    cached_tokens: int = 0,
+) -> float:
     """Berechnet EUR-Kosten fuer einen API-Call (Wrapper um disco.pricing).
 
     Nimmt den Modellnamen wie er im Deployment steht (z.B. 'gpt-5.1',
-    'gpt-5.4-prod', 'gpt-5.1-mini'). Deployment-Aliase mit Suffixen werden
-    von pricing.get_foundry_price() automatisch auf das Basis-Modell
-    zurueckgefuehrt (laengster Prefix-Match).
+    'gpt-5.4-prod'). Deployments muessen exakt in
+    disco.pricing.FOUNDRY_PRICING stehen.
+
+    cached_tokens (optional) ist ein TEILBETRAG von tokens_in (nicht
+    zusaetzlich). Foundry rabattiert gecachte Input-Tokens stark
+    (gpt-5.1: -50%, gpt-5.4: -90%) — ohne diesen Parameter zaehlt jeder
+    Token zum Voll-Tarif und Disco-Rechnung weicht von der Azure-Rechnung
+    ab (typisch 2-4× zu hoch bei aktiver Cache-Nutzung).
 
     Unbekannte Modelle → 0.0 EUR + Warnung im Log.
-    NOTE: Dieser Wrapper kennt cached_prompt_tokens NICHT. Fuer Calls mit
-    cached-Discount direkt disco.pricing.compute_cost_eur() nutzen.
     """
     from disco.pricing import compute_cost_eur as _pricing_compute, get_foundry_price
 
@@ -164,7 +171,7 @@ def compute_cost_eur(model: str, tokens_in: int, tokens_out: int) -> float:
         model,
         prompt_tokens=tokens_in,
         completion_tokens=tokens_out,
-        cached_prompt_tokens=0,
+        cached_prompt_tokens=cached_tokens,
     )
 
 
@@ -985,9 +992,11 @@ class FlowRun:
         """
         from disco.config import settings as _settings
 
-        tokens_in, tokens_out = _extract_usage(response)
+        tokens_in, tokens_out, cached_tokens = _extract_usage(response)
         used_model = model or _settings.foundry_flow_model_deployment
-        eur = compute_cost_eur(used_model, tokens_in, tokens_out)
+        eur = compute_cost_eur(
+            used_model, tokens_in, tokens_out, cached_tokens=cached_tokens,
+        )
         self.add_cost(eur=eur, tokens_in=tokens_in, tokens_out=tokens_out)
         return tokens_in, tokens_out, eur
 
@@ -1326,36 +1335,51 @@ class FlowRun:
 # ===========================================================================
 
 
-def _extract_usage(response: Any) -> tuple[int, int]:
-    """Holt (prompt_tokens, completion_tokens) aus einer Azure-OpenAI-Antwort.
+def _extract_usage(response: Any) -> tuple[int, int, int]:
+    """Holt (prompt_tokens, completion_tokens, cached_tokens) aus einer
+    Azure-OpenAI-Antwort.
 
     Unterstuetzt:
-      - openai-Python-SDK >=1.x: response.usage.prompt_tokens / .completion_tokens
-      - Responses-API (preview): response.usage.input_tokens / .output_tokens
+      - openai-Python-SDK >=1.x: response.usage.prompt_tokens /
+        .completion_tokens; cached via .prompt_tokens_details.cached_tokens
+      - Responses-API (preview): response.usage.input_tokens /
+        .output_tokens; cached via .input_tokens_details.cached_tokens
       - Rohes dict aus REST-Aufrufen: {'usage': {...}}
 
-    Gibt (0, 0) zurueck, wenn kein usage-Feld gefunden wird — dann werden
-    0 EUR gebucht (besser als Abbruch mitten im Flow).
+    Gibt (0, 0, 0) zurueck, wenn kein usage-Feld gefunden wird — dann
+    werden 0 EUR gebucht (besser als Abbruch mitten im Flow).
+
+    cached_tokens ist ein Teilbetrag von prompt_tokens (nicht zusaetzlich).
+    Bei aktivem Foundry-Prompt-Cache liegt der Anteil typisch bei 60-90 %.
     """
     usage = getattr(response, "usage", None)
     if usage is None and isinstance(response, dict):
         usage = response.get("usage")
     if usage is None:
-        return 0, 0
+        return 0, 0, 0
+
+    def _cached_from(usage_obj: Any, details_attr: str) -> int:
+        details = _get_attr_or_key(usage_obj, details_attr)
+        if details is None:
+            return 0
+        v = _get_attr_or_key(details, "cached_tokens")
+        return int(v or 0)
 
     # Variante 1: Chat Completions (prompt_tokens / completion_tokens)
     t_in = _get_attr_or_key(usage, "prompt_tokens")
     t_out = _get_attr_or_key(usage, "completion_tokens")
     if t_in is not None or t_out is not None:
-        return int(t_in or 0), int(t_out or 0)
+        cached = _cached_from(usage, "prompt_tokens_details")
+        return int(t_in or 0), int(t_out or 0), cached
 
     # Variante 2: Responses API (input_tokens / output_tokens)
     t_in = _get_attr_or_key(usage, "input_tokens")
     t_out = _get_attr_or_key(usage, "output_tokens")
     if t_in is not None or t_out is not None:
-        return int(t_in or 0), int(t_out or 0)
+        cached = _cached_from(usage, "input_tokens_details")
+        return int(t_in or 0), int(t_out or 0), cached
 
-    return 0, 0
+    return 0, 0, 0
 
 
 def _get_attr_or_key(obj: Any, name: str) -> Any:
