@@ -17,7 +17,6 @@ from ...projects import (
     count_documents as project_doc_count,
     get_project,
     get_project_by_slug,
-    list_projects,
 )
 from ...sources import (
     count_documents as source_doc_count,
@@ -33,78 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# 1. list_projects
-# ---------------------------------------------------------------------------
-
-
-@register(
-    name="list_projects",
-    description=(
-        "Listet Projekte mit Dokumentenanzahl auf. "
-        "WICHTIG: Wenn ein Projekt aktiv ist (Sandbox-Modus), gibt diese "
-        "Funktion NUR das aktive Projekt zurueck — andere Projekte sind "
-        "in der Sandbox nicht sichtbar. Dieses Tool ist daher nicht "
-        "geeignet, um nach 'dem richtigen Projekt' zu suchen; das aktive "
-        "Projekt ist bereits aus dem Kontext bekannt."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "include_archived": {
-                "type": "boolean",
-                "description": "Auch archivierte Projekte einschliessen (Default: false).",
-            }
-        },
-        "required": [],
-    },
-    returns="Liste von {id, name, description, status, dokumente, erstellt, slug}",
-)
-def _list_projects(*, include_archived: bool = False) -> list[dict[str, Any]]:
-    # Sandbox-Check: Wenn ein Projekt aktiv ist, geben wir nur dieses zurueck.
-    active_slug = get_current_project_slug()
-    if active_slug:
-        p = get_project_by_slug(active_slug)
-        if p is None:
-            # Slug gesetzt aber kein Eintrag in DB — sollte praktisch nie passieren
-            return []
-        return [
-            {
-                "id": p["id"],
-                "name": p["name"],
-                "description": p.get("description"),
-                "status": p["status"],
-                "dokumente": project_doc_count(p["id"]),
-                "erstellt": p["created_at"][:10],
-                "slug": p.get("slug"),
-                "_sandbox_hint": (
-                    f"Sandbox-Modus: nur das aktive Projekt ist sichtbar "
-                    f"(slug='{active_slug}'). Andere Projekte existieren "
-                    f"fuer Dich in dieser Sitzung nicht."
-                ),
-            }
-        ]
-
-    # Kein Sandbox-Kontext (z.B. projektlose Chat-Startseite): altes Verhalten
-    projects = list_projects(include_archived=include_archived)
-    result: list[dict[str, Any]] = []
-    for p in projects:
-        count = project_doc_count(p["id"])
-        result.append(
-            {
-                "id": p["id"],
-                "name": p["name"],
-                "description": p.get("description"),
-                "status": p["status"],
-                "dokumente": count,
-                "erstellt": p["created_at"][:10],
-                "slug": p.get("slug"),
-            }
-        )
-    return result
-
-
-# ---------------------------------------------------------------------------
-# 2. get_project_details
+# 1. get_project_details
 # ---------------------------------------------------------------------------
 
 
@@ -301,75 +229,7 @@ def _get_database_stats() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 5. list_documents
-# ---------------------------------------------------------------------------
-
-
-@register(
-    name="list_documents",
-    description=(
-        "Listet Dokumente eines Projekts, optional nach Quelle und Status gefiltert."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "project_id": {"type": "integer"},
-            "source_id": {
-                "type": "integer",
-                "description": "Optional: auf eine Quelle einschraenken.",
-            },
-            "status": {
-                "type": "string",
-                "description": (
-                    "Optional: Status-Filter "
-                    "(discovered|downloaded|indexed|needs_reindex|deleted|failed)."
-                ),
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Max. Ergebnisse (Default: 30).",
-            },
-        },
-        "required": ["project_id"],
-    },
-    returns="Liste von {id, original_name, status, size_bytes, source_path, created_at}",
-)
-def _list_documents(
-    *,
-    project_id: int,
-    source_id: int | None = None,
-    status: str | None = None,
-    limit: int = 30,
-) -> list[dict[str, Any]]:
-    # Sandbox-Check
-    active_slug = get_current_project_slug()
-    if active_slug:
-        p_active = get_project_by_slug(active_slug)
-        if p_active and p_active["id"] != project_id:
-            return []  # anderes Projekt nicht sichtbar
-    conn = connect()
-    try:
-        params: list[Any] = [project_id]
-        where = "d.project_id = ?"
-        if source_id is not None:
-            where += " AND d.source_id = ?"
-            params.append(source_id)
-        if status:
-            where += " AND d.status = ?"
-            params.append(status)
-        rows = conn.execute(
-            f"SELECT d.id, d.original_name, d.status, d.size_bytes, "
-            f"d.source_path, d.created_at FROM documents d "
-            f"WHERE {where} ORDER BY d.original_name LIMIT ?",
-            params + [limit],
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
-# ---------------------------------------------------------------------------
-# 6. start_sync
+# 5. start_sync
 # ---------------------------------------------------------------------------
 
 

@@ -171,5 +171,4 @@ from . import imports  # noqa: E402,F401 — xlsx_inspect, import_xlsx_to_table,
 from . import skills   # noqa: E402,F401 — list_skills, load_skill
 from . import sources   # noqa: E402,F401 — sources_register, attach_metadata, detect_duplicates
 from . import executor  # noqa: E402,F401 — run_python
-from . import markdown_tools # noqa: E402,F401 — extract_markdown_structure
 from . import search         # noqa: E402,F401 — build_search_index, search_index

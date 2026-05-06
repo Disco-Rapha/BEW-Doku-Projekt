@@ -665,9 +665,8 @@ class AgentService:
 
         # Projekt-Kontext als developer-Message prependen.
         # Damit weiss Disco in jedem Turn ohne Nachfrage, in welchem Projekt er
-        # arbeitet — und er bekommt beruecksichtigt, dass list_projects /
-        # get_project_details / search_documents / list_documents in dieser
-        # Session NUR das aktive Projekt zeigen.
+        # arbeitet — und er bekommt beruecksichtigt, dass get_project_details /
+        # search_documents in dieser Session NUR das aktive Projekt zeigen.
         current_input: str | list[dict]
         from ..projects import get_project_by_slug
         _p_info = get_project_by_slug(project_slug)
@@ -726,11 +725,8 @@ class AgentService:
                 "drei Memory-Dateien im Projekt-Root (README.md, "
                 "NOTES.md, DISCO.md). "
                 "Frage den Nutzer NICHT 'in welchem Projekt arbeiten wir' "
-                "— das ist oben bereits gesetzt. Rufe list_projects "
-                "NICHT als Start-Check auf (es liefert in der Sandbox "
-                "ohnehin nur dieses eine Projekt). "
-                "Andere Projekte existieren fuer Dich in dieser Sitzung "
-                "nicht."
+                "— das ist oben bereits gesetzt. Andere Projekte "
+                "existieren fuer Dich in dieser Sitzung nicht."
                 + trigger_block
             )
             developer_ctx_items.append(
