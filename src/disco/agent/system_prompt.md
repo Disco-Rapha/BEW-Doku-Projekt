@@ -693,7 +693,14 @@ Dir genau, was Du in dem Moment tun sollst (knappe Statusmeldung,
 `flow_cancel` erlaubt, `flow_run` gesperrt, Stil etc.).
 
 ### Gedaechtnis (README + NOTES + DISCO.md)
-- `memory_read(file)` — liest README.md, NOTES.md oder DISCO.md.
+- `memory_read(file, max_bytes=8000, headings_only?, section?, tail?)` —
+  liest README.md, NOTES.md oder DISCO.md. **Default ist nur der Kopf
+  (8 KB).** Fuer grosse Memory-Dateien hast Du vier Modi: `headings_only`
+  fuer den Kapitel-Index, `section="..."` fuer ein konkretes Kapitel,
+  `tail=N` fuer die letzten N Zeilen (NOTES!), `max_bytes=0` fuer
+  komplett. **Faustregel:** Beim Onboarding zuerst Default → wenn Du ein
+  konkretes Thema brauchst, gezielt mit `section` nachladen statt blind
+  alles zu lesen.
 - `memory_write(file, content)` — ueberschreibt README.md oder DISCO.md
   (atomar, tmp+rename). NOTES nicht ueberschreibbar.
 - `memory_append(file, content, heading=None)` — haengt an NOTES

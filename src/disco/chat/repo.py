@@ -338,6 +338,62 @@ def _estimate_tokens(content: str | None, tool_calls_json: str | None, tool_resu
     return total
 
 
+# ---------------------------------------------------------------------------
+# Compaction v3 — Tool-Output-Truncation in behaltenen Paaren
+# ---------------------------------------------------------------------------
+
+# Schwellenwert: Tool-Outputs unterhalb gehen voll durch, darueber wird
+# truncated. 5000 chars = ~1.25k Tokens. Werte unter diesem Threshold
+# (z.B. typische sqlite_query-Returns, kleine fs_list) bleiben unangetastet.
+_TOOL_OUTPUT_TRUNCATE_BYTES = 5000
+
+# Kopf + Schwanz, die im truncated Output erhalten bleiben. Pro Tool-Output:
+# Disco sieht Anfang + Ende und kann daraus den Kontext rekonstruieren,
+# ohne dass die ganzen z.B. 200 KB DISCO.md im Verlauf bleiben.
+_TOOL_OUTPUT_HEAD_BYTES = 1500
+_TOOL_OUTPUT_TAIL_BYTES = 500
+
+
+def _truncate_old_tool_output(output_str: str, *, tool_name: str = "") -> str:
+    """Truncated grosse Tool-Outputs aus aelteren tool-Messages.
+
+    Wird in `build_responses_api_input` aufgerufen — fuer ALLE tool-
+    Outputs ausser denen aus dem allerletzten tool-Turn (jenen braucht
+    Disco frisch). Aelteste Tool-Outputs aus den behaltenen 3 Paaren
+    werden so von je 50-200 KB auf 2 KB geschrumpft, der Sockel sinkt
+    drastisch.
+
+    Wenn der Output unter dem Threshold ist, kommt er unveraendert
+    zurueck. Sonst Format:
+
+        [TRUNCATED — vorheriger Tool-Turn, original X chars / Y Tokens]
+        <kopf-1500-chars>
+        ...[ausgeblendet]...
+        <schwanz-500-chars>
+
+    Disco sieht damit Anfang + Ende und weiss, dass dazwischen Inhalt
+    weggelassen wurde. Bei tool_name 'memory_read' o.ae. wird die
+    Tool-Identitaet im Header genannt.
+    """
+    if not output_str:
+        return output_str
+    if len(output_str) <= _TOOL_OUTPUT_TRUNCATE_BYTES:
+        return output_str
+    head = output_str[:_TOOL_OUTPUT_HEAD_BYTES]
+    tail = output_str[-_TOOL_OUTPUT_TAIL_BYTES:]
+    name_tag = f" [{tool_name}]" if tool_name else ""
+    skipped = len(output_str) - len(head) - len(tail)
+    header = (
+        f"[TRUNCATED{name_tag} — vorheriger Tool-Turn, "
+        f"original {len(output_str)} chars, ~{len(output_str) // 4} Tokens]"
+    )
+    return (
+        f"{header}\n{head}\n"
+        f"...[ausgeblendet: {skipped} chars]...\n"
+        f"{tail}"
+    )
+
+
 # ----------------------------------------------------------------
 # agent_tool_calls — strukturierte Spiegelung der JSON-Rohdaten
 # ----------------------------------------------------------------
@@ -694,7 +750,27 @@ def build_responses_api_input(
     if prepend_items:
         items.extend(prepend_items)
 
-    for msg in list_active_messages(project_slug, db_path=db_path):
+    # Compaction v3 — Sockel-Reduktion durch Tool-Output-Truncation:
+    # Aktive Tool-Messages aus den letzten paar Turns koennen einzeln
+    # 100+ KB wiegen (memory_read auf grosse DISCO.md, fs_read auf grosse
+    # Reports, doc_markdown_read auf lange PDFs). Compaction v2 markiert
+    # alles vor den letzten 3 user/assistant-Paaren als komprimiert,
+    # **dazwischenliegende grosse Tool-Outputs bleiben aber Teil der
+    # API-Input-Liste**.
+    #
+    # Strategie: nur die ALLERLETZTE tool-Message (zur aktuellsten
+    # assistant-Antwort) wird voll geliefert — Disco braucht die frischen
+    # Daten. Aeltere tool-Messages werden Result-fuer-Result truncated:
+    # head + tail bleiben erhalten, dazwischen Platzhalter mit
+    # Original-Groesse.
+    active_msgs = list_active_messages(project_slug, db_path=db_path)
+    last_tool_msg_id: int | None = None
+    for msg in reversed(active_msgs):
+        if msg["role"] == "tool":
+            last_tool_msg_id = int(msg["id"])
+            break
+
+    for msg in active_msgs:
         role = msg["role"]
         content = msg.get("content")
         tool_calls = msg.get("tool_calls")
@@ -758,6 +834,7 @@ def build_responses_api_input(
                 tool_results if isinstance(tool_results, list)
                 else [tool_results]
             )
+            is_last_tool_turn = int(msg["id"]) == last_tool_msg_id
             for res in results_iter:
                 if not isinstance(res, dict):
                     continue
@@ -772,6 +849,11 @@ def build_responses_api_input(
                     else json.dumps(raw_result, ensure_ascii=False)
                     if raw_result is not None else ""
                 )
+                if not is_last_tool_turn:
+                    output_str = _truncate_old_tool_output(
+                        output_str,
+                        tool_name=res.get("name") or "",
+                    )
                 items.append({
                     "type": "function_call_output",
                     "call_id": call_id,

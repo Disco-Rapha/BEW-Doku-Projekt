@@ -108,12 +108,35 @@ def _atomic_write(target: Path, content: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Default-Cap fuer memory_read. README/NOTES/DISCO.md wachsen ueber
+# Sessions auf zig KB an — bei jedem Session-Start die ganze Datei in den
+# LLM-Kontext zu laden ist Verschwendung. Standard liefert nur die ersten
+# 8 KB; mit headings_only=True bekommt Disco eine Kapitel-Uebersicht und
+# kann via section/tail/max_bytes gezielt nachladen.
+#
+# Die Memory-Architektur-Reform (BACKLOG TOP-2) wird das Modell weiter
+# verfeinern (Schicht 1 immer geladen + Kapitel-Index). Bis dahin ist
+# dies der Pragmatismus-Schritt.
+DEFAULT_MEMORY_MAX_BYTES = 8000
+
+
 @register(
     name="memory_read",
     description=(
         "Liest eine der drei Memory-Dateien des aktiven Projekts: "
         "README.md (Projekt-Briefing des Nutzers), NOTES.md (chronologisches "
         "Logbuch) oder DISCO.md (destilliertes Arbeitsgedaechtnis). "
+        "\n\n"
+        "**Default ist gekuerzt** (max_bytes=8000) — fuer Onboarding "
+        "reicht der Kopf der Datei. Wenn Du gezielt mehr brauchst, gibt "
+        "es vier Modi: \n"
+        "  - headings_only=True: nur die Kapitel-Liste (H2/H3) als "
+        "    Index, ohne Body. Ideal fuer Orientierung.\n"
+        "  - section='<Heading>': nur dieses Kapitel (case-insensitive, "
+        "    matcht den ersten H2 oder H3).\n"
+        "  - tail=N: nur die letzten N Zeilen — fuer NOTES.md das "
+        "    sinnvollste, weil chronologisch.\n"
+        "  - max_bytes=<N>: explizites Bytelimit (oder 0 fuer komplett).\n"
         "Existiert die Datei nicht, wird exists=false zurueckgegeben."
     ),
     parameters={
@@ -126,12 +149,59 @@ def _atomic_write(target: Path, content: str) -> None:
                     "Dateiname im Projekt-Root. README.md, NOTES.md oder DISCO.md."
                 ),
             },
+            "max_bytes": {
+                "type": "integer",
+                "description": (
+                    "Maximale Bytes des content-Felds. Default 8000. "
+                    "0 = unlimitiert (volle Datei). Bei Truncation wird "
+                    "truncated=True gesetzt und total_bytes verraet die "
+                    "Original-Groesse."
+                ),
+            },
+            "tail": {
+                "type": "integer",
+                "description": (
+                    "Wenn gesetzt: gibt die letzten N Zeilen statt des "
+                    "Datei-Anfangs zurueck. Sinnvoll fuer NOTES.md "
+                    "(chronologisches Logbuch — neueste Eintraege unten)."
+                ),
+            },
+            "section": {
+                "type": "string",
+                "description": (
+                    "Wenn gesetzt: liefert nur den Inhalt des ersten "
+                    "passenden H2- oder H3-Kapitels (case-insensitive, "
+                    "Substring-Match auf Heading-Text). Beispiel: "
+                    "section='Aktuelle Aufgabe' findet '## Aktuelle "
+                    "Aufgabe', '### Aktuelle Aufgabe', '## 2026-04-25 "
+                    "Aktuelle Aufgabe' usw. Wenn nicht gefunden, "
+                    "kommt section_found=False zurueck."
+                ),
+            },
+            "headings_only": {
+                "type": "boolean",
+                "description": (
+                    "Wenn True: liefert nur die Kapitel-Struktur "
+                    "(H1/H2/H3-Headings) als Index, ohne Body. Ideal fuer "
+                    "Orientierung in einer grossen DISCO.md/NOTES.md."
+                ),
+            },
         },
         "required": ["file"],
     },
-    returns="{file, exists, content, size_bytes, line_count}",
+    returns=(
+        "{file, exists, content, size_bytes, line_count, total_bytes, "
+        "truncated, mode, section_found?}"
+    ),
 )
-def _memory_read(*, file: str) -> dict[str, Any]:
+def _memory_read(
+    *,
+    file: str,
+    max_bytes: int | None = None,
+    tail: int | None = None,
+    section: str | None = None,
+    headings_only: bool = False,
+) -> dict[str, Any]:
     path = _resolve(file, allowed=READABLE_FILES)
     if not path.exists():
         return {
@@ -140,15 +210,129 @@ def _memory_read(*, file: str) -> dict[str, Any]:
             "content": "",
             "size_bytes": 0,
             "line_count": 0,
+            "total_bytes": 0,
+            "truncated": False,
+            "mode": "default",
         }
-    content = path.read_text(encoding="utf-8")
+
+    full = path.read_text(encoding="utf-8")
+    total_bytes = len(full.encode("utf-8"))
+
+    # Mode-Auswahl mit klarer Praezedenz:
+    #   1. headings_only — nur Index
+    #   2. section — nur ein Kapitel
+    #   3. tail — letzte N Zeilen
+    #   4. default — Kopf der Datei mit max_bytes-Cap
+    if headings_only:
+        index = _extract_headings(full)
+        content = index
+        truncated = False
+        mode = "headings_only"
+        result_extra: dict[str, Any] = {}
+    elif section:
+        body, found = _extract_section(full, section)
+        content = body
+        truncated = False
+        mode = "section"
+        result_extra = {"section_found": found}
+    elif tail is not None and tail > 0:
+        lines = full.splitlines()
+        content = "\n".join(lines[-tail:])
+        if not full.endswith("\n") and lines:
+            pass
+        else:
+            content = content + "\n" if content else ""
+        truncated = len(lines) > tail
+        mode = "tail"
+        result_extra = {}
+    else:
+        cap = DEFAULT_MEMORY_MAX_BYTES if max_bytes is None else max_bytes
+        if cap and total_bytes > cap:
+            content = full.encode("utf-8")[:cap].decode("utf-8", errors="ignore")
+            truncated = True
+        else:
+            content = full
+            truncated = False
+        mode = "default"
+        result_extra = {}
+
     return {
         "file": file,
         "exists": True,
         "content": content,
         "size_bytes": len(content.encode("utf-8")),
-        "line_count": content.count("\n") + (0 if content.endswith("\n") else 1),
+        "line_count": content.count("\n") + (
+            0 if content.endswith("\n") or not content else 1
+        ),
+        "total_bytes": total_bytes,
+        "truncated": truncated,
+        "mode": mode,
+        **result_extra,
     }
+
+
+# ---------------------------------------------------------------------------
+# Helfer fuer headings_only / section
+# ---------------------------------------------------------------------------
+
+
+def _extract_headings(text: str) -> str:
+    """Liefert die Heading-Struktur als Markdown-Index.
+
+    Pro H1/H2/H3-Zeile eine Eintrag mit Zeilen-Nummer als Hint, damit
+    Disco bei Bedarf gezielt mit `tail`/`max_bytes` nachladen kann.
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    for n, line in enumerate(lines, start=1):
+        s = line.lstrip()
+        if s.startswith("# ") or s.startswith("## ") or s.startswith("### "):
+            out.append(f"L{n:>5}: {s}")
+    if not out:
+        return "(keine Headings gefunden)"
+    return "\n".join(out)
+
+
+def _extract_section(text: str, name: str) -> tuple[str, bool]:
+    """Sucht das erste H2/H3-Kapitel, dessen Heading `name` enthaelt.
+
+    Liefert (body, found). Body inkludiert den Heading selbst und alles
+    bis zum naechsten gleich- oder hoeher-rangigen Heading.
+    """
+    needle = name.strip().lower()
+    if not needle:
+        return ("", False)
+    lines = text.splitlines()
+    n = len(lines)
+    start_idx: int | None = None
+    start_level: int = 0
+    for i, raw in enumerate(lines):
+        s = raw.lstrip()
+        for level, prefix in ((2, "## "), (3, "### ")):
+            if s.startswith(prefix):
+                heading_text = s[len(prefix):].lower()
+                if needle in heading_text:
+                    start_idx = i
+                    start_level = level
+                    break
+        if start_idx is not None:
+            break
+
+    if start_idx is None:
+        return ("", False)
+
+    end_idx = n
+    for j in range(start_idx + 1, n):
+        s = lines[j].lstrip()
+        # Stop bei gleich- oder hoeher-rangigem Heading
+        if (start_level >= 2 and s.startswith("# ")) or \
+           (start_level >= 2 and s.startswith("## ")) or \
+           (start_level == 3 and s.startswith("### ")):
+            end_idx = j
+            break
+
+    body = "\n".join(lines[start_idx:end_idx]).rstrip() + "\n"
+    return (body, True)
 
 
 # ---------------------------------------------------------------------------

@@ -34,9 +34,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_LIST_LIMIT = 500
 MAX_LIST_LIMIT = 5000
 
-DEFAULT_READ_BYTES = 200_000      # 200 KB
-MAX_READ_BYTES = 2_000_000        # 2 MB Text — Schutz vor Kontext-Explosion
+DEFAULT_READ_BYTES = 30_000       # 30 KB ≈ 7,5 k Tokens — Sockel-schonend
+MAX_READ_BYTES = 2_000_000        # 2 MB Text — harte Obergrenze gegen Kontext-Explosion
 MAX_READ_BYTES_BINARY = 5_000_000 # 5 MB Binaer (base64-Output ist ~33% groesser)
+# Hinweis fuer Disco: bei truncated=True kann er mit max_bytes=N gezielt
+# mehr lesen oder die Datei in Teilen verarbeiten.
 
 # Schreib-Limits (Agent soll eher viele kleine Files anlegen als wenige riesige)
 MAX_WRITE_BYTES = 10_000_000      # 10 MB
@@ -170,9 +172,12 @@ def _fs_list(
     name="fs_read",
     description=(
         "Liest eine Textdatei unter data/. Fuer PDFs bitte pdf_markdown_read "
-        "verwenden (ueber Flow `pdf_to_markdown` vorher befuellt). Bei zu "
-        "grossen Dateien wird der Inhalt auf max_bytes gekuerzt "
-        "(truncated=true). Kein Zugriff ausserhalb von data/."
+        "verwenden (ueber Flow `pdf_to_markdown` vorher befuellt). "
+        "Default-Limit ist 30 KB — fuer grosse Reports/Skripte erst mal "
+        "den Kopf lesen, bei Bedarf gezielt mit max_bytes=<N> oder einem "
+        "Search-/Inspect-Tool nachladen statt blind alles zu ziehen. "
+        "Bei truncated=true verraet size_bytes die Original-Groesse. "
+        "Kein Zugriff ausserhalb von data/."
     ),
     parameters={
         "type": "object",

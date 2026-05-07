@@ -14,20 +14,77 @@ Re-Priorisierung nach Phase-2-Aufräumen. Echte „brennen-jetzt"-Items:
    DOCX/PPTX + File-Internal-Metadata) und Phase 3 (Failed-Tracking
    für 🟡-Status) sind die nächsten großen Brocken. Heute Nachmittag
    geplant.
-2. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
+2. **★ Memory-Architektur: Zwei-Schicht-Modell + Tabellen-Wissen
+   bei Tabellen** — User-Beobachtung 2026-05-07 (lager-halle):
+   `DISCO.md` (45 KB) und `NOTES.md` (28 KB) wachsen unkontrolliert,
+   werden bei jedem Session-Start komplett gelesen → ~18 k Tokens
+   Sockel pro Onboarding. Auch Tabellen-Schema-Wissen liegt heute
+   in DISCO.md statt am Tabellen-Objekt selbst.
+
+   **Konzept-Skizze (Stand 2026-05-07, vor Diskussion):**
+
+   - **Schicht 1 — IMMER laden:** kleine Kern-Datei mit
+     Projekt-Identität, aktivem Thema, kritischen Konventionen.
+     Maxima ~5 KB. Wird bei jedem `memory_read` ohne Argumente
+     geliefert.
+
+   - **Schicht 2 — Kapitel-Index:** Liste aller Kapitel-Titel
+     (z.B. „PDF-Pipeline-Kalibrierung", „Excel-Reporter-Anpassungen",
+     „SOLL/IST gegen VGB S 831"). Disco bekommt nur den Index als
+     Default. Bei thematischer Passung lädt er ein konkretes
+     Kapitel via `memory_read({chapter: "..."})`.
+
+   - **Tabellen-Wissen wandert weg von DISCO.md** — pro Tabelle
+     ein eigenes Beschreibungs-Objekt: was steht drin, wie ist das
+     Schema entstanden, welche Konventionen, welche typischen
+     Joins. Speicherung-Kandidaten: SQL-Comments (CREATE TABLE
+     ... -- Kommentar), oder eine `agent_table_docs`-Tabelle, oder
+     pro Tabelle eine `_doc.md` im Projekt. Diskussion offen.
+
+   - **NOTES.md** als chronologisches Logbuch — pro Eintrag mit
+     Datum + Kapitel-Tag. Kapitel-Tag macht NOTES kompatibel zur
+     Kapitel-Index-Logik aus Schicht 2.
+
+   - **Auto-Archivierung** — Hebel 4 aus der Context-Analyse vom
+     2026-05-07. NICHT separat machen, sondern als Teil dieser
+     Memory-Architektur-Reform: alte Kapitel landen in
+     `.disco/memory-archive/<date>.md` und sind dort wieder per
+     Index/Suche abrufbar.
+
+   - **Skills-State im Handover** — Hebel 5 aus der Context-
+     Analyse: nach Compaction soll Disco wissen, welche Skills
+     im aktuellen Thema aktiv waren. Gehoert konzeptionell zu
+     dieser Memory-Reform.
+
+   **Heute schon teilweise umgesetzt** (2026-05-07): Hebel 1
+   (memory_read max_bytes-Default + section-Filter), Hebel 2
+   (fs_read max_bytes-Default), Hebel 3 (Compaction v3 mit
+   Tool-Output-Truncation). Die Anpassungen sollen mit der
+   Memory-Reform spaeter nochmal verfeinert werden.
+
+   **Zu klaeren in der Diskussion:**
+   - Wo liegt Schicht 1 physisch — DISCO.md (umfunktioniert) oder
+     neue Datei?
+   - Kapitel-Index: separate Datei oder Headings-Scan?
+   - Tabellen-Wissen-Speicherort: SQL-Comment / `agent_table_docs` /
+     `_doc.md`?
+   - Migration der bestehenden DISCO.md/NOTES.md: automatisch
+     zerlegen oder manuell vom Nutzer pro Projekt?
+
+3. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
    mit User offen. Disco verzettelt sich in `work_*`-Tabellen ohne
    Lifecycle. Konsolidiert aus zwei Themen 2026-05-07.
-3. **★ System-Prompt + Skill + Tool Review-Session** — gemeinsamer
+4. **★ System-Prompt + Skill + Tool Review-Session** — gemeinsamer
    Walkthrough mit User: System-Prompt (782 Zeilen, 41 Sections, viel
    Doppelung) + alle 11 Skills (besonders `report-builder` mit nur
    1× Nutzung) + alle 42 Tools auf Sinn / Doppelung / Unklarheit
    prüfen. Ergebnis: gestraffter Prompt + bewusstere Skill-Liste +
    ggf. weitere Tool-Streichungen. User liest mit, ich liefere
    Material.
-4. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
+5. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
    Server, Counter-Update nach Crash, DI-HighRes max_retries,
    LibreDWG SIGABRT). Eigene Bug-Fixing-Session geplant.
-5. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
+6. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
    echtem User-Pain. Drei Cluster (A/G/H) sind durch Phase 2
    erledigt, F+J teilweise. Rest gezielt abarbeiten.
 
