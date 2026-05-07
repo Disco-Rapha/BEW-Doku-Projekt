@@ -172,3 +172,4 @@ from . import skills   # noqa: E402,F401 — list_skills, load_skill
 from . import sources   # noqa: E402,F401 — sources_register, attach_metadata, detect_duplicates
 from . import executor  # noqa: E402,F401 — run_python
 from . import search         # noqa: E402,F401 — build_search_index, search_index
+from . import pipeline       # noqa: E402,F401 — pipeline_file_status

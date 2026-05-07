@@ -452,6 +452,7 @@ auf und folgst dann der Routine. Nicht frei improvisieren.
 | "alle Dokumente", "10.000", "bulk", "Pipeline", "Flow bauen" | `flow-builder` |
 | **"routing", "routen", "welche Engine pro Datei", "Engine-Entscheidung"** | **`flow_run` `extraction_routing_decision`** |
 | **"PDFs/Excels/DWGs/Bilder extrahieren", "nach Markdown", "OCR laufen lassen"** | **`flow_run` `extraction` (wenn `work_extraction_routing` leer, vorher `extraction_routing_decision`).** |
+| "warum wurde X nicht extrahiert", "ist Y im Suchindex", "hat Z gefailt", "Pipeline-Status der Datei", Fehler-Diagnose pro Datei | `pipeline-diagnostics` (Skill) — erste Anlaufstelle ist `pipeline_file_status({"rel_path": ...})` |
 | "Datei nach Markdown", "OCR", "welche Engine", "Metadaten aus PDFs", "PDFs/Excels/DWGs inhaltlich sichten/lesen", "DCC bestimmen", "klassifizieren" + Datei | Pipeline: `extraction_routing_decision` + `extraction`, dann `doc_markdown_read`. |
 | VOR dem ersten SDK-Call in einem Flow (Azure DI, Azure OpenAI, Docling) | `sdk-reference` |
 | Du wurdest vom System aufgeweckt (developer-Block enthaelt SYSTEM-TRIGGER) | `flow-supervisor` |
