@@ -17,10 +17,17 @@ Re-Priorisierung nach Phase-2-Aufräumen. Echte „brennen-jetzt"-Items:
 2. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
    mit User offen. Disco verzettelt sich in `work_*`-Tabellen ohne
    Lifecycle. Konsolidiert aus zwei Themen 2026-05-07.
-3. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
+3. **★ System-Prompt + Skill + Tool Review-Session** — gemeinsamer
+   Walkthrough mit User: System-Prompt (782 Zeilen, 41 Sections, viel
+   Doppelung) + alle 11 Skills (besonders `report-builder` mit nur
+   1× Nutzung) + alle 42 Tools auf Sinn / Doppelung / Unklarheit
+   prüfen. Ergebnis: gestraffter Prompt + bewusstere Skill-Liste +
+   ggf. weitere Tool-Streichungen. User liest mit, ich liefere
+   Material.
+4. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
    Server, Counter-Update nach Crash, DI-HighRes max_retries,
    LibreDWG SIGABRT). Eigene Bug-Fixing-Session geplant.
-4. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
+5. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
    echtem User-Pain. Drei Cluster (A/G/H) sind durch Phase 2
    erledigt, F+J teilweise. Rest gezielt abarbeiten.
 
@@ -525,6 +532,63 @@ Output: schriftliche Bilanz mit Ampelbewertung pro Bereich + konkreten
 Nachbesserungs-Tickets im Backlog.
 
 Ursprung: UAT-Session 2026-04-20, Wunsch des Nutzers.
+
+---
+
+## ★ System-Prompt + Skill + Tool Review-Session (Prio: TOP — geplant 2026-05-07)
+
+**User-Anforderung 2026-05-07**: gemeinsamer Walkthrough durch
+System-Prompt, alle Skills und alle Tools. Ziel: kritisch prüfen,
+was wirklich gebraucht wird, was redundant ist, was unklar
+formuliert ist. Ergebnis ist eine deutlich gestraffte Disco-
+Persönlichkeit ohne Funktionsverlust.
+
+### Vorbereitung (von Disco vor der Session)
+
+**1. System-Prompt-Mapping** — `src/disco/agent/system_prompt.md`,
+heute 38 KB / 782 Zeilen / 41 Sections:
+- Pro Section: Zweck, Länge, getriggerte Use-Cases der letzten 30 Tage
+- Doppelungen markieren (Audit hat schon: Verzeichnisstruktur ↔
+  Architektur-Ebenen, drei Persönlichkeits-Sektionen, Pipeline-Hinweis
+  zweimal, Anti-Halluzination + Faktenbasiert + kein Raten)
+- Tool-Detail-Sektionen: stehen schon im Tool-Schema, hier redundant?
+
+**2. Skill-Inventur** — `skills/*.md`, heute 11 Skills:
+- Pro Skill: Trigger-Phrasen aktuell, Aufruf-Häufigkeit (30d), letzter
+  Update, Frontmatter-Konsistenz
+- Audit hat: `report-builder` nur 1× geladen → Streichung oder
+  Trigger-Schärfung?
+- `excel-formatter` vs `excel-reporter` Überschneidung?
+- `flow-builder` vs `flow-supervisor` Abgrenzung klar?
+
+**3. Tool-Inventur** — alle 42 registrierten Tools:
+- Pro Tool: Aufruf-Häufigkeit (30d), Description-Länge, last-touched,
+  Doppelungen (z.B. mehrere `flow_*`-Tools mit ähnlicher Funktion)
+- Tool-Schemas: Pflicht-Felder konsistent? Beispiele aktuell?
+- Was kann konsolidiert werden ohne Funktionsverlust?
+
+### Format der Session
+
+User liest mit, Disco bringt Material in **kompakten Tabellen** pro
+Bereich. Pro Item: User-Entscheidung in einem Wort
+(behalten / straffen / streichen / mergen-mit-X).
+
+Danach Umsetzung als eigener Block, ähnlich wie Phase-2-Blöcke:
+einzelne Streichungen + Neuformulierungen + agent-setup-Push.
+
+### Erwartete Effekte
+
+- System-Prompt-Volumen: -25 bis -30 % (Audit-Schätzung)
+- Skill-Liste: -1 bis -3 Skills (oder konsolidiert)
+- Tool-Liste: -3 bis -5 Tools (Doppelungen + tote Pfade)
+- Klarere Trigger-Tabelle, weniger Konflikte zwischen Skills
+
+### Erfolgs-Kriterien
+
+- Dev-Chat-Smoketest: typische Use-Cases (sources_register,
+  flow_run, excel-report) laufen weiterhin sauber
+- Token-Verbrauch pro Turn sinkt mit kürzerem Prompt
+- Subjektiv: Disco wirkt fokussierter, weniger ablenkbar
 
 ---
 
