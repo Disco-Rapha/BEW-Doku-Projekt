@@ -32,6 +32,7 @@ def load_items(
     *,
     limit: int | None,
     rerun_where_engine: str | None = None,
+    only_file_ids: list[int] | None = None,
 ) -> List[Dict]:
     """PDF / Excel / DWG / Bild aus agent_sources fuer Routing waehlen.
 
@@ -40,11 +41,15 @@ def load_items(
       - Extension in {pdf, xlsx, xlsm, xls, dwg, dxf, jpg, jpeg, png,
                       tif, tiff, webp, bmp, gif}
       - **Kanonisch** (keine duplicate-of-Relation als from-Seite) —
-        Duplikate sollen nicht doppelt geroutet werden, das verbraucht
-        Kosten und macht die Pipeline-Statistik konfus. Wenn Disco
-        spaeter die Kanonik aendert (z.B. Begleit-Excel "replaces"),
-        koennen frueher als Duplikat markierte Files wieder kanonisch
-        werden — beim naechsten Run werden sie geroutet.
+        Duplikate sollen nicht doppelt geroutet werden.
+
+    Spezial-Modi (gegenseitig ausschliessend, alle umgehen den
+    "Skip-bereits-geroutete"-Default):
+      - rerun_where_engine: alle Files mit dieser engine neu routen
+        (z.B. nach Engine-Default-Wechsel)
+      - only_file_ids: nur diese spezifischen file_ids routen, auch
+        wenn sie schon geroutet sind (Per-File-Trigger fuer Disco's
+        Reparatur-Workflows)
     """
     canonical_filter = (
         "AND NOT EXISTS ("
@@ -52,6 +57,26 @@ def load_items(
         "  WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'"
         ")"
     )
+
+    # Per-File-Trigger: hoechste Prioritaet, ueberschreibt andere Modi
+    if only_file_ids:
+        placeholders = ",".join("?" * len(only_file_ids))
+        sql = (
+            "SELECT s.id AS file_id, s.rel_path, s.kind AS file_role, s.extension "
+            "FROM ds.agent_sources s "
+            f"WHERE s.id IN ({placeholders}) AND s.status='active' "
+            f"{canonical_filter} "
+            "ORDER BY s.id"
+        )
+        rows = run.db.query(sql, list(only_file_ids))
+        items: List[Dict] = list(rows)
+        if limit is not None:
+            items = items[:limit]
+        run.log(
+            f"Routing-Input (Per-File-Mode, only_file_ids={only_file_ids}): "
+            f"{len(items)} kanonische Datei(en) werden geroutet."
+        )
+        return items
 
     if rerun_where_engine:
         sql = (
@@ -63,7 +88,7 @@ def load_items(
             "ORDER BY RANDOM()"
         )
         rows = run.db.query(sql, [rerun_where_engine])
-        items: List[Dict] = list(rows)
+        items = list(rows)
         if limit is not None:
             items = items[:limit]
         run.log(
@@ -279,10 +304,21 @@ def main() -> None:
         if rerun_where_engine == "":
             rerun_where_engine = None
 
+        only_file_ids = cfg.get("only_file_ids")
+        if only_file_ids is not None:
+            try:
+                only_file_ids = [int(x) for x in only_file_ids]
+            except (TypeError, ValueError):
+                run.log(f"Ignoriere only_file_ids — kein gueltiges Int-Array: {only_file_ids!r}")
+                only_file_ids = None
+            if not only_file_ids:
+                only_file_ids = None
+
         items = load_items(
             run,
             limit=limit,
             rerun_where_engine=rerun_where_engine,
+            only_file_ids=only_file_ids,
         )
         run.set_total(len(items))
 

@@ -47,14 +47,24 @@ def load_items(
     only_engine: str | None,
     only_kind: str | None,
     force_rerun: bool,
+    only_file_ids: list[int] | None = None,
 ) -> List[Dict]:
     """Lade zu extrahierende Dateien aus work_extraction_routing + agent_sources.
 
     Default: Skip wenn unveraenderter source_hash schon in agent_doc_markdown.
     force_rerun=True ignoriert die Skip-Logik.
+
+    only_file_ids: Per-File-Trigger fuer Reparatur-Workflows. Beachtet
+    weiterhin only_engine/only_kind/force_rerun, beschraenkt aber
+    zusaetzlich auf die genannten file_ids.
     """
     where = ["w.engine IS NOT NULL", "w.engine != ''", "w.engine != 'skip'"]
     params: list = []
+
+    if only_file_ids:
+        placeholders = ",".join("?" * len(only_file_ids))
+        where.append(f"w.file_id IN ({placeholders})")
+        params.extend(only_file_ids)
 
     if only_engine:
         if only_engine not in all_known_engines():
@@ -96,6 +106,7 @@ def load_items(
     run.log(
         f"Extraktions-Input: {len(items)} Dateien "
         f"(only_engine={only_engine!r}, only_kind={only_kind!r}, "
+        f"only_file_ids={only_file_ids if only_file_ids else 'none'}, "
         f"force_rerun={force_rerun}, "
         f"limit={limit if limit is not None else 'none'})"
     )
@@ -509,12 +520,23 @@ def main() -> None:
 
         force_rerun = _parse_bool(cfg.get("force_rerun"))
 
+        only_file_ids = cfg.get("only_file_ids")
+        if only_file_ids is not None:
+            try:
+                only_file_ids = [int(x) for x in only_file_ids]
+            except (TypeError, ValueError):
+                run.log(f"Ignoriere only_file_ids — kein gueltiges Int-Array: {only_file_ids!r}")
+                only_file_ids = None
+            if not only_file_ids:
+                only_file_ids = None
+
         items = load_items(
             run,
             limit=limit,
             only_engine=only_engine,
             only_kind=only_kind,
             force_rerun=force_rerun,
+            only_file_ids=only_file_ids,
         )
         run.set_total(len(items))
 
