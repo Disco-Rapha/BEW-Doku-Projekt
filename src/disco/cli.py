@@ -8,7 +8,6 @@ from pathlib import Path
 import click
 
 from . import __version__, db as db_module
-from . import projects as projects_module
 from . import sources as sources_module
 
 
@@ -852,8 +851,6 @@ def flow_status(run_id: int, project_slug: str) -> None:
     click.echo(f"  Items skipped : {run.skipped_items}")
     click.echo(f"  Kosten (EUR)  : {run.total_cost_eur:.4f}")
     click.echo(f"  Tokens in/out : {run.total_tokens_in} / {run.total_tokens_out}")
-    if run.pause_requested:
-        click.echo("  ** pause_requested gesetzt")
     if run.cancel_requested:
         click.echo("  ** cancel_requested gesetzt")
     if run.error:
@@ -898,22 +895,6 @@ def flow_runs(
             f"{r.id:<5} {r.flow_name[:22]:<22} {r.status:<11} "
             f"{items:>12} {r.total_cost_eur:>7.3f}  {r.created_at}"
         )
-
-
-@flow_group.command("pause")
-@click.argument("run_id", type=int)
-@click.option("--project", "project_slug", required=True, help="Projekt-Slug.")
-def flow_pause(run_id: int, project_slug: str) -> None:
-    """Signalisiert dem Worker, dass er beim naechsten Item pausieren soll."""
-    from .flows import service
-
-    project_path = _resolve_project_path(project_slug)
-    try:
-        run = service.request_pause(project_path, run_id)
-    except (KeyError, ValueError) as exc:
-        click.echo(f"FEHLER: {exc}", err=True)
-        raise SystemExit(1)
-    click.echo(f"pause_requested=1 fuer Run {run.id}. Worker beendet beim naechsten Item.")
 
 
 @flow_group.command("cancel")

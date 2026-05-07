@@ -47,14 +47,24 @@ def load_items(
     only_engine: str | None,
     only_kind: str | None,
     force_rerun: bool,
+    only_file_ids: list[int] | None = None,
 ) -> List[Dict]:
     """Lade zu extrahierende Dateien aus work_extraction_routing + agent_sources.
 
     Default: Skip wenn unveraenderter source_hash schon in agent_doc_markdown.
     force_rerun=True ignoriert die Skip-Logik.
+
+    only_file_ids: Per-File-Trigger fuer Reparatur-Workflows. Beachtet
+    weiterhin only_engine/only_kind/force_rerun, beschraenkt aber
+    zusaetzlich auf die genannten file_ids.
     """
     where = ["w.engine IS NOT NULL", "w.engine != ''", "w.engine != 'skip'"]
     params: list = []
+
+    if only_file_ids:
+        placeholders = ",".join("?" * len(only_file_ids))
+        where.append(f"w.file_id IN ({placeholders})")
+        params.extend(only_file_ids)
 
     if only_engine:
         if only_engine not in all_known_engines():
@@ -96,6 +106,7 @@ def load_items(
     run.log(
         f"Extraktions-Input: {len(items)} Dateien "
         f"(only_engine={only_engine!r}, only_kind={only_kind!r}, "
+        f"only_file_ids={only_file_ids if only_file_ids else 'none'}, "
         f"force_rerun={force_rerun}, "
         f"limit={limit if limit is not None else 'none'})"
     )
@@ -110,7 +121,26 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
     source_hash = row.get("source_hash")
     file_role = str(row.get("file_role") or "source")
 
+    # Vorigen retry_count lesen, damit wir ihn inkrementieren statt resetten.
+    prev = run.db.query(
+        "SELECT retry_count FROM ds.agent_doc_markdown WHERE file_id = ?",
+        [file_id],
+    )
+    prev_retries = int(prev[0]["retry_count"]) if prev else 0
+
     if engine not in all_known_engines():
+        # Unbekannte Engine — als failed registrieren, kein Crash.
+        _write_extraction_failure(
+            run=run,
+            file_id=file_id,
+            rel_path=rel_path,
+            file_role=file_role,
+            file_kind=file_kind,
+            engine=engine,
+            error=f"Unknown engine: {engine!r}",
+            duration_ms=0.0,
+            prev_retries=prev_retries,
+        )
         raise ValueError(
             f"file_id={file_id}: engine={engine!r} ungueltig. "
             f"Erwartet {sorted(all_known_engines())}."
@@ -123,10 +153,46 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
     fs_rel_path = Path(role_prefix) / rel_path
     abs_path = (run.project_root / fs_rel_path).resolve()
     if not abs_path.is_file():
+        _write_extraction_failure(
+            run=run,
+            file_id=file_id,
+            rel_path=str(fs_rel_path),
+            file_role=file_role,
+            file_kind=file_kind,
+            engine=engine,
+            error=f"FileNotFoundError: {fs_rel_path}",
+            duration_ms=0.0,
+            prev_retries=prev_retries,
+        )
         raise FileNotFoundError(f"Datei nicht gefunden: {fs_rel_path}")
 
+    # Optional: Modell-Override aus Run-Config (z.B. {"model": "gpt-5.4-prod"}).
+    # Default: None → Engine nutzt ihren ENV-Default. Wirkt nur fuer
+    # LLM-basierte Engines (image-gpt5-vision); andere ignorieren das Feld.
+    model_override = run.config.get("model") or None
+
     t0 = time.monotonic()
-    md_body, meta = dispatch_extract(abs_path, engine)
+    try:
+        md_body, meta = dispatch_extract(
+            abs_path, engine, model_deployment=model_override,
+        )
+    except Exception as exc:
+        # Extraction selbst gecrashed (Azure DI 5xx, OOM, libredwg SIGABRT etc.)
+        # Failure-Eintrag schreiben, dann re-raise — Flow-Runner markiert
+        # Item als failed, FlowDB.flow_run_items zaehlt es korrekt.
+        duration_ms = (time.monotonic() - t0) * 1000.0
+        _write_extraction_failure(
+            run=run,
+            file_id=file_id,
+            rel_path=str(fs_rel_path),
+            file_role=file_role,
+            file_kind=file_kind,
+            engine=engine,
+            error=f"{type(exc).__name__}: {str(exc)[:500]}",
+            duration_ms=duration_ms,
+            prev_retries=prev_retries,
+        )
+        raise
     duration_ms = (time.monotonic() - t0) * 1000.0
 
     extracted_at = datetime.now(timezone.utc).isoformat()
@@ -181,6 +247,7 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
         meta_json_obj["imported_tables"] = imported_tables
 
     # In agent_doc_markdown schreiben — rel_path mit Praefix
+    # Bei erfolgreichem Lauf: error=NULL, retry_count inkrementiert.
     run.db.insert_row(
         "ds.agent_doc_markdown",
         {
@@ -197,6 +264,8 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
             "run_id": run.run_id,
             "created_at": extracted_at,
             "extractor_version": extractor_version,
+            "error": None,
+            "retry_count": prev_retries + 1,
         },
         on_conflict="replace",
     )
@@ -245,6 +314,52 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
         "estimated_cost_eur": cost,
         "imported_tables": [t["table"] for t in imported_tables],
     }
+
+
+# ---------------------------------------------------------------------------
+# Failure-Writer fuer agent_doc_markdown
+# ---------------------------------------------------------------------------
+
+
+def _write_extraction_failure(
+    *,
+    run: FlowRun,
+    file_id: int,
+    rel_path: str,
+    file_role: str,
+    file_kind: str,
+    engine: str,
+    error: str,
+    duration_ms: float,
+    prev_retries: int,
+) -> None:
+    """Schreibt einen Failure-Eintrag in agent_doc_markdown.
+
+    md_content bleibt leer, error wird befuellt, retry_count inkrementiert.
+    Bestehende erfolgreiche Eintraege werden NICHT ueberschrieben — nur
+    wenn vorher kein Eintrag oder ein vorheriger Failure-Eintrag da war.
+    """
+    run.db.insert_row(
+        "ds.agent_doc_markdown",
+        {
+            "file_id": file_id,
+            "rel_path": rel_path,
+            "engine": engine,
+            "file_kind": file_kind or None,
+            "md_content": "",
+            "char_count": 0,
+            "n_units": 0,
+            "meta_json": None,
+            "source_hash": None,
+            "duration_ms": duration_ms,
+            "run_id": run.run_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "extractor_version": None,
+            "error": error,
+            "retry_count": prev_retries + 1,
+        },
+        on_conflict="replace",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -405,12 +520,23 @@ def main() -> None:
 
         force_rerun = _parse_bool(cfg.get("force_rerun"))
 
+        only_file_ids = cfg.get("only_file_ids")
+        if only_file_ids is not None:
+            try:
+                only_file_ids = [int(x) for x in only_file_ids]
+            except (TypeError, ValueError):
+                run.log(f"Ignoriere only_file_ids — kein gueltiges Int-Array: {only_file_ids!r}")
+                only_file_ids = None
+            if not only_file_ids:
+                only_file_ids = None
+
         items = load_items(
             run,
             limit=limit,
             only_engine=only_engine,
             only_kind=only_kind,
             force_rerun=force_rerun,
+            only_file_ids=only_file_ids,
         )
         run.set_total(len(items))
 

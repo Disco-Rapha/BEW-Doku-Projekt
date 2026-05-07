@@ -1,7 +1,7 @@
 """PDF-Extractor — duenner Adapter ueber disco.pdf.markdown.
 
-Die eigentliche Engine-Logik (azure-di, azure-di-hr, docling-standard) lebt
-unter `disco.pdf.markdown.extract_markdown`. Hier ist der einheitliche
+Die eigentliche Engine-Logik (azure-di, azure-di-hr) lebt unter
+`disco.pdf.markdown.extract_markdown`. Hier ist der einheitliche
 Wrapper fuer die generische Pipeline-Schnittstelle.
 """
 from __future__ import annotations
@@ -16,14 +16,12 @@ from . import EXTRACTION_PIPELINE_VERSION
 _ENGINE_VERSIONS: dict[str, str] = {
     "pdf-azure-di": "1.0",
     "pdf-azure-di-hr": "1.0",
-    "pdf-docling-standard": "1.0",
 }
 
 # Mapping unsere generischen Engine-IDs auf die alte Bezeichnung in disco.pdf
 _LEGACY_ENGINE_MAP: dict[str, str] = {
     "pdf-azure-di": "azure-di",
     "pdf-azure-di-hr": "azure-di-hr",
-    "pdf-docling-standard": "docling-standard",
 }
 
 

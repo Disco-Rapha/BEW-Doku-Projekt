@@ -121,6 +121,79 @@ async def root():
     return html
 
 
+@app.get("/api/agent/config")
+async def api_agent_config_get():
+    """Aktuelle Disco-Agent-Konfiguration (Modell, Reasoning, Verbosity).
+
+    Liest aus dem Settings-Singleton — der wird beim setup_agent in-process
+    aktualisiert, sodass GET nach POST den neuen Wert sieht ohne Restart.
+    """
+    return {
+        "model_deployment": settings.foundry_model_deployment or "",
+        "reasoning_effort": settings.foundry_reasoning_effort or "medium",
+        "verbosity": settings.foundry_verbosity or "low",
+        "agent_id": settings.foundry_agent_id or "",
+    }
+
+
+@app.post("/api/agent/config")
+async def api_agent_config_post(payload: dict):
+    """Aendert Reasoning-Effort (und optional Modell/Verbosity) live.
+
+    Pusht eine neue Foundry-Agent-Version mit den geaenderten Werten und
+    patcht .env fuer Persistenz. Der naechste Chat-Turn zieht automatisch
+    die neue Version (FOUNDRY_AGENT_ID auf 'latest').
+
+    Body: {"reasoning_effort": "medium", "verbosity": "low", "model_deployment": "gpt-5.4-prod"}
+    Alle Felder optional — None bedeutet "nicht aendern".
+    """
+    # Validierung — Reasoning-Stufen passen zum Modell. gpt-5.4: none/low/
+    # medium/high/xhigh (Foundry-Portal-Auswahl, Stand 2026-04-27). Aeltere
+    # GPT-5-Familie nutzt 'minimal' statt 'none' — wir akzeptieren beides
+    # damit ein Modellwechsel keine Validation kippt.
+    allowed_reasoning = {"none", "minimal", "low", "medium", "high", "xhigh"}
+    allowed_verbosity = {"low", "medium", "high"}
+
+    re_v = (payload.get("reasoning_effort") or "").strip() or None
+    vb_v = (payload.get("verbosity") or "").strip() or None
+    md_v = (payload.get("model_deployment") or "").strip() or None
+
+    if re_v is not None and re_v not in allowed_reasoning:
+        return {"error": f"reasoning_effort {re_v!r} ungueltig. Erlaubt: {sorted(allowed_reasoning)}"}, 400
+    if vb_v is not None and vb_v not in allowed_verbosity:
+        return {"error": f"verbosity {vb_v!r} ungueltig. Erlaubt: {sorted(allowed_verbosity)}"}, 400
+
+    if not any([re_v, vb_v, md_v]):
+        return {"error": "Mindestens eines von reasoning_effort, verbosity, model_deployment angeben."}, 400
+
+    # Setup ausfuehren in einem Worker-Thread (HTTP-Call ~3s, blockt sonst Event-Loop)
+    import asyncio
+
+    def _run_setup() -> dict:
+        # Lazy import — scripts/foundry_setup.py ist kein Package
+        import importlib.util as _ilu
+        from pathlib import Path as _P
+        spec = _ilu.spec_from_file_location(
+            "_foundry_setup",
+            _P(__file__).resolve().parent.parent.parent.parent / "scripts" / "foundry_setup.py",
+        )
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.setup_agent(
+            model_deployment=md_v,
+            reasoning_effort=re_v,
+            verbosity=vb_v,
+            verbose=False,
+        )
+
+    try:
+        result = await asyncio.to_thread(_run_setup)
+    except RuntimeError as exc:
+        return {"error": str(exc)}, 500
+
+    return result
+
+
 @app.get("/api/env")
 async def api_env():
     """Liefert Environment-Marker + Workspace + Modell fuer die UI-Footer-Anzeige.
@@ -543,6 +616,474 @@ def _chat_state_payload(state: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+@app.get("/api/projects/{slug}/pipeline-status")
+async def api_pipeline_status(slug: str):
+    """Aggregat-Status der 6 Pipeline-Schritte eines Projekts.
+
+    Liefert eine Liste von 6 Schritten mit pro Schritt:
+      step_order, step_name, status (green|yellow|red|grey),
+      n_total, n_done, n_failed, n_pending, label
+
+    Berechnet live aus 4 Quell-Tabellen — kein Drift moeglich.
+
+    Status-Logik:
+      🟢 green : n_pending == 0 UND n_failed == 0
+      🟡 yellow: n_pending == 0 UND n_failed > 0
+      🔴 red   : n_pending > 0
+      ⚪ grey  : Schritt n.a. (Schritt 2: keine externe Quelle)
+    """
+    import sqlite3 as _sqlite
+    from ..workspace import validate_slug, datastore_db_path, workspace_db_path
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    proj_dir = settings.projects_dir / slug
+    ds_path = datastore_db_path(proj_dir)
+    ws_path = workspace_db_path(proj_dir)
+    if not ds_path.exists() or not ws_path.exists():
+        return {"error": f"Projekt {slug!r} hat keine DBs."}
+
+    conn = _sqlite.connect(str(ws_path), timeout=3.0)
+    conn.row_factory = _sqlite.Row
+    conn.execute(f"ATTACH DATABASE '{ds_path}' AS ds")
+
+    def _count(sql: str, params: tuple = ()) -> int:
+        try:
+            r = conn.execute(sql, params).fetchone()
+            return int(r[0]) if r else 0
+        except _sqlite.OperationalError:
+            return 0
+
+    # Schritt 1 — Registrierung: FS-Files vs agent_sources
+    # n_total = indexierbare Files unter sources/ + context/
+    # n_done  = aktive Eintraege in agent_sources
+    # n_pending = FS-Files die noch nicht registriert sind
+    INDEXABLE_EXT = {
+        ".pdf", ".md", ".markdown", ".txt",
+        ".xlsx", ".xlsm", ".xls",
+        ".dwg", ".dxf",
+        ".docx", ".pptx",
+        ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".gif",
+    }
+    # ROUTABLE_EXT — Teilmenge von INDEXABLE_EXT, die das Routing-Modul
+    # `disco.docs.routing` heute kennt. Files ausserhalb dieser Menge
+    # (z.B. .docx, .pptx, .md, .txt) werden vom Routing nicht angefasst —
+    # sie zaehlen in der Pipeline-Ampel als 'unsupported' (kein Pending),
+    # damit der Schritt nicht ewig auf rot stehenbleibt. Sobald eine
+    # Engine fuer ein neues Format dazukommt (z.B. docx-mammoth), Eintrag
+    # hier ergaenzen — synchron mit `disco.docs._KIND_BY_EXT`.
+    ROUTABLE_EXT = {
+        ".pdf",
+        ".xlsx", ".xlsm", ".xls",
+        ".dwg", ".dxf",
+        ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".gif",
+    }
+    n_fs = 0
+    for root_name in ("sources", "context"):
+        root_dir = proj_dir / root_name
+        if not root_dir.is_dir():
+            continue
+        for f in root_dir.rglob("*"):
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in INDEXABLE_EXT:
+                continue
+            # Konvention: Files/Ordner mit _-Prefix oder .-Prefix sind intern
+            # (z.B. _meta/, _manifest.md, .DS_Store) und werden von
+            # sources_register ignoriert. Counter respektiert dasselbe Pattern.
+            rel = f.relative_to(proj_dir)
+            if any(part.startswith("_") or part.startswith(".")
+                   for part in rel.parts):
+                continue
+            n_fs += 1
+    # Defensiver SQL-Filter (1): Pfade mit '_' oder '.' als Prefix in irgendeinem
+    # Pfad-Part gelten als intern (Konvention, siehe sources.py _is_ignored).
+    # Bestandsdaten aus alten Code-Versionen koennen solche Eintraege noch als
+    # 'active' fuehren — beim naechsten regulaeren sources_register-Lauf werden
+    # sie automatisch auf status='deleted' gesetzt. Bis dahin haelt dieser
+    # Filter den Pipeline-Status konsistent zum FS-Counter (n_fs oben), der
+    # dieselbe Konvention anwendet.
+    NOT_INTERNAL = (
+        "(('/' || {col}) NOT LIKE '%/\\_%' ESCAPE '\\' "
+        "AND ('/' || {col}) NOT LIKE '%/.%')"
+    )
+    AS_F = NOT_INTERNAL.format(col="s.rel_path")    # agent_sources alias 's'
+    WR_F = NOT_INTERNAL.format(col="w.rel_path")    # work_extraction_routing alias 'w'
+    DM_F = NOT_INTERNAL.format(col="rel_path")      # agent_doc_markdown
+    SD_F = NOT_INTERNAL.format(col="rel_path")      # agent_search_docs
+
+    # Defensiver SQL-Filter (2): Symmetrie zum FS-Counter — nur Files mit
+    # indexierbarer Extension zaehlen. Walker (sources_register) registriert
+    # bewusst breiter (alles ausser '_'/'.'/Suffix-Patterns), damit auch
+    # .res/.job/.zip/etc. fuer den Bestandsbericht erfasst sind. Aber die
+    # Pipeline (Routing/Extraction/Suchindex) verarbeitet nur INDEXABLE_EXT,
+    # also zaehlt sie auch nur dort. Ohne diesen Filter waere n_done > n_total
+    # in Bestandsprojekten mit gemischten Extensions.
+    EXT_LIST = ",".join(f"'{e.lstrip('.')}'" for e in sorted(INDEXABLE_EXT))
+    EXT_AS = f"LOWER(s.extension) IN ({EXT_LIST})"
+    # Fuer agent_pdf_inventory/doc_markdown/search_docs ist der Extension-
+    # Filter nicht noetig: agent_pdf_inventory enthaelt nur PDFs (immer
+    # indexable), agent_doc_markdown nur Dokumente, die schon extrahiert
+    # wurden (per Definition indexable), agent_search_docs nur indizierte
+    # Dokumente. → Extension-Filter nur auf agent_sources noetig.
+    ROUTABLE_LIST = ",".join(f"'{e.lstrip('.')}'" for e in sorted(ROUTABLE_EXT))
+    EXT_ROUTABLE_AS = f"LOWER(s.extension) IN ({ROUTABLE_LIST})"
+
+    n_registered = _count(
+        f"SELECT COUNT(*) FROM ds.agent_sources s "
+        f"WHERE s.status='active' AND {AS_F} AND {EXT_AS}"
+    )
+
+    # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
+    # agent_source_metadata ODER agent_sharepoint_docs.
+    # Soll-Menge = kanonische Files (Duplikate brauchen keine separate
+    # Anreicherung, sie zeigen ueber duplicate-of auf das kanonische
+    # Original).
+    # agent_sharepoint_docs existiert nur in Projekten mit SP-Connector;
+    # deshalb erst pruefen, sonst wuerde die ganze EXISTS-Klausel die
+    # n_enriched-Query abreissen (OperationalError → _count=0).
+    sp_table_exists = bool(_count(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type='table' AND name='agent_sharepoint_docs'"
+    ))
+    canonical_filter_for_enrich = (
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM ds.agent_source_relations r "
+        "  WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'"
+        ")"
+    )
+    has_meta = _count(f"""
+        SELECT COUNT(DISTINCT s.id)
+        FROM ds.agent_sources s
+        JOIN ds.agent_source_metadata m ON m.source_id = s.id
+        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+        {canonical_filter_for_enrich}
+    """)
+    if sp_table_exists:
+        has_sp = _count(f"""
+            SELECT COUNT(DISTINCT s.id)
+            FROM ds.agent_sources s
+            JOIN agent_sharepoint_docs sp ON sp.FileName = s.filename
+            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+            {canonical_filter_for_enrich}
+        """)
+        n_enriched = _count(f"""
+            SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
+            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+            {canonical_filter_for_enrich}
+            AND (
+                EXISTS (SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id)
+                OR EXISTS (SELECT 1 FROM agent_sharepoint_docs sp WHERE sp.FileName = s.filename)
+            )
+        """)
+    else:
+        has_sp = 0
+        n_enriched = _count(f"""
+            SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
+            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+            {canonical_filter_for_enrich}
+            AND EXISTS (
+                SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id
+            )
+        """)
+    has_any_external = (has_meta + has_sp) > 0
+
+    # Schritt 3 — Kanonik: Files OHNE duplicate-of-Relation als from-Seite.
+    # Schema-Spalte ist `from_source_id`, NICHT `source_id` (frueherer Bug:
+    # SQLite warf OperationalError, _count fing ihn ab und lieferte 0 →
+    # n_canonical immer 0 → Maßstab fuer Schritte 4-6 fiel auf n_registered
+    # zurueck, was Duplikate mitzaehlte).
+    CANONICAL_SUBQUERY = f"""
+        SELECT s.id FROM ds.agent_sources s
+        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
+        AND NOT EXISTS (
+            SELECT 1 FROM ds.agent_source_relations r
+            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
+        )
+    """
+    n_canonical = _count(f"SELECT COUNT(*) FROM ({CANONICAL_SUBQUERY}) c")
+
+    # Schmalere Subquery: nur kanonische Files mit Extension, die das
+    # Routing-Modul tatsaechlich versteht. Files ausserhalb (z.B. DOCX,
+    # PPTX, MD, TXT) zaehlen separat als 'unsupported'.
+    CANONICAL_ROUTABLE_SUBQUERY = f"""
+        SELECT s.id FROM ds.agent_sources s
+        WHERE s.status='active' AND {AS_F} AND {EXT_ROUTABLE_AS}
+        AND NOT EXISTS (
+            SELECT 1 FROM ds.agent_source_relations r
+            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
+        )
+    """
+    n_canonical_routable = _count(
+        f"SELECT COUNT(*) FROM ({CANONICAL_ROUTABLE_SUBQUERY}) c"
+    )
+    # Implizit unsupported: kanonisch UND Extension nicht in ROUTABLE.
+    # Diese Files werden vom Routing-Flow nie angefasst — der Schritt
+    # darf sie NICHT als pending fuehren.
+    n_routed_unsupported_by_ext = max(0, n_canonical - n_canonical_routable)
+
+    # Schritte 4-6 — neuer Maßstab pro Schritt:
+    #   Schritt 4 Routing:    Soll-Menge = kanonische Files
+    #   Schritt 5 Extraction: Soll-Menge = kanonisch UND mit Engine
+    #   Schritt 6 Suchindex:  Soll-Menge = extrahierte Files (kanonisch)
+    #
+    # work_extraction_routing.file_id verweist auf agent_sources.id (nicht
+    # auf pdf_inventory). Wir joinen via IN ( ... canonical_subquery ... ),
+    # damit Routings fuer Duplikate ausgeschlossen sind. Files OHNE Engine
+    # (engine NULL/leer) gelten als 'unsupported' — sie wurden vom
+    # Routing-Flow gesehen, konnten aber keiner Engine zugeordnet werden
+    # (z.B. PDFs mit unklarer Diagnose, Office-Formate ohne Engine).
+    # Unsupported zaehlt NICHT als pending — der Schritt kann sie nicht
+    # weiter bearbeiten; das ist kein Bug, sondern ein Bestand.
+
+    # Routing — drei Buckets pro Datei:
+    #   - supported:   engine != null AND error IS NULL
+    #   - unsupported: engine IS NULL/'' (kein Engine-Mapping vorhanden)
+    #   - failed:      error IS NOT NULL (Routing-Versuch ist gecrashed)
+    # Files koennen zwischen failed und supported wandern, wenn Retry
+    # erfolgreich. Anti-Doppelzaehlung: failed UND error gefuellt → wir
+    # verwenden engine + error gemeinsam.
+    n_routed_supported = _count(f"""
+        SELECT COUNT(DISTINCT w.file_id)
+        FROM work_extraction_routing w
+        WHERE w.engine IS NOT NULL AND w.engine != ''
+        AND w.error IS NULL
+        AND w.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    n_routed_unsupported_explicit = _count(f"""
+        SELECT COUNT(DISTINCT w.file_id)
+        FROM work_extraction_routing w
+        WHERE (w.engine IS NULL OR w.engine = '')
+        AND w.error IS NULL
+        AND w.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    # Gesamt-unsupported = explizit (Routing-Flow hat Eintrag mit engine='' angelegt)
+    # PLUS implizit (Extension nicht routable, Routing-Flow ignoriert die Datei).
+    # Beide gehoeren in dieselbe Kategorie: Schritt kann sie nicht weiter
+    # bearbeiten, sie sind aber bekannt und nicht "noch zu tun".
+    n_routed_unsupported = n_routed_unsupported_explicit + n_routed_unsupported_by_ext
+    n_routed_failed = _count(f"""
+        SELECT COUNT(DISTINCT w.file_id)
+        FROM work_extraction_routing w
+        WHERE w.error IS NOT NULL
+        AND w.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    # Pending Routing = kanonisch-routable − bereits bewertet. Die
+    # implizit unsupported Files (Extension nicht routable) zaehlen NICHT
+    # in den Nenner fuer Pending — sie sind ein eigener Bucket.
+    n_routed_pending = max(
+        0,
+        n_canonical_routable - n_routed_supported
+        - n_routed_unsupported_explicit - n_routed_failed,
+    )
+
+    # Extraction — nur kanonische Files mit Engine sind verarbeitbar.
+    # Drei Buckets:
+    #   - extracted:   doc_markdown-Eintrag mit error IS NULL UND md_content != ''
+    #   - failed:      doc_markdown-Eintrag mit error IS NOT NULL
+    #   - empty:       doc_markdown-Eintrag mit error IS NULL UND char_count = 0
+    n_extracted_canonical = _count(f"""
+        SELECT COUNT(DISTINCT d.file_id)
+        FROM ds.agent_doc_markdown d
+        WHERE d.error IS NULL AND d.char_count > 0
+        AND d.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    n_extracted_failed = _count(f"""
+        SELECT COUNT(DISTINCT d.file_id)
+        FROM ds.agent_doc_markdown d
+        WHERE d.error IS NOT NULL
+        AND d.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    n_extracted_empty = _count(f"""
+        SELECT COUNT(DISTINCT d.file_id)
+        FROM ds.agent_doc_markdown d
+        WHERE d.error IS NULL AND COALESCE(d.char_count, 0) = 0
+        AND d.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    # Soll-Menge fuer Extraction = kanonisch-routable abzueglich der
+    # Files, die das Routing als unsupported (kein Engine-Mapping) oder
+    # failed gefuehrt hat. Files mit nicht-routabler Extension waren nie
+    # Kandidat fuer den Extraction-Flow — die zaehlen schon in Schritt 4
+    # als unsupported und tauchen in der Extraction-Bilanz nicht auf.
+    extraction_total = max(
+        0,
+        n_canonical_routable - n_routed_unsupported_explicit - n_routed_failed,
+    )
+    extracted_clamped = min(n_extracted_canonical, extraction_total) if extraction_total else 0
+    n_extracted_pending = max(
+        0, extraction_total - extracted_clamped - n_extracted_failed - n_extracted_empty,
+    )
+
+    # Suchindex — Soll-Menge = bereits erfolgreich extrahierte kanonische
+    # Files (error IS NULL UND char_count > 0). agent_search_docs.rel_path
+    # matcht agent_doc_markdown.rel_path (beide projekt-relativ mit
+    # sources/-/context/-Praefix dank Migration 009).
+    #
+    # Zaehler beachtet beide Bedingungen:
+    #   - search_docs ohne error (sonst zaehlt er als failed)
+    #   - rel_path muss zu einem OK-extrahierten kanonischen doc_markdown
+    #     gehoeren (nicht nur zu irgendeinem doc_markdown — sonst zaehlen
+    #     fehlerhafte/leere Extracts mit, was passiert ist als der Indexer
+    #     vor unserer Failure-Aware-Filterung lief).
+    OK_EXTRACTED_REL_PATHS = f"""
+        SELECT d.rel_path FROM ds.agent_doc_markdown d
+        WHERE d.file_id IN ({CANONICAL_SUBQUERY})
+        AND d.error IS NULL AND d.char_count > 0
+    """
+    n_indexed_canonical = _count(f"""
+        SELECT COUNT(*) FROM ds.agent_search_docs sd
+        WHERE sd.error IS NULL
+        AND sd.rel_path IN ({OK_EXTRACTED_REL_PATHS})
+    """)
+    n_indexed_failed_canonical = _count(f"""
+        SELECT COUNT(*) FROM ds.agent_search_docs sd
+        WHERE sd.error IS NOT NULL
+        AND sd.rel_path IN ({OK_EXTRACTED_REL_PATHS})
+    """)
+    indexed_total = n_extracted_canonical
+    indexed_clamped = min(n_indexed_canonical, indexed_total) if indexed_total else 0
+    n_indexed_pending = max(
+        0, indexed_total - indexed_clamped - n_indexed_failed_canonical,
+    )
+
+    conn.close()
+
+    def _status(*, n_done: int, n_total: int, n_failed: int = 0,
+                n_pending: int | None = None) -> str:
+        if n_total == 0:
+            return "grey"
+        pending = n_pending if n_pending is not None else max(
+            0, n_total - n_done - n_failed,
+        )
+        if pending > 0:
+            return "red"
+        if n_failed > 0:
+            return "yellow"
+        return "green"
+
+    steps = [
+        {
+            "step_order": 1, "step_name": "Registrierung",
+            "n_total": n_fs, "n_done": n_registered,
+            "n_failed": 0, "n_unsupported": 0,
+            "n_pending": max(0, n_fs - n_registered),
+            "status": _status(n_done=n_registered, n_total=n_fs),
+            "label": f"{n_registered} / {n_fs}" if n_fs else "leer",
+        },
+        {
+            "step_order": 2, "step_name": "Externe Anreicherung",
+            # Wenn keine externe Quelle existiert (Begleit-Excel/SP), ist
+            # der Schritt n.a. — n_total=0 hält die Zahlen ehrlich.
+            # Sonst: Soll = kanonische Files (Duplikate brauchen keine
+            # separate Anreicherung).
+            "n_total": n_canonical if has_any_external else 0,
+            "n_done": n_enriched,
+            "n_failed": 0, "n_unsupported": 0,
+            "n_pending": max(0, n_canonical - n_enriched) if has_any_external else 0,
+            "status": "grey" if not has_any_external else _status(
+                n_done=n_enriched, n_total=n_canonical,
+            ),
+            "label": "n.a." if not has_any_external else f"{n_enriched} / {n_canonical}",
+        },
+        {
+            "step_order": 3, "step_name": "Kanonik",
+            # Kanonik ist ein Reduktions-Schritt, kein Pending-Schritt:
+            # Disco markiert Duplikate (oder eben nicht) — beides ist OK.
+            # Status: gruen wenn etwas registriert ist, grau wenn nichts.
+            "n_total": n_registered, "n_done": n_canonical,
+            "n_failed": 0, "n_unsupported": 0,
+            "n_pending": 0,
+            "status": "green" if n_registered > 0 else "grey",
+            "label": (
+                f"{n_registered} → {n_canonical} kanonisch"
+                if n_registered and n_canonical < n_registered
+                else (f"{n_registered} kanonisch" if n_registered else "leer")
+            ),
+        },
+        {
+            "step_order": 4, "step_name": "Routing",
+            # Maßstab fuer den Schritt: kanonisch-routable. Files mit
+            # nicht-routabler Extension werden in n_unsupported gezeigt,
+            # zaehlen aber NICHT in den Nenner (sonst stuende der Schritt
+            # ewig auf "rot" wegen DOCX/PPTX, die das Routing nie anfasst).
+            "n_total": n_canonical_routable,
+            "n_done": n_routed_supported,
+            "n_failed": n_routed_failed,
+            "n_unsupported": n_routed_unsupported,
+            "n_pending": n_routed_pending,
+            "status": _status(
+                n_done=n_routed_supported,
+                n_total=n_canonical_routable,
+                n_failed=n_routed_failed,
+                n_pending=n_routed_pending,
+            ),
+            "label": _bucket_label(
+                n_canonical_routable, n_routed_supported, n_routed_pending,
+                n_failed=n_routed_failed,
+                n_unsupported=n_routed_unsupported,
+            ),
+        },
+        {
+            "step_order": 5, "step_name": "Extraction",
+            "n_total": extraction_total, "n_done": extracted_clamped,
+            "n_failed": n_extracted_failed,
+            "n_empty": n_extracted_empty,
+            "n_unsupported": 0,
+            "n_pending": n_extracted_pending,
+            "status": _status(
+                n_done=extracted_clamped,
+                n_total=extraction_total,
+                n_failed=n_extracted_failed,
+                n_pending=n_extracted_pending,
+            ),
+            "label": _bucket_label(
+                extraction_total, extracted_clamped, n_extracted_pending,
+                n_failed=n_extracted_failed,
+                n_empty=n_extracted_empty,
+                n_unsupported=0,
+            ),
+        },
+        {
+            "step_order": 6, "step_name": "Suchindex",
+            "n_total": indexed_total, "n_done": indexed_clamped,
+            "n_failed": n_indexed_failed_canonical, "n_unsupported": 0,
+            "n_pending": n_indexed_pending,
+            "status": _status(
+                n_done=indexed_clamped,
+                n_total=indexed_total,
+                n_failed=n_indexed_failed_canonical,
+                n_pending=n_indexed_pending,
+            ),
+            "label": _bucket_label(
+                indexed_total, indexed_clamped, n_indexed_pending,
+                n_failed=n_indexed_failed_canonical, n_unsupported=0,
+            ),
+        },
+    ]
+    return {"slug": slug, "steps": steps}
+
+
+def _bucket_label(n_total: int, n_done: int, n_pending: int,
+                  *, n_failed: int = 0, n_unsupported: int = 0,
+                  n_empty: int = 0) -> str:
+    """Formatiert die Pillen-Beschriftung. Hauptanzeige `done / total`,
+    Zusatz-Tags bei Failed/Empty/Unsupported.
+    """
+    if n_total == 0 and n_unsupported == 0:
+        return "leer"
+    base = f"{n_done} / {n_total}"
+    extras = []
+    if n_failed > 0:
+        extras.append(f"{n_failed} Fehler")
+    if n_empty > 0:
+        extras.append(f"{n_empty} leer")
+    if n_unsupported > 0:
+        extras.append(f"{n_unsupported} ohne Engine")
+    return base + (f" ({', '.join(extras)})" if extras else "")
+
+
 @app.get("/api/projects/{slug}/chat/state")
 async def api_chat_state(slug: str):
     """Aktueller Chat-State eines Projekts (Token-Fill, Warn-Level)."""
@@ -570,6 +1111,144 @@ async def api_chat_messages(slug: str, include_compacted: bool = False):
     if include_compacted:
         return chat_repo.list_all_messages(slug, include_compacted=True)
     return chat_repo.list_active_messages(slug)
+
+
+# ===========================================================================
+# Chat-Anhaenge: Upload + statische Auslieferung
+# ===========================================================================
+# Limits — bewusst eng, damit der Token-Bomb-Risiko klein bleibt.
+CHAT_ATTACH_MAX_IMAGE_BYTES = 10 * 1024 * 1024     # 10 MB pro Bild
+CHAT_ATTACH_MAX_TEXT_BYTES = 100 * 1024            # 100 KB pro Text-File
+CHAT_ATTACH_MAX_PER_MESSAGE = 5                    # max Anhaenge pro Nachricht
+CHAT_ATTACH_IMAGE_MIMES = {
+    "image/png", "image/jpeg", "image/jpg",
+    "image/webp", "image/gif",
+}
+# MIME-Type → erlaubte Extension (Whitelist fuer Text-Files)
+CHAT_ATTACH_TEXT_EXTS = {
+    ".txt", ".md", ".markdown", ".csv", ".json",
+    ".log", ".xml", ".yaml", ".yml",
+    ".py", ".sql", ".sh", ".js", ".ts", ".html", ".css",
+}
+
+
+def _chat_attach_dir(slug: str) -> Path:
+    """Pfad fuer Chat-Anhaenge eines Projekts (`<project>/.disco/chat-attachments/`)."""
+    return settings.projects_dir / slug / ".disco" / "chat-attachments"
+
+
+@app.post("/api/projects/{slug}/chat/upload")
+async def api_chat_upload(slug: str, file: UploadFile = File(...)):
+    """Nimmt eine einzelne Datei entgegen und legt sie unter
+    `<project>/.disco/chat-attachments/<uuid>.<ext>` ab.
+
+    Liefert die Attachment-Ref zurueck — Frontend speichert die in seinem
+    Composer-State und sendet sie beim WebSocket-Send mit.
+
+    Validierung:
+    - Bilder: <= CHAT_ATTACH_MAX_IMAGE_BYTES, MIME in CHAT_ATTACH_IMAGE_MIMES
+    - Text:   <= CHAT_ATTACH_MAX_TEXT_BYTES, Extension in CHAT_ATTACH_TEXT_EXTS
+    Sonst 413 / 415.
+    """
+    import uuid as _uuid
+    from ..workspace import validate_slug
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    if not (settings.projects_dir / slug).is_dir():
+        return {"error": f"Projekt {slug!r} existiert nicht."}
+
+    # MIME + Extension auswerten
+    raw_name = file.filename or "unbekannt"
+    ext = Path(raw_name).suffix.lower()
+    mime = (file.content_type or "").lower()
+
+    is_image = mime in CHAT_ATTACH_IMAGE_MIMES
+    is_text = (ext in CHAT_ATTACH_TEXT_EXTS) and not is_image
+
+    if not (is_image or is_text):
+        return {
+            "error": (
+                f"Datei-Typ nicht unterstuetzt: {raw_name!r} (MIME={mime!r}). "
+                f"Erlaubt: Bilder (PNG/JPEG/WebP/GIF) oder Text-Dateien "
+                f"({', '.join(sorted(CHAT_ATTACH_TEXT_EXTS))})."
+            ),
+            "status": 415,
+        }
+
+    # Datei lesen + Groesse pruefen
+    blob = await file.read()
+    size = len(blob)
+    if is_image and size > CHAT_ATTACH_MAX_IMAGE_BYTES:
+        return {
+            "error": (
+                f"Bild zu gross ({size / (1024 * 1024):.1f} MB). "
+                f"Limit: {CHAT_ATTACH_MAX_IMAGE_BYTES // (1024 * 1024)} MB."
+            ),
+            "status": 413,
+        }
+    if is_text and size > CHAT_ATTACH_MAX_TEXT_BYTES:
+        return {
+            "error": (
+                f"Textdatei zu gross ({size / 1024:.1f} KB). "
+                f"Limit: {CHAT_ATTACH_MAX_TEXT_BYTES // 1024} KB."
+            ),
+            "status": 413,
+        }
+
+    # Speichern
+    attach_id = _uuid.uuid4().hex
+    target_dir = _chat_attach_dir(slug)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # Extension normieren — fallback auf MIME-basiert wenn keine im Namen
+    if not ext:
+        if mime == "image/png":
+            ext = ".png"
+        elif mime in ("image/jpeg", "image/jpg"):
+            ext = ".jpg"
+        elif mime == "image/webp":
+            ext = ".webp"
+        elif mime == "image/gif":
+            ext = ".gif"
+        else:
+            ext = ".bin"
+    target_path = target_dir / f"{attach_id}{ext}"
+    target_path.write_bytes(blob)
+
+    rel_path = str(target_path.relative_to(settings.projects_dir / slug))
+    return {
+        "id": attach_id,
+        "filename": raw_name,
+        "mime_type": mime,
+        "size": size,
+        "kind": "image" if is_image else "text",
+        "rel_path": rel_path,
+    }
+
+
+@app.get("/api/projects/{slug}/chat/attachments/{attach_id}")
+async def api_chat_attachment_get(slug: str, attach_id: str):
+    """Liefert eine Anhang-Datei zurueck (fuer Frontend-Render von alten
+    Chat-Verlaeufen mit Bild-Thumbnails)."""
+    from ..workspace import validate_slug
+    from fastapi.responses import FileResponse
+    try:
+        slug = validate_slug(slug)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    # attach_id muss hex-uuid sein (Sicherheit gegen Path-Traversal)
+    if not all(c in "0123456789abcdef" for c in attach_id) or len(attach_id) != 32:
+        return {"error": "Ungueltige Attachment-ID."}
+    attach_dir = _chat_attach_dir(slug)
+    if not attach_dir.is_dir():
+        return {"error": "Keine Anhaenge."}
+    # ID kann mit beliebiger Extension liegen — finde die passende Datei
+    matches = list(attach_dir.glob(f"{attach_id}.*"))
+    if not matches:
+        return {"error": "Anhang nicht gefunden."}
+    return FileResponse(str(matches[0]))
 
 
 @app.post("/api/projects/{slug}/chat/compact")
@@ -824,12 +1503,17 @@ async def api_workspace_projects():
 
 
 @app.get("/api/workspace/projects/{slug}/tree")
-async def api_workspace_tree(slug: str, max_depth: int = 4):
+async def api_workspace_tree(slug: str, max_depth: int = 12):
     """Verzeichnisbaum eines Projekts (rekursiv, ohne Inhalte).
 
     Liefert ein Tree-Dict mit Knoten:
       {name, path (relativ zum Projekt), type: 'dir'|'file',
-       size?, modified?, children?: [...]}
+       size?, modified?, children?: [...], truncated?: bool}
+
+    max_depth: 12 (Default, deckt realistische Projekt-Ordnerstrukturen ab,
+    inkl. tief verschachtelter SharePoint-Exports). Bei Erreichen der
+    Limit-Tiefe wird der Knoten mit `truncated: true` markiert; das Frontend
+    zeigt das visuell als "…"-Pseudo-Knoten an.
     """
     from ..workspace import validate_slug
     from ..config import settings
@@ -1352,7 +2036,15 @@ async def api_run_status(slug: str, run_id: int):
         run = flow_service.get_run(project_root, run_id)
     except KeyError as exc:
         return {"error": str(exc)}
-    return _run_info_to_dict(run)
+    info = _run_info_to_dict(run)
+    # project_slug aus dem URL-Parameter mitliefern — _run_info_to_dict
+    # kennt das Projekt nicht und laesst die Spalte sonst NULL. Frontend
+    # (Run-Strip) baut Dedup-Keys ueber `${project_slug}:${id}`; ohne
+    # diesen Wert kollidieren die Eintraege aus dem fading-active-Pfad
+    # mit denen aus recent_finished → Doppelanzeige.
+    if not info.get("project_slug"):
+        info["project_slug"] = slug
+    return info
 
 
 @app.get("/api/workspace/projects/{slug}/runs/{run_id}/items")
@@ -1402,21 +2094,6 @@ async def api_run_logs(slug: str, run_id: int, tail: int = 100):
     }
 
 
-@app.post("/api/workspace/projects/{slug}/runs/{run_id}/pause")
-async def api_run_pause(slug: str, run_id: int):
-    """Signalisiert dem Worker: pausiere beim naechsten Item."""
-    from ..flows import service as flow_service
-
-    project_root, err = _resolve_project_path_or_error(slug)
-    if err:
-        return err
-    try:
-        run = flow_service.request_pause(project_root, run_id)
-    except (KeyError, ValueError) as exc:
-        return {"error": str(exc)}
-    return _run_info_to_dict(run)
-
-
 _RECENT_FINISHED_WINDOW_MIN = 15  # Minuten — done/failed/cancelled-Runs in
                                   # diesem Fenster landen mit im Strip, damit
                                   # schnelle Runs (<3s) durchs Polling-Raster
@@ -1427,7 +2104,7 @@ _RECENT_FINISHED_WINDOW_MIN = 15  # Minuten — done/failed/cancelled-Runs in
 async def api_active_runs():
     """Alle aktiven + kuerzlich beendete Runs projekt-uebergreifend.
 
-    - `runs`: aktive Runs (running/paused).
+    - `runs`: aktive Runs (running).
     - `recent_finished`: Runs mit Endstatus (done/failed/cancelled) aus den
       letzten 15 Minuten. Verhindert dass schnelle Runs durchs 3-Sekunden-
       Polling-Raster fallen, ohne dass das Frontend die Status-Detektion
@@ -1458,7 +2135,6 @@ async def api_active_runs():
         slug = proj["slug"]
         try:
             running = flow_service.list_runs(project_root, status="running", limit=50)
-            paused = flow_service.list_runs(project_root, status="paused", limit=50)
             done_recent = flow_service.list_runs(project_root, status="done", limit=30)
             failed_recent = flow_service.list_runs(project_root, status="failed", limit=30)
             cancelled_recent = flow_service.list_runs(project_root, status="cancelled", limit=30)
@@ -1466,7 +2142,7 @@ async def api_active_runs():
             # Projekt-DB nicht lesbar (z.B. Migrationen fehlen) — skip
             continue
 
-        for run in [*running, *paused]:
+        for run in running:
             runs_out.append({
                 **_run_info_to_dict(run),
                 "project_slug": slug,
@@ -1584,7 +2260,12 @@ async def ws_chat(
             data = await websocket.receive_text()
             payload = json.loads(data)
             user_text = (payload.get("text") or "").strip()
-            if not user_text:
+            attachments = payload.get("attachments") or []
+            # Sanity-Cap: nie mehr als CHAT_ATTACH_MAX_PER_MESSAGE durchlassen.
+            if isinstance(attachments, list) and len(attachments) > CHAT_ATTACH_MAX_PER_MESSAGE:
+                attachments = attachments[:CHAT_ATTACH_MAX_PER_MESSAGE]
+            # Eine Message muss mindestens Text ODER mindestens einen Anhang haben.
+            if not user_text and not attachments:
                 continue
 
             # Lock pro Projekt: verhindert, dass ein System-Trigger-Turn
@@ -1602,7 +2283,9 @@ async def ws_chat(
 
                 def _worker() -> None:
                     try:
-                        for event in svc.run_turn(project_slug, user_text):
+                        for event in svc.run_turn(
+                            project_slug, user_text, attachments=attachments,
+                        ):
                             loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
                     except Exception as exc:
                         logger.exception("AgentService-Fehler")

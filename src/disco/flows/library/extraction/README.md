@@ -30,7 +30,6 @@ Bestand bleibt erhalten (`file_kind='pdf'` als Default).
 |-----------------------------|--------|---------------------------------|--------------------|
 | `pdf-azure-di`              | pdf    | `disco.docs.pdf` → azure-di      | 8,68 EUR / 1000 p  |
 | `pdf-azure-di-hr`           | pdf    | `disco.docs.pdf` → azure-di-hr   | 13,89 EUR / 1000 p |
-| `pdf-docling-standard`      | pdf    | `disco.docs.pdf` → docling-standard | 0 EUR (lokal)   |
 | `excel-openpyxl`            | excel  | `disco.docs.excel`              | 0 EUR              |
 | `excel-table-import`        | excel  | `disco.docs.excel` + Tabellen-Side-Effect | 0 EUR     |
 | `dwg-ezdxf-local`           | dwg    | `disco.docs.dwg`                | 0 EUR              |
@@ -79,11 +78,34 @@ mit Spalten + Zeilenanzahl.
 ```json
 {
   "limit": 100,                          // optional, Testlauf
-  "only_engine": "pdf-docling-standard", // optional, eine Engine isoliert
+  "only_engine": "pdf-azure-di-hr",       // optional, eine Engine isoliert
   "only_kind": "excel",                  // optional, ein Format isoliert
-  "force_rerun": true                     // optional, Skip-Logik aushebeln
+  "force_rerun": true,                    // optional, Skip-Logik aushebeln
+  "model": "gpt-5.4-prod"                 // optional, LLM-Modell-Override
 }
 ```
+
+### `model` — Modell-Override fuer LLM-Engines
+
+Wirkt nur auf LLM-basierte Engines (heute: `image-gpt5-vision`).
+Andere Engines (DI, openpyxl, ezdxf) ignorieren das Feld.
+
+**Default ohne `model`-Feld**: aus `settings.foundry_flow_model_deployment`
+(ENV `FOUNDRY_FLOW_MODEL_DEPLOYMENT`, Code-Fallback `gpt-5.1`). Bewusst
+getrennt vom Disco-Agent-Modell (`FOUNDRY_MODEL_DEPLOYMENT` =
+`gpt-5.4-prod`). Damit kannst du Chat und Bulk-Flows unabhaengig steuern
+und in Zukunft pro Flow andere Modelle benchmarken.
+
+Verfuegbare Modelle (Stand 2026-04):
+- `gpt-5.1` (Default; Bulk-tauglich; ~30% guenstiger als gpt-5.4 bei
+  Image-typischen Output-Mengen)
+- `gpt-5.4-prod` (hoechste Qualitaet, teurer bei Output-lastigen
+  Tasks — Cached-Input dafuer 90% Rabatt)
+
+Die tatsaechlich genutzte Modell-ID landet in
+`agent_doc_markdown.meta_json.deployment` (fuer Cost-Tracking).
+Cost-Berechnung in `disco.pricing.compute_cost_eur()` nutzt
+automatisch die richtigen Sweden-Central-Data-Zone-EUR-Preise pro Modell.
 
 ## Resume + Idempotenz
 

@@ -333,14 +333,40 @@ def _build_search_index(
     finally:
         conn.close()
 
+    # Tool-Result ist ein knapper Status-Report — keine Listen.
+    # Volle Daten stehen in agent_search_docs (incl. error-Spalte) und
+    # sind via sqlite_query abfragbar, wenn der Agent oder User die
+    # Details braucht.
+    #
+    # Errors aggregieren wir nach Pattern (erste 80 chars), damit der
+    # Agent z.B. erkennt "1500x DI-Timeout, 12x Hash-Fehler" und nicht
+    # 1512 Einzeleintraege durchscrollen muss.
+    from collections import Counter
+    error_patterns: list[dict[str, Any]] = []
+    if errors:
+        ctr = Counter((e.get("error", "") or "")[:80] for e in errors)
+        error_patterns = [
+            {"pattern": pat, "count": cnt}
+            for pat, cnt in ctr.most_common(5)
+        ]
+
     return {
-        "indexed": indexed,
-        "skipped": skipped,
-        "errors": errors,
-        "total_files": len(indexed),
+        "status": (
+            "ok" if not errors else
+            "ok_with_errors" if indexed else
+            "all_failed"
+        ),
+        "n_indexed": len(indexed),
+        "n_skipped": len(skipped),
+        "n_errors": len(errors),
         "total_chunks": total_chunks,
         "total_pages": total_pages,
         "force_reindex": force_reindex,
+        "error_patterns": error_patterns,
+        "_note": (
+            "Detaillisten via sqlite_query auf agent_search_docs "
+            "(error IS NOT NULL fuer fehlgeschlagene Files)."
+        ),
     }
 
 

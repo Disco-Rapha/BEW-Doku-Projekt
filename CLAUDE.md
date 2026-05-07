@@ -132,6 +132,16 @@ Lookup-Tabellen werden in die Projekt-DB importiert (`context_*`).
 Das Manifest (`context/_manifest.md`) listet alles auf und erklärt,
 wann welche Datei relevant ist.
 
+**Wichtig — context/ klein halten** (Arbeitsweise-Regel, 2026-04-27):
+`sources/` darf gross sein (Tausende von Projektdokumenten); `context/`
+ist demgegenueber bewusst eng kuratiert — **nur das, was zur konkreten
+Bearbeitung des Projekts wirklich gebraucht wird**. Analogie: wie eine
+kleine Dateisammlung im Arbeitsordner einer Cowork-Session, mit der
+aktiv gearbeitet wird. Disco soll context/ NICHT vollladen "weil's
+relevant sein koennte" — Faustregel: fragen vor Aufnahme, prefer
+weniger und scharf statt mehr und unscharf. Wenn ein Dokument doch
+spaeter relevant wird, kann es jederzeit nachtraeglich rein.
+
 ### 4. LLM-ready machen
 
 Bevor ein LLM über die Daten "reasonen" kann, müssen sie aufbereitet

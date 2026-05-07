@@ -986,7 +986,7 @@ def _render_context_as_text(context: dict[str, Any]) -> str:
     parts.append(
         "Deine Aufgabe: kurz pruefen, ob das Bild sinnvoll aussieht. "
         "Wenn ja: 1-2 Saetze Status-Update im Chat. Wenn nein: beschreiben "
-        "was Dir auffaellt und ggf. flow_pause/flow_cancel aufrufen. "
+        "was Dir auffaellt und ggf. flow_cancel aufrufen. "
         "flow_run ist fuer Dich gesperrt — Empfehlung statt Aktion."
     )
     return "\n".join(parts)

@@ -244,13 +244,8 @@ def _decide_pdf(abs_path: Path) -> tuple[str, str, dict[str, Any]]:
         engine = "pdf-azure-di"
         reason = f"{n_scan} A4-Scan-Seite(n) ohne Plan/Grossbild"
     else:
-        # Bench 2026-04-25 hat bestaetigt: docling halluziniert auf
-        # ~4% der Text-PDFs. Default bleibt deshalb azure-di.
         engine = "pdf-azure-di"
-        reason = (
-            f"text-dominant ({n_text}t/{n_mixed}m) → azure-di "
-            f"(Default seit Bench-Entscheid 2026-04-25)"
-        )
+        reason = f"text-dominant ({n_text}t/{n_mixed}m) → azure-di"
 
     heur = {
         "n_pages": n_pages,
@@ -271,17 +266,22 @@ def _decide_pdf(abs_path: Path) -> tuple[str, str, dict[str, Any]]:
 
 
 def _decide_excel(abs_path: Path, file_role: str) -> tuple[str, str, dict[str, Any]]:
-    """Excel: in context/ → table-import, in sources/ → openpyxl-Markdown.
+    """Excel: immer Markdown-Extraktion via excel-openpyxl.
 
-    Beide Engines liefern Markdown; bei excel-table-import erzeugt der
-    Extraction-Flow zusaetzlich SQL-Tabellen unter context_<slug>.
+    Vor 2026-05-07 wurde context-Excel automatisch via excel-table-import
+    auch als SQL-Tabellen importiert, was zu workspace.db-Bläh fuehrte
+    (60+ context_*-Tabellen pro Projekt, viele ungenutzt). Default ist
+    jetzt einheitlich Markdown — Disco kann per Search-Index drauf
+    zugreifen, das reicht in 95% der Faelle. Wenn der User explizit
+    Lookup-Tabellen fuer SQL-Joins braucht, ruft er `import_xlsx_to_table`
+    als bewusste Aktion auf (Skill `excel-formatter`).
+
+    Bestehende context_*-Tabellen in Prod-Projekten bleiben unveraendert
+    (nicht-destruktiv) und koennen bei Gelegenheit manuell aufgeraeumt
+    werden, sobald die zugehoerigen Excels Markdown haben.
     """
-    if file_role == "context":
-        engine = "excel-table-import"
-        reason = "context-Excel → automatischer SQL-Tabellen-Import + Markdown"
-    else:
-        engine = "excel-openpyxl"
-        reason = "sources-Excel → Markdown-Extraktion fuer Suche/LLM"
+    engine = "excel-openpyxl"
+    reason = f"{file_role}-Excel → Markdown-Extraktion (SQL-Import nur bewusst via import_xlsx_to_table)"
 
     # Quick-Inspect fuer heuristics_json
     heur: dict[str, Any] = {"file_role": file_role}

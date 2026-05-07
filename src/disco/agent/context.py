@@ -44,7 +44,7 @@ _current_project: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 # Wird von AgentService.run_system_turn fuer die Dauer des Turns auf True
 # gesetzt. Tools, die irreversible/teure Aktionen ausloesen (flow_run-Start),
 # duerfen bei True ablehnen — siehe CLAUDE.md „Asymmetric Auto-Action":
-# Disco darf autonom cancel/pause, aber NIEMALS neue Runs starten.
+# Disco darf autonom cancel, aber NIEMALS neue Runs starten.
 _is_system_triggered: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "disco_is_system_triggered", default=False
 )

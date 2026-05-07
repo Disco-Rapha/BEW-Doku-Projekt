@@ -97,17 +97,48 @@ a:hover { text-decoration: underline; }
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
+  overflow-y: auto;  /* eine gemeinsame Scroll-Achse fuer alle Sections */
 }
 .sb-section {
   border-bottom: 1px solid var(--border);
   padding: 8px 10px;
   flex-shrink: 0;
 }
-.sb-section.scrollable { overflow-y: auto; flex: 1 1 auto; min-height: 80px; }
+/* Collapsible sections via <details>: Padding nur fuer Body, nicht fuer Header.
+   .sb-section.collapsible ist ein <details>-Element. */
+.sb-section.collapsible { padding: 0; }
+.sb-section.collapsible > summary {
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;       /* default-Triangle entfernen, eigenes via ::before */
+  user-select: none;
+  display: flex; align-items: center; gap: 6px;
+}
+.sb-section.collapsible > summary::-webkit-details-marker { display: none; }
+.sb-section.collapsible > summary::before {
+  content: '▶';
+  display: inline-block;
+  font-size: 10px;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+}
+.sb-section.collapsible[open] > summary::before { transform: rotate(90deg); }
+.sb-section.collapsible > .sb-body { padding: 0 10px 10px; }
 .sb-title {
   font-size: 10px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.7px; color: var(--text-dim);
   margin-bottom: 6px;
+}
+/* Im <summary> gilt sb-title nicht mehr als margin-Lieferant; flex regelt das */
+.sb-section.collapsible > summary .sb-title {
+  margin-bottom: 0; flex: 1;
+}
+.sb-section.collapsible > summary .sb-subtitle {
+  font-size: 10px; color: var(--text-dim);
+  text-transform: none; font-weight: normal; letter-spacing: 0;
 }
 .sb-row { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 3px; cursor: pointer; }
 .sb-row:hover { background: var(--panel2); }
@@ -136,6 +167,31 @@ a:hover { text-decoration: underline; }
 .tree-icon { width: 14px; text-align: center; opacity: 0.7; }
 .tree-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-size { color: var(--text-dim); font-size: 11px; }
+
+/* Pipeline-Status: Ampel-Liste in der Sidebar */
+.pipeline-status-list {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.ps-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px; border-radius: 3px;
+  font-size: 12px; cursor: pointer;
+}
+.ps-row:hover { background: var(--panel2); }
+.ps-status {
+  width: 10px; height: 10px; border-radius: 50%;
+  flex-shrink: 0; box-shadow: 0 0 4px currentColor;
+}
+.ps-status.green  { background: #4caf50; color: #4caf50; }
+.ps-status.yellow { background: #ffb300; color: #ffb300; }
+.ps-status.red    { background: #e53935; color: #e53935; }
+.ps-status.grey   { background: #555; color: #555; box-shadow: none; }
+.ps-name { flex: 1; }
+.ps-name .ps-step-num {
+  color: var(--text-dim); font-size: 11px; margin-right: 4px;
+}
+.ps-label { color: var(--text-dim); font-size: 11px; }
+.ps-row.has-pending .ps-label { color: var(--accent); }
 
 /* Toggle-Buttons in Header */
 .sb-toolbar { display: flex; gap: 4px; align-items: center; justify-content: space-between; }
@@ -528,6 +584,13 @@ a:hover { text-decoration: underline; }
   padding: 10px 14px;
   flex-shrink: 0;
   display: flex; flex-direction: column; gap: 6px;
+  position: relative;
+  transition: background 0.12s;
+}
+#chat-input-area.dragover {
+  background: rgba(64, 144, 255, 0.10);
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
 }
 #chat-input {
   width: 100%; min-height: 40px; max-height: 200px;
@@ -537,10 +600,154 @@ a:hover { text-decoration: underline; }
   padding: 8px 10px;
 }
 #chat-input:focus { outline: 1px solid var(--accent); }
+.attachments-strip {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 4px 2px;
+}
+.attachments-strip.hidden { display: none; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 4px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  max-width: 220px;
+}
+.attach-chip.error {
+  border-color: #c0392b;
+  background: rgba(192, 57, 43, 0.08);
+  color: #e07b6c;
+}
+.attach-chip-thumb {
+  width: 32px; height: 32px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: #1a1a1a;
+  flex-shrink: 0;
+}
+.attach-chip-icon {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  background: #1a1a1a;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.attach-chip-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1;
+}
+.attach-chip-meta {
+  font-size: 10px; color: var(--text-dim);
+}
+.attach-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 3px;
+}
+.attach-chip-remove:hover { color: #fff; background: rgba(255,255,255,0.1); }
+.btn-attach {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 4px 10px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-attach:hover { color: var(--accent); border-color: var(--accent); }
+/* Anhang-Bubbles in der Chat-History */
+.msg-attachments {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 6px 0 4px;
+}
+.msg-attach-image {
+  max-width: 320px; max-height: 240px;
+  border-radius: 6px; cursor: zoom-in;
+  border: 1px solid var(--border);
+}
+/* Lightbox-Overlay fuer Bilder in voller Groesse */
+.image-lightbox {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+  cursor: zoom-out;
+  backdrop-filter: blur(2px);
+}
+.image-lightbox img {
+  max-width: 95vw; max-height: 95vh;
+  object-fit: contain;
+  border-radius: 4px;
+  cursor: default;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+}
+.image-lightbox .lb-close {
+  position: absolute; top: 16px; right: 20px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 22px; line-height: 1;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.image-lightbox .lb-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+.image-lightbox .lb-caption {
+  position: absolute; bottom: 16px; left: 20px; right: 20px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+.msg-attach-textfile {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 280px;
+}
+.msg-attach-textfile-icon { font-size: 14px; }
+.msg-attach-textfile-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .chat-actions {
   display: flex; align-items: center; justify-content: space-between;
   font-size: 11px; color: var(--text-dim);
+  gap: 12px;
 }
+.chat-actions-right {
+  display: flex; align-items: center; gap: 8px;
+}
+.chat-model-label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-dim);
+  cursor: help;
+}
+.chat-model-label select {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.chat-model-label select:hover { border-color: var(--accent); }
 
 /* ============= Viewer (rechts) ============= */
 #viewer-pane {
@@ -860,23 +1067,54 @@ a:hover { text-decoration: underline; }
       </div>
     </div>
 
-    <div class="sb-section scrollable" id="explorer-section">
-      <div class="sb-title">Explorer</div>
-      <div id="explorer-tree" class="tree"></div>
-    </div>
-
-    <div class="sb-section scrollable" id="db-tables-section">
-      <div class="sb-title">Datenbank-Tabellen</div>
-      <div id="db-tables-list" class="tree"></div>
-    </div>
-
-    <div class="sb-section scrollable" id="flows-section">
-      <div class="sb-title sb-toolbar">
-        <span>Flows</span>
-        <button class="icon-btn" title="Liste aktualisieren" onclick="loadFlows(state.activeProjectSlug)">↻</button>
+    <details class="sb-section collapsible" id="explorer-section" data-sb-key="explorer" open>
+      <summary><span class="sb-title">Explorer</span></summary>
+      <div class="sb-body">
+        <div id="explorer-tree" class="tree"></div>
       </div>
-      <div id="flows-list"></div>
-    </div>
+    </details>
+
+    <details class="sb-section collapsible" id="db-datastore-section" data-sb-key="db-datastore" open>
+      <summary>
+        <span class="sb-title">datastore.db</span>
+        <span class="sb-subtitle">Ebene 1+2 · read-only</span>
+      </summary>
+      <div class="sb-body">
+        <div id="db-tables-datastore" class="tree"></div>
+      </div>
+    </details>
+
+    <details class="sb-section collapsible" id="db-workspace-section" data-sb-key="db-workspace" open>
+      <summary>
+        <span class="sb-title">workspace.db</span>
+        <span class="sb-subtitle">Ebene 3 · read/write</span>
+      </summary>
+      <div class="sb-body">
+        <div id="db-tables-workspace" class="tree"></div>
+      </div>
+    </details>
+
+    <details class="sb-section collapsible" id="flows-section" data-sb-key="flows" open>
+      <summary>
+        <span class="sb-title">Flows</span>
+        <button class="icon-btn" title="Liste aktualisieren"
+                onclick="event.preventDefault(); event.stopPropagation(); loadFlows(state.activeProjectSlug)">↻</button>
+      </summary>
+      <div class="sb-body">
+        <div id="flows-list"></div>
+      </div>
+    </details>
+
+    <details class="sb-section collapsible" id="pipeline-status-section" data-sb-key="pipeline-status" open>
+      <summary>
+        <span class="sb-title">Pipeline-Status</span>
+        <button class="icon-btn" title="Status aktualisieren"
+                onclick="event.preventDefault(); event.stopPropagation(); loadPipelineStatus(state.activeProjectSlug)">↻</button>
+      </summary>
+      <div class="sb-body">
+        <div id="pipeline-status-list" class="pipeline-status-list"></div>
+      </div>
+    </details>
 
     <div class="sb-section">
       <div class="sb-title">Einstellungen</div>
@@ -913,12 +1151,29 @@ a:hover { text-decoration: underline; }
       <div class="msg system"><div class="bubble">Verbindung wird hergestellt …</div></div>
     </div>
 
-    <div id="chat-input-area">
-      <textarea id="chat-input" placeholder="Nachricht an Disco …  (Enter senden, Shift+Enter Zeilenumbruch)"></textarea>
+    <div id="chat-input-area" ondragover="onComposerDragOver(event)" ondragleave="onComposerDragLeave(event)" ondrop="onComposerDrop(event)">
+      <div id="attachments-strip" class="attachments-strip hidden"></div>
+      <textarea id="chat-input" placeholder="Nachricht an Disco …  (Enter senden, Shift+Enter Zeilenumbruch — Datei via + / Drag-Drop / Strg+V anhaengen)" onpaste="onComposerPaste(event)"></textarea>
+      <input type="file" id="attachment-file-input" hidden multiple
+             accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,.txt,.md,.markdown,.csv,.json,.log,.xml,.yaml,.yml,.py,.sql,.sh,.js,.ts,.html,.css"
+             onchange="onAttachmentFilesSelected(event)" />
       <div class="chat-actions">
         <span id="chat-status" class="muted">Bereit</span>
-        <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
-        <button id="btn-send" class="btn-primary" onclick="sendMessage()">Senden ▶</button>
+        <span class="chat-actions-right">
+          <button id="btn-attach" class="btn-attach" title="Datei anhaengen (Bilder, Text-Files)" onclick="document.getElementById('attachment-file-input').click()">+</button>
+          <label class="chat-model-label" title="Reasoning-Effort fuer Disco (gpt-5.4-Stufen). Hoeher = tieferes Nachdenken, langsamer + teurer. Aenderung pusht eine neue Agent-Version ins Foundry-Portal (~3s).">
+            Reasoning:
+            <select id="reasoning-select" onchange="onReasoningChange()" disabled>
+              <option value="none">none</option>
+              <option value="low">low</option>
+              <option value="medium" selected>medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+            </select>
+          </label>
+          <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
+          <button id="btn-send" class="btn-primary" onclick="sendMessage()">Senden ▶</button>
+        </span>
       </div>
     </div>
 
@@ -992,6 +1247,15 @@ function initMarkdown() {
       return '<pre><code class="hljs">' + state.md.utils.escapeHtml(str) + '</code></pre>';
     }
   });
+  // Erlaube custom URL-Schemas fuer Disco-interne Links:
+  //   disco-file://<rel-path>           → oeffnet Datei im Viewer
+  //   disco-table://<datastore|workspace>/<table>  → oeffnet Tabelle
+  // Standard-Schemas (http/https/mailto) bleiben erlaubt.
+  const _origValidate = state.md.validateLink.bind(state.md);
+  state.md.validateLink = function(url) {
+    if (/^disco-(file|table):/i.test(url)) return true;
+    return _origValidate(url);
+  };
 }
 
 function escapeHtml(s) {
@@ -1010,7 +1274,10 @@ function renderMarkdown(text) {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ['p','br','strong','em','code','pre','ul','ol','li','a','h1','h2','h3','h4','h5','h6',
                    'blockquote','hr','table','thead','tbody','tr','th','td','span','del','sub','sup','img'],
-    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt']
+    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt'],
+    // Erlaube zusaetzlich disco-file:// und disco-table:// als URI-Schemas.
+    // DOMPurify-Default whitelistet nur http/https/mailto/tel/data:image/etc.
+    ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp|xxx|disco-file|disco-table):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
   });
 }
 
@@ -1060,6 +1327,22 @@ async function initEnvFooter() {
 }
 
 // =========================================================================
+// Sidebar-Sections: Open/Closed-State pro <details data-sb-key=...> persistieren
+// =========================================================================
+function initSidebarSections() {
+  const els = document.querySelectorAll('details.sb-section.collapsible[data-sb-key]');
+  els.forEach(el => {
+    const key = 'sb-open:' + el.dataset.sbKey;
+    const saved = localStorage.getItem(key);
+    if (saved === '0') el.removeAttribute('open');
+    else if (saved === '1') el.setAttribute('open', '');
+    el.addEventListener('toggle', () => {
+      localStorage.setItem(key, el.open ? '1' : '0');
+    });
+  });
+}
+
+// =========================================================================
 // Init
 // =========================================================================
 window.addEventListener('DOMContentLoaded', async () => {
@@ -1068,6 +1351,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   initMarkdown();
   initSplitters();
   initChatInput();
+  initSidebarSections();
+  initReasoningSelect();
 
   // Projekt-Liste laden
   try {
@@ -1238,13 +1523,14 @@ async function switchProject(slug) {
   const msgs = document.getElementById('chat-messages');
   msgs.innerHTML = '';
 
-  // Parallel: Chat-State + Messages + Explorer + DB-Tabellen + Flows laden
+  // Parallel: Chat-State + Messages + Explorer + DB-Tabellen + Flows + Pipeline-Status laden
   await Promise.all([
     loadChatState(slug),
     loadMessages(slug),
     loadExplorer(slug),
     loadDbTables(slug),
     loadFlows(slug),
+    loadPipelineStatus(slug),
   ]);
 
   // WebSocket verbinden (ein persistenter Chat pro Projekt)
@@ -1577,6 +1863,20 @@ function renderTreeNode(node, isRoot=false) {
     childWrap.className = 'tree-node-children';
     childWrap.style.display = isRoot ? 'block' : 'none';
     (node.children || []).forEach(c => childWrap.appendChild(renderTreeNode(c, false)));
+    // Bei truncated: Pseudo-Knoten "…" mit Tooltip einhaengen, damit
+    // sichtbar bleibt dass es tiefer geht (Backend hat max_depth-Limit).
+    if (node.truncated) {
+      const trunc = document.createElement('div');
+      trunc.className = 'tree-row tree-truncated muted';
+      trunc.title = 'Tiefer Ordner — Limit erreicht. Inhalt wird nicht im Tree angezeigt.';
+      trunc.appendChild(spanIcon('⋯'));
+      const lbl = document.createElement('span');
+      lbl.className = 'tree-name';
+      lbl.textContent = '… (tiefer Ordner, nicht geladen)';
+      lbl.style.fontStyle = 'italic';
+      trunc.appendChild(lbl);
+      childWrap.appendChild(trunc);
+    }
     toggle.onclick = (e) => {
       e.stopPropagation();
       const open = childWrap.style.display !== 'none';
@@ -1644,7 +1944,7 @@ async function loadMessages(slug) {
       } catch (e) { feedbackMap = {}; }
     }
     for (const m of items) {
-      if (m.role === 'user') appendMessage('user', m.content || '');
+      if (m.role === 'user') appendMessage('user', m.content || '', undefined, m.attachments);
       else if (m.role === 'assistant') {
         if (m.content) {
           const el = appendMessage('agent', m.content, m.id);
@@ -1718,22 +2018,313 @@ function initChatInput() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
+
+  // Globaler Click-Handler fuer disco-file:// und disco-table://-Links
+  // (event delegation ueber #chat-messages — funktioniert auch fuer
+  // dynamisch eingefuegte Bubbles).
+  const msgs = document.getElementById('chat-messages');
+  if (msgs) {
+    msgs.addEventListener('click', (e) => {
+      const a = e.target.closest('a[href]');
+      if (!a) return;
+      const href = a.getAttribute('href') || '';
+      if (href.startsWith('disco-file://')) {
+        e.preventDefault();
+        const path = decodeURIComponent(href.substring('disco-file://'.length));
+        // Filename aus dem letzten Pfad-Segment ableiten
+        const name = path.split('/').pop() || path;
+        openFileInViewer(path, name);
+      } else if (href.startsWith('disco-table://')) {
+        e.preventDefault();
+        const rest = href.substring('disco-table://'.length);
+        // Format: <datastore|workspace>/<tabelle>
+        const slash = rest.indexOf('/');
+        if (slash < 0) return;
+        const db = rest.substring(0, slash);
+        const table = decodeURIComponent(rest.substring(slash + 1));
+        if (db !== 'datastore' && db !== 'workspace') return;
+        openTableInViewer(table, db);
+      }
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Chat-Attachments (Bilder + kleine Textfiles via Drag-Drop, Cmd+V, +-Button)
+// ---------------------------------------------------------------------------
+// state.pendingAttachments: Liste der hochgeladenen aber noch nicht gesendeten
+// Anhaenge. Jeder Eintrag ist {id, filename, mime_type, size, kind, rel_path}
+// — exakt das, was der /chat/upload-Endpoint zurueckliefert + ein optionales
+// thumbDataUrl fuer Bild-Vorschau im Strip.
+state.pendingAttachments = [];
+const MAX_ATTACHMENTS = 5;
+
+const ALLOWED_IMAGE_MIME = new Set(['image/png','image/jpeg','image/jpg','image/webp','image/gif']);
+const ALLOWED_TEXT_EXTS = new Set([
+  '.txt','.md','.markdown','.csv','.json',
+  '.log','.xml','.yaml','.yml',
+  '.py','.sql','.sh','.js','.ts','.html','.css',
+]);
+
+function _attachExt(filename) {
+  const i = (filename || '').lastIndexOf('.');
+  return i >= 0 ? filename.slice(i).toLowerCase() : '';
+}
+
+function _isImageFile(file) {
+  return ALLOWED_IMAGE_MIME.has((file.type || '').toLowerCase());
+}
+
+function _isTextFile(file) {
+  if (_isImageFile(file)) return false;
+  return ALLOWED_TEXT_EXTS.has(_attachExt(file.name));
+}
+
+async function uploadAttachment(file) {
+  if (!state.activeProjectSlug) {
+    setStatus('Kein aktives Projekt — Anhang abgewiesen', 'warn');
+    return null;
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch(
+      `/api/projects/${encodeURIComponent(state.activeProjectSlug)}/chat/upload`,
+      { method: 'POST', body: fd },
+    );
+    const data = await r.json();
+    if (data.error) {
+      setStatus('Upload-Fehler: ' + data.error, 'warn');
+      return null;
+    }
+    return data;
+  } catch (e) {
+    setStatus('Upload-Fehler: ' + e.message, 'warn');
+    return null;
+  }
+}
+
+async function addAttachmentFile(file) {
+  if (!file) return;
+  if (state.pendingAttachments.length >= MAX_ATTACHMENTS) {
+    setStatus(`Max ${MAX_ATTACHMENTS} Anhaenge pro Nachricht`, 'warn');
+    return;
+  }
+  if (!_isImageFile(file) && !_isTextFile(file)) {
+    setStatus(`Datei-Typ nicht unterstuetzt: ${file.name}`, 'warn');
+    return;
+  }
+  // Optimistisch: Pending-Chip schon anzeigen, waehrend Upload laeuft
+  const tmpId = 'tmp-' + Math.random().toString(36).slice(2, 10);
+  const tmpEntry = {
+    id: tmpId,
+    filename: file.name,
+    mime_type: file.type || '',
+    size: file.size,
+    kind: _isImageFile(file) ? 'image' : 'text',
+    pending: true,
+  };
+  // Bild-Thumbnail aus dem File-Blob erzeugen (lokal, vor Upload)
+  if (tmpEntry.kind === 'image') {
+    try {
+      tmpEntry.thumbDataUrl = await _readFileAsDataUrl(file);
+    } catch (_) { /* ignore */ }
+  }
+  state.pendingAttachments.push(tmpEntry);
+  renderAttachmentsStrip();
+
+  const uploaded = await uploadAttachment(file);
+  // Pending durch echten Eintrag ersetzen (oder bei Fehler entfernen)
+  const idx = state.pendingAttachments.findIndex(a => a.id === tmpId);
+  if (idx === -1) return;  // wurde inzwischen entfernt
+  if (!uploaded) {
+    state.pendingAttachments.splice(idx, 1);
+  } else {
+    state.pendingAttachments[idx] = { ...uploaded, thumbDataUrl: tmpEntry.thumbDataUrl };
+  }
+  renderAttachmentsStrip();
+}
+
+function _readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+function removeAttachment(id) {
+  state.pendingAttachments = state.pendingAttachments.filter(a => a.id !== id);
+  renderAttachmentsStrip();
+}
+
+function renderAttachmentsStrip() {
+  const strip = document.getElementById('attachments-strip');
+  if (!strip) return;
+  if (!state.pendingAttachments.length) {
+    strip.classList.add('hidden');
+    strip.innerHTML = '';
+    return;
+  }
+  strip.classList.remove('hidden');
+  strip.innerHTML = state.pendingAttachments.map(a => {
+    const sizeStr = a.size > 1024 * 1024
+      ? (a.size / (1024 * 1024)).toFixed(1) + ' MB'
+      : (a.size / 1024).toFixed(0) + ' KB';
+    const previewHtml = a.kind === 'image'
+      ? (a.thumbDataUrl
+          ? `<img class="attach-chip-thumb" src="${a.thumbDataUrl}" alt="">`
+          : `<div class="attach-chip-icon">🖼️</div>`)
+      : `<div class="attach-chip-icon">📄</div>`;
+    const pendingTag = a.pending ? ' (lade...)' : '';
+    return `
+      <div class="attach-chip${a.pending ? ' pending' : ''}">
+        ${previewHtml}
+        <span class="attach-chip-name" title="${escHtml(a.filename)}">${escHtml(a.filename)}</span>
+        <span class="attach-chip-meta">${sizeStr}${pendingTag}</span>
+        <button class="attach-chip-remove" title="Anhang entfernen" onclick="removeAttachment('${a.id}')">×</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function clearAttachments() {
+  state.pendingAttachments = [];
+  renderAttachmentsStrip();
+}
+
+function onAttachmentFilesSelected(event) {
+  const files = Array.from(event.target.files || []);
+  for (const f of files) addAttachmentFile(f);
+  // Input zuruecksetzen, damit dieselbe Datei nochmal waehlbar ist
+  event.target.value = '';
+}
+
+function onComposerPaste(event) {
+  const items = Array.from(event.clipboardData?.items || []);
+  // Wenn Clipboard ein Bild oder eine File enthaelt → Anhang. Plain-Text
+  // bleibt normaler Textareal-Paste (nicht verhindern).
+  let handled = false;
+  for (const it of items) {
+    if (it.kind === 'file') {
+      const f = it.getAsFile();
+      if (f) {
+        addAttachmentFile(f);
+        handled = true;
+      }
+    }
+  }
+  if (handled) event.preventDefault();
+}
+
+function onComposerDragOver(event) {
+  // Nur reagieren wenn Files gedraggt werden, nicht z.B. Text-Selektion
+  if (event.dataTransfer?.types?.includes('Files')) {
+    event.preventDefault();
+    document.getElementById('chat-input-area')?.classList.add('dragover');
+  }
+}
+function onComposerDragLeave(event) {
+  // Drag verlaesst nur wirklich, wenn kein relatedTarget innerhalb des Containers
+  const area = document.getElementById('chat-input-area');
+  if (area && !area.contains(event.relatedTarget)) {
+    area.classList.remove('dragover');
+  }
+}
+function onComposerDrop(event) {
+  event.preventDefault();
+  document.getElementById('chat-input-area')?.classList.remove('dragover');
+  const files = Array.from(event.dataTransfer?.files || []);
+  for (const f of files) addAttachmentFile(f);
 }
 
 function sendMessage() {
   if (!state.wsReady) { setStatus('Nicht verbunden', 'warn'); return; }
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
-  if (!text) return;
+  // Nur "wirkliche" (nicht-pending) Anhaenge senden
+  const ready = state.pendingAttachments.filter(a => !a.pending);
+  const stillPending = state.pendingAttachments.length - ready.length;
+  if (stillPending > 0) {
+    setStatus(`Bitte warten — ${stillPending} Anhang/Anhaenge laden noch`, 'warn');
+    return;
+  }
+  if (!text && !ready.length) return;
+  // Nur die Server-Refs senden, keine thumbDataUrl
+  const payload = {
+    text,
+    attachments: ready.map(a => ({
+      id: a.id, filename: a.filename, mime_type: a.mime_type,
+      size: a.size, kind: a.kind, rel_path: a.rel_path,
+    })),
+  };
   input.value = '';
   input.style.height = '';
-  appendMessage('user', text);
+  appendMessage('user', text, undefined, ready);
+  clearAttachments();
   typingEl = appendTyping();
-  state.ws.send(JSON.stringify({ text }));
+  state.ws.send(JSON.stringify(payload));
   currentBubble = null; currentText = '';
   state._isStreaming = true;
   showStopButton(true);
   setStatus('Disco denkt …');
+}
+
+// Reasoning-Effort-Selector: Aenderung triggert ein Live-Setup
+// (POST /api/agent/config) — pusht eine neue Foundry-Agent-Version
+// mit dem geaenderten reasoning.effort. ~3s Latenz; nachfolgende
+// Turns ziehen automatisch die neue Version.
+async function onReasoningChange() {
+  const sel = document.getElementById('reasoning-select');
+  if (!sel) return;
+  const newValue = sel.value;
+  const previousValue = state.reasoningEffort || 'medium';
+  if (newValue === previousValue) return;
+  sel.disabled = true;
+  setStatus(`Reasoning → ${newValue} … (Setup laeuft, ~3s)`);
+  try {
+    const r = await fetch('/api/agent/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ reasoning_effort: newValue }),
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error(`HTTP ${r.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await r.json();
+    state.reasoningEffort = newValue;
+    setStatus(`Reasoning ${newValue} aktiv (Agent v${data.version || '?'})`, 'ok');
+    setTimeout(() => setStatus('Bereit'), 3000);
+  } catch (err) {
+    sel.value = previousValue;
+    setStatus(`Reasoning-Wechsel fehlgeschlagen: ${err.message}`, 'err');
+  } finally {
+    sel.disabled = false;
+  }
+}
+
+async function initReasoningSelect() {
+  const sel = document.getElementById('reasoning-select');
+  if (!sel) return;
+  // Aktuellen Stand vom Server holen (nicht localStorage — server-side
+  // truth in .env / Foundry-Agent-Definition)
+  try {
+    const r = await fetch('/api/agent/config');
+    if (r.ok) {
+      const data = await r.json();
+      const current = data.reasoning_effort || 'medium';
+      if (Array.from(sel.options).some(o => o.value === current)) {
+        sel.value = current;
+      }
+      state.reasoningEffort = sel.value;
+    }
+  } catch (e) {
+    // wenn Endpoint noch nicht da: bleibt auf default
+    state.reasoningEffort = sel.value;
+  }
+  sel.disabled = false;
 }
 
 function stopResponse() {
@@ -1848,15 +2439,26 @@ function handleEvent(ev) {
 // =========================================================================
 // Render-Helfer Chat
 // =========================================================================
-function appendMessage(role, text, messageId) {
+function appendMessage(role, text, messageId, attachments) {
   const msgs = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = `msg ${role}`;
   if (messageId != null) div.dataset.messageId = String(messageId);
   const sender = role === 'user' ? 'Du' : role === 'agent' ? 'Disco' : 'System';
+  // Anhang-Block (nur user/agent), wird oberhalb der Bubble angezeigt
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  const attachHtml = hasAttachments ? renderMessageAttachments(attachments) : '';
+  // Bubble nur dann WEGLASSEN, wenn die Message KEINEN Text hat UND
+  // mindestens einen Anhang (User-Message "nur Bild ohne Begleittext").
+  // In allen anderen Faellen — auch bei Streaming-Init (text='', keine
+  // Attachments) — muss eine leere Bubble existieren, sonst findet der
+  // text_delta-Handler kein .bubble und wirft TypeError.
+  const showBubble = !!text || !hasAttachments;
+  const bubbleHtml = showBubble ? `<div class="bubble">${renderMarkdown(text || '')}</div>` : '';
   div.innerHTML = `
     <div class="sender">${sender}</div>
-    <div class="bubble">${renderMarkdown(text)}</div>
+    ${attachHtml}
+    ${bubbleHtml}
   `;
   if (role === 'agent' && messageId != null) {
     // Feedback-Leiste als eigenes Kind von .msg (NICHT in .sender), damit die
@@ -1867,6 +2469,85 @@ function appendMessage(role, text, messageId) {
   msgs.appendChild(div);
   scrollChat();
   return div;
+}
+
+function renderMessageAttachments(attachments) {
+  const slug = state.activeProjectSlug;
+  const items = attachments.map(a => {
+    if (a.kind === 'image' && a.id) {
+      const url = `/api/projects/${encodeURIComponent(slug)}/chat/attachments/${a.id}`;
+      const fname = escHtml(a.filename || '');
+      // data-Attribute + globaler Click-Listener (s.u.) — robuster als
+      // inline onclick mit Quote-Escapes bei Filenames mit Sonderzeichen.
+      return `<img class="msg-attach-image" data-lightbox-url="${url}" data-lightbox-caption="${fname}" src="${url}" alt="${fname}" title="${fname}">`;
+    }
+    return `
+      <div class="msg-attach-textfile" title="${escHtml(a.filename || '')}">
+        <span class="msg-attach-textfile-icon">📄</span>
+        <span class="msg-attach-textfile-name">${escHtml(a.filename || '(unbenannt)')}</span>
+      </div>
+    `;
+  }).join('');
+  return `<div class="msg-attachments">${items}</div>`;
+}
+
+// Event-Delegation: ein zentraler Click-Listener faengt alle
+// .msg-attach-image-Klicks im Chat — funktioniert auch fuer dynamisch
+// nachgeladene Messages (loadMessages, neue User-Bubbles).
+document.addEventListener('click', (ev) => {
+  const img = ev.target.closest && ev.target.closest('.msg-attach-image');
+  if (!img) return;
+  const url = img.dataset.lightboxUrl;
+  if (!url) return;
+  ev.preventDefault();
+  openImageLightbox(url, img.dataset.lightboxCaption || '');
+});
+
+// ---------------------------------------------------------------------------
+// In-App-Lightbox fuer Bild-Anhaenge
+// ---------------------------------------------------------------------------
+// Schliesst per X-Button, Backdrop-Klick oder Esc-Taste. Mehrfachaufruf
+// schliesst eine evtl. offene Lightbox vorher (kein Stapeln).
+function openImageLightbox(url, caption) {
+  closeImageLightbox();  // idempotent
+  const lb = document.createElement('div');
+  lb.className = 'image-lightbox';
+  // Caption immer escaped einfuegen, src ist der Server-Pfad (sicher)
+  const capHtml = caption ? `<div class="lb-caption">${escHtml(caption)}</div>` : '';
+  lb.innerHTML = `
+    <button class="lb-close" title="Schliessen (Esc)">×</button>
+    <img alt="${escHtml(caption || '')}">
+    ${capHtml}
+  `;
+  // src per .src-Property setzen, nicht via Markup → kein HTML-Escape-Risiko
+  const imgEl = lb.querySelector('img');
+  imgEl.src = url;
+  // Klick aufs Bild verhindert Backdrop-Close
+  imgEl.addEventListener('click', (ev) => ev.stopPropagation());
+  // X-Button schliesst
+  lb.querySelector('.lb-close').addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    closeImageLightbox();
+  });
+  // Klick auf Backdrop (nicht aufs Bild) schliesst
+  lb.addEventListener('click', (ev) => {
+    if (ev.target === lb) closeImageLightbox();
+  });
+  document.body.appendChild(lb);
+  // Esc schliesst
+  document.addEventListener('keydown', _lightboxEscHandler);
+}
+
+function _lightboxEscHandler(ev) {
+  if (ev.key === 'Escape') {
+    closeImageLightbox();
+  }
+}
+
+function closeImageLightbox(ev) {
+  if (ev) ev.stopPropagation();
+  document.querySelectorAll('.image-lightbox').forEach(el => el.remove());
+  document.removeEventListener('keydown', _lightboxEscHandler);
 }
 
 function buildFeedbackIcons(messageId) {
@@ -2511,31 +3192,34 @@ function pdfNext() { if (state._pdfPage < state._pdfTotal) { state._pdfPage++; r
 // DB-Tabellen-Liste in Sidebar + Tabellen-Viewer
 // =========================================================================
 async function loadDbTables(slug) {
-  const c = document.getElementById('db-tables-list');
-  c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  const containers = {
+    datastore: document.getElementById('db-tables-datastore'),
+    workspace: document.getElementById('db-tables-workspace'),
+  };
+  for (const c of Object.values(containers)) {
+    c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  }
   try {
     const tables = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/db/tables`);
     if (!Array.isArray(tables) || !tables.length) {
-      c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Keine work_*/agent_*-Tabellen.</div>';
+      for (const c of Object.values(containers)) {
+        c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">Keine work_*/agent_*-Tabellen.</div>';
+      }
       return;
     }
-    c.innerHTML = '';
-    // Gruppiert nach DB: Datastore zuerst (Ebene 1+2), dann Workspace (Ebene 3)
+    // Gruppiert nach DB
     const groups = {datastore: [], workspace: []};
     for (const t of tables) {
       (groups[t.db] || groups.workspace).push(t);
     }
     for (const branch of ['datastore', 'workspace']) {
+      const c = containers[branch];
       const list = groups[branch];
-      if (!list.length) continue;
-      const header = document.createElement('div');
-      header.className = 'tree-row muted';
-      header.style.fontSize = '11px';
-      header.style.padding = '4px 6px 2px';
-      header.textContent = branch === 'datastore'
-        ? 'datastore.db (Ebene 1+2, read-only)'
-        : 'workspace.db (Ebene 3, read/write)';
-      c.appendChild(header);
+      c.innerHTML = '';
+      if (!list.length) {
+        c.innerHTML = '<div class="muted" style="font-size:11px;padding:4px">leer</div>';
+        continue;
+      }
       for (const t of list) {
         const row = document.createElement('div');
         row.className = 'tree-row file';
@@ -2549,7 +3233,9 @@ async function loadDbTables(slug) {
       }
     }
   } catch (e) {
-    c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
+    for (const c of Object.values(containers)) {
+      c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
+    }
   }
 }
 
@@ -2730,6 +3416,72 @@ state._flowView = null;           // 'flow'|'run'|null
 state._flowViewName = null;       // Flow-Name oder null
 state._flowViewRunId = null;      // Run-ID oder null
 
+async function loadPipelineStatus(slug) {
+  const c = document.getElementById('pipeline-status-list');
+  if (!c) return;
+  if (!slug) { c.innerHTML = ''; return; }
+  c.innerHTML = '<span class="muted" style="font-size:11px">lade …</span>';
+  try {
+    const data = await api(`/api/projects/${encodeURIComponent(slug)}/pipeline-status`);
+    if (data.error) {
+      c.innerHTML = `<span class="muted" style="font-size:11px">${escHtml(data.error)}</span>`;
+      return;
+    }
+    c.innerHTML = '';
+    for (const step of (data.steps || [])) {
+      const row = document.createElement('div');
+      row.className = 'ps-row' + (step.n_pending > 0 ? ' has-pending' : '');
+      // Tooltip mit Bucket-Aufschluesselung — done / pending / failed / empty / unsupported.
+      const buckets = [];
+      buckets.push(`${step.n_done} done`);
+      if (step.n_pending > 0) buckets.push(`${step.n_pending} pending`);
+      if (step.n_failed > 0)  buckets.push(`${step.n_failed} failed`);
+      if (step.n_empty > 0)   buckets.push(`${step.n_empty} leer extrahiert`);
+      if (step.n_unsupported > 0) buckets.push(`${step.n_unsupported} ohne Engine`);
+      row.title = `${step.step_name}: ${buckets.join(' · ')} (von ${step.n_total} Soll)`;
+      row.innerHTML = `
+        <span class="ps-status ${step.status}" aria-label="${step.status}"></span>
+        <span class="ps-name"><span class="ps-step-num">${step.step_order}.</span>${escHtml(step.step_name)}</span>
+        <span class="ps-label">${escHtml(step.label || '')}</span>
+      `;
+      row.onclick = () => onPipelineStepClick(slug, step);
+      c.appendChild(row);
+    }
+  } catch (e) {
+    c.innerHTML = '<span class="err" style="font-size:11px">Fehler.</span>';
+  }
+}
+
+function onPipelineStepClick(slug, step) {
+  // Phase 1: einfaches Info-Toast. Phase 2: Modal mit Trigger-Buttons.
+  const lines = [
+    `Schritt ${step.step_order}: ${step.step_name}`,
+    `Status: ${step.status.toUpperCase()}`,
+    `Done: ${step.n_done} / Total: ${step.n_total}`,
+    `Failed: ${step.n_failed}, Pending: ${step.n_pending}`,
+  ];
+  if (step.n_empty > 0) {
+    lines.push(`Leer extrahiert: ${step.n_empty} (Datei lief durch, Output war leer — z.B. PDF ohne Text-Inhalt)`);
+  }
+  if (step.n_unsupported > 0) {
+    lines.push(`Ohne Engine: ${step.n_unsupported} (nicht verarbeitbar — Format hat keine passende Engine)`);
+  }
+  if (step.n_pending > 0) {
+    lines.push('');
+    lines.push(`→ ${step.n_pending} Files warten. Im Chat formulieren:`);
+    const promptByStep = {
+      1: 'Bitte sources_register laufen lassen, neue Dateien aufnehmen.',
+      2: 'Bitte Begleit-Excel-Match oder SharePoint-Import durchfuehren.',
+      3: 'Bitte sources_detect_duplicates laufen lassen.',
+      4: 'Bitte den Flow extraction_routing_decision starten.',
+      5: 'Bitte den Flow extraction starten.',
+      6: 'Bitte build_search_index aufrufen.',
+    };
+    lines.push(promptByStep[step.step_order] || '(Disco fragen, was als naechstes ansteht.)');
+  }
+  alert(lines.join('\n'));
+}
+
 async function loadFlows(slug) {
   const c = document.getElementById('flows-list');
   if (!slug) { c.innerHTML = ''; return; }
@@ -2901,12 +3653,7 @@ async function renderRunDetails() {
     // Controls je nach Status
     let ctl = '';
     if (run.status === 'running' || run.status === 'pending') {
-      ctl = `<button onclick="runPause(${id})">⏸ Pause</button>
-             <button onclick="runCancel(${id}, false)">■ Cancel</button>
-             <button class="btn-stop" onclick="runCancel(${id}, true)">✕ Force-Kill</button>`;
-    } else if (run.status === 'paused') {
-      ctl = `<button class="btn-primary" disabled title="Resume via CLI: disco flow run &lt;name&gt; (noch kein UI-Resume)">▶ Pausiert</button>
-             <button onclick="runCancel(${id}, false)">■ Cancel</button>
+      ctl = `<button onclick="runCancel(${id}, false)">■ Cancel</button>
              <button class="btn-stop" onclick="runCancel(${id}, true)">✕ Force-Kill</button>`;
     } else {
       ctl = `<span class="muted">Run beendet. Status: <span class="status-badge status-${escHtml(run.status)}">${escHtml(run.status)}</span></span>`;
@@ -2967,16 +3714,6 @@ async function renderRunDetails() {
   }
 }
 
-async function runPause(runId) {
-  const slug = state.activeProjectSlug;
-  try {
-    const r = await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/pause`, {method:'POST'});
-    const d = await r.json();
-    if (d.error && !d.id) alert('Pause-Fehler: ' + d.error);
-  } catch (e) { alert('Pause fehlgeschlagen: ' + e.message); }
-  await renderRunDetails();
-}
-
 async function runCancel(runId, force) {
   const slug = state.activeProjectSlug;
   const msg = force
@@ -3007,7 +3744,7 @@ function _startFlowPoll() {
     try {
       const slug = state.activeProjectSlug;
       const r = await api(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${state._flowViewRunId}`);
-      if (['running','pending','paused'].includes(r.status)) {
+      if (['running','pending'].includes(r.status)) {
         await renderRunDetails();
         // Alle 4 Ticks (~10s) auch die Sidebar-Indikatoren aktualisieren.
         if (++tickCount % 4 === 0) loadFlows(slug);
@@ -3039,7 +3776,7 @@ function closeFlowView() {
 
 state._runStripPoll = null;       // setInterval handle
 state._runStripLastRuns = new Map();  // key = "slug:id" → last snapshot fuer Status-Wechsel-Erkennung
-state._runStripPending = new Set();   // "slug:id" — User hat Pause/Cancel geklickt, UI sperren
+state._runStripPending = new Set();   // "slug:id" — User hat Cancel geklickt, UI sperren
 // Beendete Runs (done/failed/cancelled) bleiben oben sichtbar, bis der User
 // sie per X-Button wegklickt. Persistiert in localStorage damit ein
 // Browser-Reload sie nicht verschluckt.
@@ -3151,7 +3888,17 @@ async function runStripFetchFinal(prev) {
   // prev ist ein Run aus dem letzten aktiven Snapshot. Wir holen seinen
   // finalen Status (done/failed/cancelled) einmalig fuer den Toast.
   try {
-    return await api(`/api/workspace/projects/${encodeURIComponent(prev.project_slug)}/runs/${prev.id}`);
+    const finalRun = await api(`/api/workspace/projects/${encodeURIComponent(prev.project_slug)}/runs/${prev.id}`);
+    if (!finalRun) return null;
+    // Defensiv: wenn der Endpoint project_slug nicht mitliefert (alte
+    // Backend-Version), den slug aus prev nachtragen — sonst entsteht
+    // ein 'null:<id>'-Dedup-Key, der mit dem regulaeren
+    // '<slug>:<id>'-Eintrag aus recent_finished kollidiert →
+    // Doppelanzeige im Strip.
+    if (!finalRun.project_slug) {
+      finalRun.project_slug = prev.project_slug;
+    }
+    return finalRun;
   } catch (_e) {
     return null;
   }
@@ -3160,7 +3907,14 @@ async function runStripFetchFinal(prev) {
 function runStripRender(runs) {
   const strip = document.getElementById('run-strip');
   if (!strip) return;
-  const finished = state._runStripFinished || [];
+  // Dedup: Run-Keys, die als aktiv gerendert werden, dürfen NICHT
+  // gleichzeitig im finished-Block erscheinen (sonst Doppelanzeige —
+  // Race-Condition zwischen active-runs und recent_finished).
+  const activeKeys = new Set(runs.map(r => `${r.project_slug}:${r.id}`));
+  const finished = (state._runStripFinished || []).filter(item => {
+    const k = `${item.run.project_slug}:${item.run.id}`;
+    return !activeKeys.has(k);
+  });
   if (!runs.length && !finished.length) {
     strip.classList.remove('has-runs');
     strip.innerHTML = '';
@@ -3194,16 +3948,17 @@ function runStripRenderRow(r, opts) {
     ? `done · ${failed} failed`
     : rawStatus;
   const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
-  const runtime = _runStripElapsed(r.started_at || r.created_at);
+  // Bei beendeten Runs: Laufzeit = finished_at - started_at.
+  // Bei aktiven Runs: Laufzeit = now - started_at (live).
+  const runtime = _runStripElapsed(
+    r.started_at || r.created_at,
+    isFinished ? r.finished_at : null,
+  );
   const cost = (r.total_cost_eur || 0).toFixed(2);
   const budget = (r.config && r.config.budget_eur) ? Number(r.config.budget_eur) : null;
   const overBudget = budget != null && (r.total_cost_eur || 0) > budget;
 
   const disabled = state._runStripPending.has(key) ? 'disabled' : '';
-  const pauseLabel = status === 'paused' ? '▶ Weiter' : '⏸ Pause';
-  const pauseAction = status === 'paused'
-    ? `runStripResume('${escAttr(r.project_slug)}', ${r.id})`
-    : `runStripPause('${escAttr(r.project_slug)}', ${r.id})`;
 
   const budgetStr = budget != null
     ? `${cost} / ${budget.toFixed(2)} €`
@@ -3219,13 +3974,11 @@ function runStripRenderRow(r, opts) {
     : '';
 
   // Finished: einzige Aktion ist X-Button (wegklicken). Aktive Runs:
-  // Pause + Cancel.
+  // Cancel (Pause wurde 2026-05-06 entfernt — funktionierte nicht zuverlaessig).
   const actionsHtml = isFinished
     ? `<button class="run-btn run-btn-danger" onclick="event.stopPropagation(); runStripDismissFinished('${escAttr(key)}')"
               title="Status-Eintrag wegklicken">✕</button>`
-    : `<button class="run-btn" onclick="event.stopPropagation(); ${pauseAction}" ${disabled}
-              title="${status === 'paused' ? 'Worker fortsetzen' : 'Worker pausieren — aktueller Item laeuft noch zu Ende'}">${pauseLabel}</button>
-       <button class="run-btn run-btn-danger" onclick="event.stopPropagation(); runStripCancel('${escAttr(r.project_slug)}', ${r.id})" ${disabled}
+    : `<button class="run-btn run-btn-danger" onclick="event.stopPropagation(); runStripCancel('${escAttr(r.project_slug)}', ${r.id})" ${disabled}
               title="Run abbrechen — Done-Items bleiben">✕ Cancel</button>`;
 
   // Klick auf die ganze Zeile → Run im Viewer oeffnen (Projekt wird
@@ -3253,41 +4006,25 @@ function runStripRenderRow(r, opts) {
   `;
 }
 
-function _runStripElapsed(startedAtIso) {
+function _runStripElapsed(startedAtIso, finishedAtIso) {
   if (!startedAtIso) return '—';
-  const started = new Date(startedAtIso.replace(' ', 'T') + (startedAtIso.endsWith('Z') ? '' : 'Z'));
-  if (isNaN(started.getTime())) return '—';
-  const diffSec = Math.max(0, (Date.now() - started.getTime()) / 1000);
+  const _parse = (iso) => {
+    if (!iso) return null;
+    const d = new Date(iso.replace(' ', 'T') + (iso.endsWith('Z') ? '' : 'Z'));
+    return isNaN(d.getTime()) ? null : d;
+  };
+  const started = _parse(startedAtIso);
+  if (!started) return '—';
+  // Bei beendeten Runs: feste End-Zeit aus finished_at.
+  // Bei aktiven Runs: Date.now() (Uhr laeuft live).
+  const finished = _parse(finishedAtIso);
+  const endTime = finished ? finished.getTime() : Date.now();
+  const diffSec = Math.max(0, (endTime - started.getTime()) / 1000);
   if (diffSec < 60) return `${Math.round(diffSec)}s`;
   if (diffSec < 3600) return `${Math.round(diffSec / 60)}m`;
   const h = Math.floor(diffSec / 3600);
   const m = Math.round((diffSec - h * 3600) / 60);
   return `${h}h${m}m`;
-}
-
-async function runStripPause(slug, runId) {
-  const key = `${slug}:${runId}`;
-  state._runStripPending.add(key);
-  runStripPoll();  // UI-Update mit disabled Buttons
-  try {
-    await fetch(`/api/workspace/projects/${encodeURIComponent(slug)}/runs/${runId}/pause`, { method: 'POST' });
-  } catch (e) {
-    alert(`Pause fehlgeschlagen: ${e.message}`);
-  }
-  state._runStripPending.delete(key);
-  runStripPoll();
-}
-
-async function runStripResume(slug, runId) {
-  // Ein "paused"-Run hat worker_pid != NULL nur wenn Worker noch laeuft —
-  // bei Pause-Signal laeuft er zu Ende und beendet sich. Resume = neuer Run-Start
-  // mit gleichem Flow, der die noch-pending Items aufgreift (Idempotenz).
-  // Fuer MVP: einfachen Hinweis geben, tatsaechliches Resume macht der User ueber
-  // "Flow erneut starten" im Flow-Panel.
-  alert(
-    'Resume-Button: im MVP muss der Run neu gestartet werden ueber ' +
-    '„Neuen Run starten" im Flow-Panel. Done-Items werden dank Idempotenz uebersprungen.'
-  );
 }
 
 async function runStripCancel(slug, runId) {
@@ -3296,8 +4033,6 @@ async function runStripCancel(slug, runId) {
     `• Worker wird per SIGTERM beendet — aktuell laufender Item ist verloren.\n` +
     `• Bereits abgeschlossene Items bleiben in der DB.\n` +
     `• Pending-Items werden NICHT verarbeitet.\n\n` +
-    `Tipp: Wenn Du stattdessen sanft stoppen willst (Item zu Ende, dann halt),\n` +
-    `nimm „⏸ Pause".\n\n` +
     `Ok = sofort abbrechen, Abbrechen = weiterlaufen lassen.`
   );
   if (!ok) return;

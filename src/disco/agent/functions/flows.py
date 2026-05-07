@@ -11,8 +11,7 @@ damit:
   - den **Status** eines Runs abfragen (`flow_status`, `flow_runs`)
   - Items eines Runs durchsehen (`flow_items`)
   - Logs lesen (`flow_logs`)
-  - einen laufenden Flow **pausieren** oder **abbrechen**
-    (`flow_pause`, `flow_cancel`)
+  - einen laufenden Flow **abbrechen** (`flow_cancel`)
 
 Alle Tools wirken auf das **aktive Projekt** (aus dem
 `disco.agent.context`-Sandbox). Ohne Projekt-Kontext: klare Fehlermeldung.
@@ -83,7 +82,7 @@ _README_SKELETON = """# Flow: {name}
 - Fortschritt: `disco flow status <run_id> --project <slug>`
 - Items: `disco flow items <run_id> --project <slug>`
 - Logs: `disco flow logs <run_id> --project <slug>`
-- Pause/Cancel: `disco flow pause/cancel <run_id> --project <slug>`
+- Cancel: `disco flow cancel <run_id> --project <slug>`
 
 ## Wie erkennst Du, dass es funktioniert hat
 
@@ -588,7 +587,7 @@ def _flow_fork(
         "  1) Test-Run mit begrenzter Menge: config={\"limit\": 5}\n"
         "  2) Ergebnisse pruefen per flow_items\n"
         "  3) Wenn ok: Full-Run ohne limit, aber mit budget_eur-Limit\n"
-        "  4) flow_status periodisch abfragen; flow_pause bei Anomalien."
+        "  4) flow_status periodisch abfragen; flow_cancel bei Anomalien."
     ),
     parameters={
         "type": "object",
@@ -627,8 +626,8 @@ def _flow_run(
 ) -> dict[str, Any]:
     # Asymmetric Auto-Action: wenn dieser Turn vom System getriggert wurde
     # (flow_notifications, nicht User), darf Disco NICHT autonom neue Runs
-    # starten. Cancel/Pause ist ok (Cost-Protection), aber Starts kosten
-    # Geld und muessen vom Menschen freigegeben werden.
+    # starten. Cancel ist ok (Cost-Protection), aber Starts kosten Geld und
+    # muessen vom Menschen freigegeben werden.
     from ..context import is_system_triggered
 
     if is_system_triggered():
@@ -783,41 +782,6 @@ def _flow_items(
     return {
         "items": items,
         "total": len(items),
-    }
-
-
-# ---------------------------------------------------------------------------
-# flow_pause
-# ---------------------------------------------------------------------------
-
-
-@register(
-    name="flow_pause",
-    description=(
-        "Signalisiert dem Worker, dass er beim naechsten Item pausieren "
-        "soll. Kehrt sofort zurueck — der Worker reagiert innerhalb von "
-        "~2 Sekunden. Ein pausierter Run kann spaeter mit flow_run "
-        "(auf demselben flow_name) NICHT fortgesetzt werden — dafuer "
-        "muesste der Service intern start_run auf dem paused-Run rufen. "
-        "Derzeit: pause ist fuer 'stopp und pruef', resume folgt per "
-        "explizitem CLI-Kommando."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "run_id": {"type": "integer"},
-        },
-        "required": ["run_id"],
-    },
-    returns="{run_id, status, pause_requested}",
-)
-def _flow_pause(*, run_id: int) -> dict[str, Any]:
-    project_root = _active_project_root()
-    run = flow_service.request_pause(project_root, run_id)
-    return {
-        "run_id": run.id,
-        "status": run.status,
-        "pause_requested": run.pause_requested,
     }
 
 

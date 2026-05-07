@@ -633,13 +633,25 @@ def _build_one_sheet(wb, spec: dict, fetched_rows: list[dict], styles: dict) -> 
 @register(
     name="build_xlsx_from_tables",
     description=(
-        "Erzeugt eine professionell formatierte Excel direkt server-seitig — "
-        "Multi-Sheet, Header-Style, Spaltenbreite, AutoFilter, Freeze Panes, "
-        "optional Status-Zellfarben (gruen/gelb/rot) und Hyperlinks zwischen Sheets. "
+        "Erzeugt eine **Standard-Excel** server-seitig — Multi-Sheet, "
+        "blauer Header, Spaltenbreite, AutoFilter, Freeze Panes, optional "
+        "Status-Zellfarben (gruen/gelb/rot) und Hyperlinks zwischen Sheets. "
         "Du gibst nur eine Spec: pro Sheet ein SQL-SELECT (oder fertige rows), "
         "optional Spalten-Umbenennungen, optional Status-Spalte. "
         "Vorteile: deterministisch, schnell (Sekunden), funktioniert fuer beliebig "
-        "grosse Excels (10 MB+), kein base64-Bridging notwendig."
+        "grosse Excels (10 MB+), kein base64-Bridging notwendig.\n"
+        "\n"
+        "**WICHTIG — Grenzen dieses Tools:** Es kann NUR den Standard-Look "
+        "(Header-Farbe, Zebra, Status-Spalte, AutoFilter, Hyperlinks). "
+        "Es kann KEINE Conditional Formatting, KEINE Charts, KEINE "
+        "Pivot-Tables, KEINE Multi-Level-Header, KEINE Number-Formats pro "
+        "Spalte, KEINE Cell Comments, KEINE individuelle Border/Font/"
+        "Fuell-Kombinationen pro Zelle. Wenn der Nutzer ‚schoene Excel‘, "
+        "‚aufwendig‘, ‚komplex‘, ‚Charts dazu‘, ‚Conditional Formatting‘ "
+        "oder vergleichbar individuelle Formatierung verlangt → nutze "
+        "stattdessen `run_python` + openpyxl direkt (Skill `excel-formatter`). "
+        "Versuche es NICHT erst mit diesem Tool — der Anlauf ist verlorene "
+        "Zeit + Token."
     ),
     parameters={
         "type": "object",

@@ -125,81 +125,54 @@ HEARTBEAT_MAX_SEC = 14400  # 4 h
 # weiterhin aus dem Azure-Portal exportieren. Hier geht es um Live-Budget-
 # Anzeige im UI, nicht um die Finanzbuchhaltung.
 #
-# Cached-Input-Rabatt ist bewusst NICHT implementiert (Backlog-Punkt
-# "Cached-Input-Rabatt in Kostenberechnung"). Jeder Input-Token zaehlt
-# derzeit zum Voll-Tarif — konservativ, Live-Tracker liegt ueber echter
-# Azure-Rechnung.
+# Cached-Input-Rabatt ist seit 2026-05-06 implementiert: _extract_usage
+# liefert (prompt, completion, cached) und compute_cost_eur reicht den
+# cached-Anteil an pricing.compute_cost_eur durch. Davor zaehlte jeder
+# Input-Token zum Voll-Tarif, Disco-Cost lag um Faktor ~4 ueber der
+# echten Azure-Rechnung.
 # ---------------------------------------------------------------------------
 
-# 1 USD ≈ 0.85 EUR (April 2026, EZB-Referenzkurs). Achtung: Richtung zaehlt!
-# usd_to_eur = usd_betrag * USD_TO_EUR
-USD_TO_EUR = 0.85
-
-MODEL_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
-    # GPT-5.1 Familie (aktueller Default fuer disco-prod-agent / disco-dev-agent
-    # in Sweden Central, Data Zone Standard deployment).
-    # Azure publiziert fuer Sweden Central in EUR; Data Zone Standard
-    # (Stand 2026-04-22): Input €1.20 / Output €9.55 / 1M Tokens.
-    # Rueckgerechnet via USD_TO_EUR=0.85: 1.20/0.85 = 1.412, 9.55/0.85 = 11.235.
-    "gpt-5.1": {"input": 1.412, "output": 11.235},
-    # mini/nano: nicht im aktuellen Azure-Data-Zone-Screenshot enthalten,
-    # daher unveraendert — vor Live-Einsatz pruefen.
-    "gpt-5.1-mini": {"input": 0.25, "output": 2.00},
-    "gpt-5.1-nano": {"input": 0.05, "output": 0.40},
-    # GPT-5 Familie (Legacy — falls ein Deployment noch darauf zeigt)
-    "gpt-5": {"input": 5.0, "output": 15.0},
-    "gpt-5-mini": {"input": 0.5, "output": 2.0},
-    "gpt-5-nano": {"input": 0.1, "output": 0.4},
-    # GPT-4.1-Familie (in Migration)
-    "gpt-4.1": {"input": 2.5, "output": 10.0},
-    "gpt-4.1-mini": {"input": 0.25, "output": 1.0},
-    # Embeddings (fuer spaetere Hybrid-Search-Flows)
-    "text-embedding-3-large": {"input": 0.13, "output": 0.0},
-    "text-embedding-3-small": {"input": 0.02, "output": 0.0},
-}
+# Pricing wird zentral aus disco.pricing geholt — EINE Source-of-Truth
+# fuer alle Cost-Berechnungen (Image-Engine, Flow-LLM-Calls, Chat-Tracking).
+# compute_cost_eur unten ist ein duenner Wrapper, der die sdk-Signatur
+# (model, tokens_in, tokens_out, cached_tokens=...) weiter anbietet.
 
 
-def compute_cost_eur(model: str, tokens_in: int, tokens_out: int) -> float:
-    """Berechnet EUR-Kosten fuer einen API-Call.
+def compute_cost_eur(
+    model: str,
+    tokens_in: int,
+    tokens_out: int,
+    cached_tokens: int = 0,
+) -> float:
+    """Berechnet EUR-Kosten fuer einen API-Call (Wrapper um disco.pricing).
 
     Nimmt den Modellnamen wie er im Deployment steht (z.B. 'gpt-5.1',
-    'gpt-5.1-mini'). Deployment-Aliase mit Suffixen wie
-    'gpt-5.1-2026-02-01' werden automatisch auf das Basis-Modell
-    zurueckgefuehrt.
+    'gpt-5.4-prod'). Deployments muessen exakt in
+    disco.pricing.FOUNDRY_PRICING stehen.
 
-    Unbekannte Modelle → 0.0 EUR + Warnung im Log (spaeter: Exception).
+    cached_tokens (optional) ist ein TEILBETRAG von tokens_in (nicht
+    zusaetzlich). Foundry rabattiert gecachte Input-Tokens stark
+    (gpt-5.1: -50%, gpt-5.4: -90%) — ohne diesen Parameter zaehlt jeder
+    Token zum Voll-Tarif und Disco-Rechnung weicht von der Azure-Rechnung
+    ab (typisch 2-4× zu hoch bei aktiver Cache-Nutzung).
+
+    Unbekannte Modelle → 0.0 EUR + Warnung im Log.
     """
-    base = _normalize_model_name(model)
-    pricing = MODEL_PRICING_USD_PER_MTOK.get(base)
-    if pricing is None:
+    from disco.pricing import compute_cost_eur as _pricing_compute, get_foundry_price
+
+    if get_foundry_price(model) is None:
         logger.warning(
-            "Unbekanntes Modell fuer Cost-Berechnung: %r (base=%r) — 0 EUR",
-            model, base,
+            "Unbekanntes Modell fuer Cost-Berechnung: %r — 0 EUR",
+            model,
         )
         return 0.0
-    usd = (
-        (tokens_in / 1_000_000.0) * pricing["input"]
-        + (tokens_out / 1_000_000.0) * pricing["output"]
+
+    return _pricing_compute(
+        model,
+        prompt_tokens=tokens_in,
+        completion_tokens=tokens_out,
+        cached_prompt_tokens=cached_tokens,
     )
-    return usd * USD_TO_EUR
-
-
-def _normalize_model_name(model: str) -> str:
-    """Reduziert 'gpt-5-2025-08-07' auf 'gpt-5', 'gpt-4.1-mini-abc' auf 'gpt-4.1-mini'.
-
-    Sucht den laengsten Key in MODEL_PRICING_USD_PER_MTOK, der ein Prefix
-    des gegebenen Modellnamens ist. So gewinnt 'gpt-5-mini' vor 'gpt-5'.
-    """
-    if not model:
-        return ""
-    m = model.lower().strip()
-    # laengster passender Prefix gewinnt (damit 'gpt-5-mini' nicht auf 'gpt-5' fallback)
-    best = ""
-    for key in MODEL_PRICING_USD_PER_MTOK:
-        if m == key or m.startswith(key + "-") or m.startswith(key):
-            if len(key) > len(best):
-                best = key
-    return best or m
 
 
 # ===========================================================================
@@ -1001,8 +974,15 @@ class FlowRun:
         response : Any
             Die Antwort vom Azure-OpenAI-Client.
         model : str | None
-            Modellname fuer die Preisberechnung. Wenn None, versucht die
-            Funktion `response.model` zu lesen. Fallback: 'gpt-5'.
+            Deployment-Name (NICHT Modell-ID!) fuer die Preisberechnung.
+            Wenn None, faellt auf settings.foundry_flow_model_deployment
+            zurueck.
+
+            WARUM NICHT response.model: pricing.FOUNDRY_PRICING ist
+            1:1 auf Deployment-Namen gemappt (z.B. "gpt-5.1",
+            "gpt-5.4-prod"). response.model liefert oft die Modell-ID
+            mit Datums-Suffix (z.B. "gpt-5.1-2025-...") — die wuerde
+            nicht matchen und 0.0 EUR Cost liefern.
 
         Returns
         -------
@@ -1010,9 +990,13 @@ class FlowRun:
             (tokens_in, tokens_out, eur) — fuer Per-Item-Logging falls der
             Runner das in seine Ergebnis-Tabelle schreiben will.
         """
-        tokens_in, tokens_out = _extract_usage(response)
-        used_model = model or getattr(response, "model", None) or "gpt-5.1"
-        eur = compute_cost_eur(used_model, tokens_in, tokens_out)
+        from disco.config import settings as _settings
+
+        tokens_in, tokens_out, cached_tokens = _extract_usage(response)
+        used_model = model or _settings.foundry_flow_model_deployment
+        eur = compute_cost_eur(
+            used_model, tokens_in, tokens_out, cached_tokens=cached_tokens,
+        )
         self.add_cost(eur=eur, tokens_in=tokens_in, tokens_out=tokens_out)
         return tokens_in, tokens_out, eur
 
@@ -1351,36 +1335,51 @@ class FlowRun:
 # ===========================================================================
 
 
-def _extract_usage(response: Any) -> tuple[int, int]:
-    """Holt (prompt_tokens, completion_tokens) aus einer Azure-OpenAI-Antwort.
+def _extract_usage(response: Any) -> tuple[int, int, int]:
+    """Holt (prompt_tokens, completion_tokens, cached_tokens) aus einer
+    Azure-OpenAI-Antwort.
 
     Unterstuetzt:
-      - openai-Python-SDK >=1.x: response.usage.prompt_tokens / .completion_tokens
-      - Responses-API (preview): response.usage.input_tokens / .output_tokens
+      - openai-Python-SDK >=1.x: response.usage.prompt_tokens /
+        .completion_tokens; cached via .prompt_tokens_details.cached_tokens
+      - Responses-API (preview): response.usage.input_tokens /
+        .output_tokens; cached via .input_tokens_details.cached_tokens
       - Rohes dict aus REST-Aufrufen: {'usage': {...}}
 
-    Gibt (0, 0) zurueck, wenn kein usage-Feld gefunden wird — dann werden
-    0 EUR gebucht (besser als Abbruch mitten im Flow).
+    Gibt (0, 0, 0) zurueck, wenn kein usage-Feld gefunden wird — dann
+    werden 0 EUR gebucht (besser als Abbruch mitten im Flow).
+
+    cached_tokens ist ein Teilbetrag von prompt_tokens (nicht zusaetzlich).
+    Bei aktivem Foundry-Prompt-Cache liegt der Anteil typisch bei 60-90 %.
     """
     usage = getattr(response, "usage", None)
     if usage is None and isinstance(response, dict):
         usage = response.get("usage")
     if usage is None:
-        return 0, 0
+        return 0, 0, 0
+
+    def _cached_from(usage_obj: Any, details_attr: str) -> int:
+        details = _get_attr_or_key(usage_obj, details_attr)
+        if details is None:
+            return 0
+        v = _get_attr_or_key(details, "cached_tokens")
+        return int(v or 0)
 
     # Variante 1: Chat Completions (prompt_tokens / completion_tokens)
     t_in = _get_attr_or_key(usage, "prompt_tokens")
     t_out = _get_attr_or_key(usage, "completion_tokens")
     if t_in is not None or t_out is not None:
-        return int(t_in or 0), int(t_out or 0)
+        cached = _cached_from(usage, "prompt_tokens_details")
+        return int(t_in or 0), int(t_out or 0), cached
 
     # Variante 2: Responses API (input_tokens / output_tokens)
     t_in = _get_attr_or_key(usage, "input_tokens")
     t_out = _get_attr_or_key(usage, "output_tokens")
     if t_in is not None or t_out is not None:
-        return int(t_in or 0), int(t_out or 0)
+        cached = _cached_from(usage, "input_tokens_details")
+        return int(t_in or 0), int(t_out or 0), cached
 
-    return 0, 0
+    return 0, 0, 0
 
 
 def _get_attr_or_key(obj: Any, name: str) -> Any:

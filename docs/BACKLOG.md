@@ -6,6 +6,46 @@ werden sollen.
 
 ---
 
+## TOP-Roadmap (Stand 2026-05-07)
+
+Re-Priorisierung nach Phase-2-Aufräumen. Echte „brennen-jetzt"-Items:
+
+1. **★ EXTRACTION-PIPELINE OVERHAUL** — Phase 2 (Office-Formate
+   DOCX/PPTX + File-Internal-Metadata) und Phase 3 (Failed-Tracking
+   für 🟡-Status) sind die nächsten großen Brocken. Heute Nachmittag
+   geplant.
+2. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
+   mit User offen. Disco verzettelt sich in `work_*`-Tabellen ohne
+   Lifecycle. Konsolidiert aus zwei Themen 2026-05-07.
+3. **★ System-Prompt + Skill + Tool Review-Session** — gemeinsamer
+   Walkthrough mit User: System-Prompt (782 Zeilen, 41 Sections, viel
+   Doppelung) + alle 11 Skills (besonders `report-builder` mit nur
+   1× Nutzung) + alle 42 Tools auf Sinn / Doppelung / Unklarheit
+   prüfen. Ergebnis: gestraffter Prompt + bewusstere Skill-Liste +
+   ggf. weitere Tool-Streichungen. User liest mit, ich liefere
+   Material.
+4. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
+   Server, Counter-Update nach Crash, DI-HighRes max_retries,
+   LibreDWG SIGABRT). Eigene Bug-Fixing-Session geplant.
+5. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
+   echtem User-Pain. Drei Cluster (A/G/H) sind durch Phase 2
+   erledigt, F+J teilweise. Rest gezielt abarbeiten.
+
+**Mittel** (heute nicht TOP, aber im Blickfeld): Office-Formate (Teil
+des ★), File-Internal-Metadata (Teil des ★), Cost-Tracking
+Chat+Monatlich, Disco-Prozess-Management, M03 (run_python prompt-
+injection härten), H06 (DI-Kosten im Chat sichtbar), H11
+(Tests), M01 (UI-Awareness), M08 (Tabellen-Katalog), M10 (Dev/Prod-
+Folgefragen), M11 (Portal-Agent-Rollout), N02 (duration_ms-Schema).
+
+**Niedrig**: H02 (Slash-Referenzen), N01 (Flow-Scaffold-TODOs),
+Run-Strip Bug 2 (Counter-100%-Anzeige).
+
+**Architektur-Entscheidung offen**: F15 — SharePoint-Connector
+behalten oder entfernen (~1085 SLOC + 4 Tabellen).
+
+---
+
 ## UI / Chat-Erlebnis
 
 ### UI-Awareness für Disco (Priorität: mittel)
@@ -23,31 +63,6 @@ Disco weiß aktuell nicht, wie das Frontend aussieht. Er soll:
 
 → System-Prompt um eine kurze UI-Beschreibung ergänzen, damit Disco
   weiss welche Elemente wo sind.
-
-### Klickbare Links im Chat → Viewer + Explorer (Priorität: hoch)
-
-Wenn Disco im Chat eine Datei oder DB-Tabelle erwähnt, soll das ein
-**klickbarer Link** sein. Klick öffnet:
-- Datei im **Viewer** (rechts)
-- Datei im **Explorer** (links, selektiert/aufgeklappt)
-
-Beispiel im Chat:
-> "Ich habe die Ergebnisse in [`exports/ibl_2026-04-17_v1.xlsx`](#) 
-> gespeichert. Die Tabelle [`agent_sources`](#) enthält jetzt 1763 
-> Einträge."
-
-Klick auf den Excel-Link → Viewer öffnet die Excel rechts.
-Klick auf den Tabellen-Link → Viewer zeigt die DB-Tabelle paginiert.
-
-**Technisch:**
-- Disco gibt im Markdown spezielle Links:
-  `[dateiname](disco://file/exports/ibl.xlsx)` oder
-  `[tabellenname](disco://table/agent_sources)`
-- Frontend erkennt das `disco://`-Protokoll und routet entsprechend
-- Alternativ: ein `data-`-Attribut im HTML das das Frontend abfängt
-
-→ System-Prompt: "Wenn Du Dateien oder Tabellen im Chat erwähnst,
-  verlinke sie, damit der Nutzer direkt draufklicken kann."
 
 ### Slash-Referenzen im Chat-Input (Priorität: hoch)
 
@@ -116,70 +131,27 @@ Das Frontend reagiert: Viewer öffnet sich rechts, zeigt Sheet 3-IBL.
 
 ## Report-Format / Analyse-Ergebnisse
 
-### Excel mit openpyxl auf Cowork-Niveau verwenden (Priorität: hoch)
+### Excel mit openpyxl auf Cowork-Niveau verwenden (DONE Routing-Teil 2026-05-05)
 
 Disco hat `run_python` + openpyxl an Bord und kann damit alles, was
 Claude Cowork mit Excel macht — Formatierung lesen, Farben/Fonts/
 Borders setzen, Merged Cells, Formeln, Hyperlinks, Bilder. Die
 Infrastruktur steht.
 
-**Was fehlt:** Der Reflex. Disco greift heute zu `import_xlsx_to_table`
-(Tabelle in DB), weil das Tool bequem ist — und sieht dadurch keine
-Formatierung. Wir brauchen:
+**Erledigt 2026-05-05:**
+- ✅ Skill `excel-formatter.md` deckt jetzt Editor-Modus UND
+  Custom-Generator-Modus ab (komplexer Report von Grund auf neu bauen).
+- ✅ Trigger-Tabelle im System-Prompt: „schoene Excel", „aufwendig",
+  „komplex", „Charts dazu", „Pivot", „Conditional Formatting",
+  „individuell formatiert" → direkt `excel-formatter`, nicht erst
+  `build_xlsx_from_tables`.
+- ✅ Tool-Description von `build_xlsx_from_tables` listet explizit, was
+  es NICHT kann + verweist auf den richtigen Pfad. Damit sieht der LLM
+  die Grenze schon im Schema.
 
-- **Skill `excel-formatter.md`** mit den Patterns: `load_workbook`
-  ohne `read_only`/`data_only`, Fills/Fonts/Borders-Rezepte, Merged-
-  Cells-Handling, Formel-Preservation, `wb.save()`-Pflicht.
-- **Trigger-Tabelle im System-Prompt:** „Excel-Formatierung lesen oder
-  ändern, Farben, Formeln, Merges → Skill `excel-formatter` laden und
-  `run_python` verwenden. Tabellen-Import in die DB nur, wenn
-  Formatierung irrelevant ist."
-- Optional: `xlsx_inspect_full` — Read-Tool, das Styles/Merges/Formeln
-  strukturiert als JSON liefert, damit Disco fürs reine Anschauen
-  nicht jedes Mal 15 Zeilen Python schreiben muss.
-
-Ziel: Disco nutzt openpyxl routiniert wie Cowork — kein eigenes
-„Formatierungs-Tool", sondern freies Python mit einem guten Playbook.
-
----
-
-## Chat-Funktionalität
-
-### Chat haengt nach Foundry `response.failed` (Bug, Priorität: hoch — aus UAT 2026-04-20)
-
-**Symptom:** Waehrend ein Flow mit demselben Modell-Deployment lief
-(`gpt-5.1_prod`, Flow #4 dcc_repredict_lagerhalle), brach ein Agent-
-Turn mit "FEHLER: Foundry meldet Fehler: unbekannt" ab. Danach blieb
-der Chat in "Disco denkt..." haengen — neue User-Nachrichten
-liefen ins Leere, auch nach Browser-Reload (Cmd-R). Einziger Ausweg
-war ein **Prozess-Neustart des Servers**.
-
-**Vermutete Ursache:** Nach `response.failed` zeigt
-`previous_response_id` noch auf die vergiftete Response; Foundry
-kann die Chain nicht weiterbedienen, der Agent-Loop blockiert still
-im naechsten Stream-Aufruf (kein 400, kein Timeout sichtbar). Der
-Trigger-Fehler selbst war wahrscheinlich ein **429 / Quota-Limit**
-durch den parallel laufenden Flow (siehe Eintrag "Getrennte Modell-
-Deployments" unter Flows).
-
-**Teil-Fix bereits in Dev:** Reichere Fehlermeldung in
-`src/disco/agent/core.py` — statt "unbekannt" werden `code`, `type`
-und `message` aus `event.response.error` extrahiert und geloggt.
-Hilft beim Diagnostizieren, heilt aber den Hang nicht.
-
-**Noch zu bauen:**
-1. Nach `response.failed` die `previous_response_id` sofort auf NULL
-   setzen (Chain abbrechen, frischer Start beim naechsten User-Input).
-2. Server-seitigen WebSocket-Keepalive haerten: wenn der Agent-
-   Turn-Generator haengt, nach Timeout (z. B. 5 min) abbrechen und
-   dem Client ein Error-Event schicken, statt stumm zu blockieren.
-3. Im UI: Wenn "Disco denkt..." laenger als z. B. 90 s, eine
-   Hinweisbox mit "Neuen Turn starten"/"Verbindung ruecksetzen"
-   anzeigen.
-
-Schwesternbug zu "No tool output found" oben — gleicher Mechanismus
-(verseuchte Chain), anderer Trigger (response.failed statt offener
-Tool-Call).
+**Optional, nicht entschieden:** `xlsx_inspect_full` — Read-Tool, das
+Styles/Merges/Formeln strukturiert als JSON liefert, damit Disco fuers
+reine Anschauen nicht jedes Mal 15 Zeilen Python schreiben muss.
 
 ---
 
@@ -340,74 +312,6 @@ Fix: auf `pdfjs-dist@3.11.174` gepinnt (letzte UMD-Version), in Dev
 
 ## Document Intelligence
 
-### Kosten-Monitoring + Sicherheitsgrenzen (Priorität: hoch)
-
-Alle externen Dienste kosten pro Call/Seite/Token. Risiko: ein
-festgefahrener Loop oder ein zu großer Batch kann unerwartet hohe
-Kosten verursachen.
-
-**Was wir absichern müssen:**
-
-1. **Agent-Calls (GPT-5):**
-   - MAX_TOOL_ROUNDS ist auf 24 gedeckelt → schützt vor Endlos-Loops
-   - Aber: Token-Kosten pro Turn sind nicht gedeckelt. Ein Turn mit
-     20 Tool-Calls und großen Results kann leicht 50-100k Tokens
-     fressen → 0.50-1.00 € pro Turn
-   - → Kosten-Tracker pro Session: nach jedem Turn die kumulierten
-     Tokens addieren, bei > X € warnen
-
-2. **Document Intelligence:**
-   - Pro Seite 0.00868 € (azure-di) bis 0.01389 € (azure-di-hr).
-     Eine 800-Seiten-Norm = 7-11 €.
-   - Risiko: User legt versehentlich 100 PDFs in context/ →
-     Disco jagt alle durch DI → 500-1000 €
-   - → Sicherheitsgrenze: max. N Seiten pro Context-Onboarding-Run
-     (z.B. 500 Seiten), danach Rückfrage. Oder: max. N PDFs pro
-     Run (z.B. 10), Rest manuell bestätigen.
-
-3. **Pipelines (Zukunft):**
-   - Pro Dokument ein LLM-Call = akkumulierte Kosten
-   - → Kosten-Schätzung VOR dem Run, Budget-Limit WÄHREND des Runs
-
-**Kurzfristig (jetzt):**
-- Im Flow `pdf_to_markdown`: Budget-Check vor dem Run
-  (Summe `estimated_cost_eur` aller gerouteten PDFs), bei > Limit
-  Rückfrage / Dry-Run-Mode
-- Im Context-Onboarding-Skill: nach > 5 PDFs oder > 300 Seiten
-  kumuliert Rückfrage an den User
-- Token-Zähler im Chat-Status-Bar unten (haben wir schon teilweise)
-
-**Mittelfristig:**
-- Kosten-Dashboard im UI (pro Projekt, pro Session, pro Tag)
-- Budget-Limits in der Projekt-Config (README oder .disco/config.json)
-- Alert wenn ein einzelner Turn > 1 € kostet
-
-### Kostenlimit verifizieren — ziehen die existierenden Schutzmechanismen wirklich? (Priorität: hoch — aus UAT 2026-04-20)
-
-Status: Kurz-Notiz aus Live-Test. Wir haben an mehreren Stellen Deckel
-eingebaut (MAX_TOOL_ROUNDS, DI-Page-Check im Skill, Flow-Budget), aber
-**noch nie überprüft, ob die auch wirklich greifen**, wenn Disco in
-einen Kostenfresser hineinrennt.
-
-**Test-Szenarien, die durchlaufen werden sollten:**
-
-1. **Agent-Loop-Deckel:** Disco in eine Schleife schicken
-   (z.B. "rufe list_skills 40× hintereinander auf") — bricht er bei
-   Round 24 ab? Was sieht der Nutzer?
-2. **DI-Page-Limit:** PDF mit > 200 Seiten durch Flow `pdf_to_markdown`
-   (Engine `azure-di-hr`) jagen — kommt eine Warnung? Wird der Call
-   trotzdem ausgeführt oder blockiert? (aktuell: weder Warnung noch
-   Blockade — Policy muss erst definiert werden).
-3. **Flow-Budget:** Flow-SDK hat `budget_eur`-Feld (siehe flows/sdk.py).
-   Mini-Flow schreiben, der bewusst das Budget überschreiten würde —
-   stoppt der Worker wirklich, oder läuft er einfach weiter?
-4. **Context-Onboarding > 5 PDFs:** Context-Ordner mit 10 kleinen PDFs
-   füllen — fragt Disco wirklich nach, oder schickt er alle auf
-   einmal los?
-
-**Ergebnis der Tests in Backlog nachtragen** und offene Lücken
-(z.B. Flow-Budget zieht nicht) als separate Bug-Einträge aufmachen.
-
 ### DI-Kosten im Chat sichtbar machen (Priorität: hoch — aus UAT 2026-04-20)
 
 Status: Nutzer-Beobachtung — "Bei DI sind keine Kosten sichtbar.
@@ -461,51 +365,6 @@ Qualitaetsvorteil gegenueber docling-standard.
 
 ## Sicherheit / Projekt-Isolation
 
-### Projekt-Lifecycle gehört dem Nutzer, nicht dem Agenten (Priorität: hoch — aus UAT 2026-04-20)
-
-Disco lebt **innerhalb** eines Projekts und darf Projekte weder anlegen
-noch löschen. Das ist eine bewusste Rollen-Trennung, nicht ein
-Implementierungs-Detail:
-
-- **Mensch:** entscheidet welche Projekte es gibt, wie sie heißen, wann
-  sie weg dürfen. Mandantengrenze.
-- **Disco:** arbeitet innerhalb der Sandbox des aktiven Projekts. Keine
-  Projekt-übergreifende Manipulation.
-
-Aktueller Zustand:
-- Projekt-Anlage geht nur per CLI (`disco project init <slug>`). Im FE
-  gibt es keinen Button dafür.
-- Projekt-Löschung geht gar nicht — man muss den Ordner unter
-  `~/Disco/projects/` manuell wegräumen, die DB-Zeile in `projects`
-  bleibt liegen.
-- Der Agent hat theoretisch Tools (`list_projects`), die ihm die
-  Projekt-Existenz zeigen — er kann sie aber (zu Recht) nicht anlegen
-  oder löschen. Diese Lücke darf er auch nie bekommen.
-
-Umsetzung:
-
-1. **FE:** Sidebar oben rechts neben dem Projekt-Dropdown zwei Buttons:
-   - „+" → Modal „Neues Projekt anlegen" (slug, name, description,
-     Checkbox „Sample-Dateien anlegen"). Ruft `POST /api/workspace/projects`.
-   - „🗑" → bei ausgewähltem Projekt → Bestätigungsdialog mit Slug
-     zum Abtippen (destructive confirm), dann `DELETE /api/workspace/projects/<slug>`.
-     Löscht DB-Zeile + Verzeichnisbaum (vorher Backup in
-     `~/Disco/.trash/<slug>-<timestamp>/`).
-
-2. **Backend:**
-   - `POST /api/workspace/projects` (neu) — ruft dieselbe
-     `init_project()`-Routine wie die CLI.
-   - `DELETE /api/workspace/projects/<slug>` (neu) — mit
-     `move-to-trash`-Semantik, nicht sofort `rm -rf`.
-
-3. **Agent-Tools bleiben so wie sie sind:**
-   - `list_projects` darf nur lesen (und nach „Nicht ausgewählte
-     Projekte dürfen unsichtbar sein" ggf. auch nicht mehr alle sehen).
-   - Es wird KEIN `create_project`- oder `delete_project`-Tool geben.
-     Wenn Disco im Chat fragt „soll ich ein neues Projekt anlegen?",
-     ist die richtige Antwort: „Bitte leg es selbst über die Sidebar an,
-     ich darf das nicht."
-
 ### `run_python` härten gegen Prompt-Injection (Priorität: mittel)
 
 Heute ist `run_python` die einzige Tool-Klasse, bei der Disco den
@@ -540,113 +399,6 @@ echten sensiblen Quellen notwendig.
 ---
 
 ## Flows / Worker-System
-
-### Cached-Input-Rabatt in Kostenberechnung (Priorität: mittel — 2026-04-22)
-
-Aktuell rechnet [compute_cost_eur](../src/disco/flows/sdk.py:135) jeden
-Input-Token zum Voll-Tarif ($1.38/1M bei GPT-5.1). Azure gewaehrt aber
-einen Cached-Input-Rabatt von **90 %** ($0.138/1M) fuer Tokens, die im
-Prompt-Cache gelandet sind (bleibt 5 Min warm).
-
-**Warum das viel ausmacht:**
-- Bei Flow-Loops (gleicher System-Prompt + Projekt-Kontext + Skill-Body
-  ueber 1000 Items) bleibt ein grosser Prompt-Anteil konstant.
-- Hitrate typisch 60–90 %, sprich: wir ueberschaetzen die Kosten aktuell
-  um 50–80 %.
-- Die echte Azure-Rechnung wird dann immer niedriger sein als unser
-  Live-Tracker anzeigt — konservativ, aber irritierend.
-
-**Was zu tun ist:**
-1. **Verifizieren:** Foundry Responses API liefert bei GPT-5.1 das Feld
-   `usage.input_tokens_details.cached_tokens`. Sobald ein Flow laeuft,
-   einmal die JSON-Response loggen und bestaetigen.
-2. **Signatur erweitern:** `compute_cost_eur(tokens_in, tokens_out, cached_in=0)`.
-   Formel: `billable_in = (tokens_in - cached_in) * rate_in + cached_in * rate_in * 0.10`.
-3. **Aufrufer umstellen:** In `FlowRun.add_cost_from_azure_response()`
-   (`src/disco/flows/sdk.py`) die Cached-Tokens aus der Response ziehen
-   und durchreichen. Auch im Agent-Core (chat-Turns, wo verfuegbar).
-4. **Retroaktive Nachberechnung** fuer Runs in `agent_flow_runs`:
-   nur moeglich, wenn wir Token-Counts granular in `agent_tool_calls`
-   gespeichert haben. Falls ja — kleiner Migrations-Run. Falls nein,
-   Historie stehen lassen.
-
-Abhaengigkeit: Prompt-Cache-Hits lohnen sich nur, wenn der System-Prompt
-+ Projekt-Kontext vor den variablen Teilen steht und > ca. 1024 Tokens
-ist. Prompt-Aufbau mal auditieren, falls die Hitrate zu niedrig ist.
-
-### Parallele Flow-Runs (Priorität: mittel — aus UAT 2026-04-19)
-
-Aktuell faehrt Disco Flows strikt sequentiell: er startet einen Flow,
-wartet bis er durch ist, dann den naechsten. Bei einem Projekt mit
-mehreren unabhaengigen Pipelines (z.B. DCC-Klassifikation + Metadaten-
-Extraktion + Excel-Export) wuerde paralleles Laufen die Wartezeit
-spuerbar verkuerzen — v.a. weil die LLM-Flows je Dokument die meiste
-Zeit auf Azure warten (I/O-bound).
-
-Anforderung aus UAT-Session 2026-04-19:
-> "merke dir noch, dass es die moeglichkeit geben soll mehrere flows
-> gleichzeitig laufen zu lassen"
-
-Offene Designpunkte:
-- **Scope:** darf ein einzelner Flow parallel zu sich selbst laufen
-  (2 Runs desselben Flows)? Oder nur unterschiedliche Flows?
-- **Isolation:** jeder Flow hat eigenen Worker-Prozess — SQLite-Writes
-  muessen WAL-Mode-tolerant sein (sollte bereits der Fall sein, pruefen).
-- **UI:** Flow-Panel muss mehrere laufende Runs gleichzeitig anzeigen.
-  Aktuell ist unklar, ob die Flow-Ansicht das rendert.
-- **Budget-Tracking:** globales Kosten-Budget vs. per-Run?
-- **Abhaengigkeiten:** darf ich Flow-B starten bevor Flow-A done ist,
-  wenn Flow-B auf Daten von Flow-A liest? Vermutlich ja (der User weiss
-  was er tut), aber Warnhinweis im Chat waere nett.
-
-Test-Szenario: in `uat-2026-04-19` DCC-Klassifikation und Metadaten-
-Extraktion gleichzeitig anwerfen — beide lesen aus `agent_md_extracts`,
-schreiben in unterschiedliche Tabellen, keine Kollision.
-
-### Standard-Flows fuer jedes Projekt (Priorität: mittel — aus UAT 2026-04-20)
-
-Es sollte eine Menge von Standard-Flows geben, die in **jedem neu angelegten
-Projekt automatisch vorhanden** sind (via Projekt-Template analog zu den
-Template-Migrationen). Damit startet kein Projekt auf der gruenen Wiese —
-die Basics liegen bereit, der Nutzer triggert sie nur.
-
-Muss vor Umsetzung einmal gemeinsam diskutiert werden:
-
-- **Welche Flows sind „Standard"?** Kandidaten:
-  - `sources_scan_and_register` — Sources scannen, hashen, in `agent_sources`
-    registrieren (heute Tool, koennte aber als Flow laufen fuer Audit-Trail)
-  - `pdf_routing_decision` + `pdf_to_markdown` — bereits als Library-Flows
-    umgesetzt (liegen unter `src/disco/flows/library/`), koennten aber per
-    Default in jedem neu angelegten Projekt sichtbar sein
-  - `dcc_classify_gpt5` — DCC-Klassifikation ueber Markdown-Extrakte
-  - `duplicate_detect` — Duplikat-Analyse per Hash + Name + Inhalt
-  - `context_manifest_refresh` — Kontext-Ordner neu indizieren
-- **Template vs. generiertes Code-Skelett?** Tradeoff:
-  - *Template-Kopie:* Runner + README als Datei-Template, wird beim
-    `disco project init` ins Projekt kopiert. Flexibler bei Anpassung,
-    aber Drift zwischen Projekten moeglich.
-  - *Shared Runner:* ein globaler Runner in `src/bew/flows/standard/`,
-    Projekt hat nur die README als Referenz. Weniger Drift, aber weniger
-    anpassbar pro Projekt.
-- **Aktualisierung:** wie bekommen bestehende Projekte einen neuen
-  Standard-Flow (oder ein Update)? `disco flow sync` als neues Kommando?
-- **Konfiguration pro Projekt:** Standard-Flows haben typische
-  Default-Configs (Budget, Engine-Wahl), die pro Projekt ueberschreibbar
-  sein muessen.
-- **Discoverability:** neues UI-Element „Standard-Flows" im Flow-Panel,
-  getrennt von projekt-spezifischen Flows.
-
-Ziel: ein neues Projekt ist nach `disco project init` direkt
-„produktionsbereit" — Sources registrieren, Markdown extrahieren,
-DCC klassifizieren geht One-Click, ohne dass Disco fuer jedes neue
-Projekt denselben Flow nochmal baut.
-
-Ursprung: UAT-Session 2026-04-20, als waehrend eines laufenden
-Extraction-Runs parallel eine zweite Engine-Variante als eigener Flow
-nachgezogen wurde — dabei wurde klar, dass solche Arbeit fuer jedes
-Projekt wiederholt wird, obwohl die Flows strukturell identisch sind.
-Teil davon ist inzwischen ueber die Flow-Library (`src/disco/flows/library/`)
-geloest, der Gesamt-Bootstrap steht aber noch aus.
 
 ### Overnight-Betrieb + Resume nach Sleep/Restart (Priorität: hoch — aus UAT 2026-04-20)
 
@@ -705,57 +457,6 @@ Ursprung: UAT-Session 2026-04-20, Nutzer-Frage nach Run #15:
 > nachdem disco neu gestartet wird bzw während des flows der
 > computer ausgeschaltet (oder sleep) wurde"
 
-### Getrennte Modell-Deployments fuer Agent vs. Flow (Priorität: hoch — aus UAT 2026-04-20)
-
-**Beobachtung:** Solange der Agent-Chat (`gpt-5.1_prod`) und der
-Flow-Worker (ebenfalls `gpt-5.1_prod`) auf **demselben Azure-
-Deployment** laufen, teilen sie sich **dieselbe TPM/RPM-Quota**.
-Waehrend Flow #4 mit ~27.600 TPM In lief, konnte der Agent parallel
-keinen Chat-Turn mehr abschliessen — vermutlich weil Foundry
-intern auf 429 lief und die Response verunglueckte (siehe Bug-
-Eintrag "Chat haengt nach Foundry response.failed" oben).
-
-**Wichtig zur Einordnung:** Modell-Deployment und Conversation-
-History sind komplett unabhaengig — der Chat hat weiterhin seine
-eigene `foundry_thread_id` und sein eigenes Context-Window.
-**Das einzige**, was Agent und Flow sich teilen, wenn sie dasselbe
-Deployment nutzen, ist die **Azure-seitige Rate-Limit-Quota** (und
-die Abrechnung).
-
-**Ziel:** Zweites Modell-Deployment in Foundry anlegen, exklusiv
-fuer Flows. Damit der Agent-Chat reaktionsfaehig bleibt, waehrend
-ein Flow an der Quota frisst.
-
-**Vorschlag (Sweden Central):**
-
-| Zweck | Deployment-Name | Verwendet von |
-|---|---|---|
-| Dev-Agent + Dev-Flows | `gpt-5.1` (bereits da) | Dev-Umgebung |
-| Prod-Agent (interaktiv) | `gpt-5.1_prod` (bereits da) | `AgentService` |
-| Prod-Flows (bulk) | `gpt-5.1_prod_flow` (neu) | Flow-Runner |
-
-**Umsetzung:**
-- Neues Deployment `gpt-5.1_prod_flow` im Foundry-Portal anlegen
-  (Modell gpt-5.1, eigene TPM-Quota bekommen). Deployments kosten
-  nichts extra — nur die tatsaechlichen Tokens.
-- `config.py` um `foundry_flow_model_deployment: str | None` erweitern.
-  Fallback auf `foundry_model_deployment`, wenn nicht gesetzt.
-- Flow-SDK (`src/disco/flows/sdk.py`) liest neu dieses Feld.
-- `.env.example` dokumentieren.
-- Runner-Migration: bestehende `runner.py`-Dateien in Flow-Ordnern
-  ziehen den Deployment-Namen aus `FlowRun` — entweder Property oder
-  Env-Variable, die das SDK ihnen durchreicht.
-
-**Parallel-Nebeneffekt:** Wenn mehrere Flows gleichzeitig laufen
-(siehe "Parallele Flow-Runs" oben), teilen die sich weiterhin das
-Flow-Deployment — das ist ok, da Bulk-Jobs inhaerent parallelisierbar
-sind und die Quota gezielt auf Durchsatz auslegbar ist.
-
-**Dev bleibt einfach:** In Dev reicht ein einziges Deployment,
-weil Raphael dort selten Agent+Flow gleichzeitig fahren wird.
-
----
-
 ## Docling / MLX
 
 ### Hybride Markdown-Pipeline (DONE 2026-04-22)
@@ -772,48 +473,6 @@ Ursprung: UAT-Session 2026-04-20 (Granite too slow) → Beschluss
 ---
 
 ## Architektur
-
-### Dashboards + Reports — Disco pflegt sie selbst (Priorität: mittel) — 2026-04-22
-
-**Wunsch des Nutzers:** Disco soll Dashboards und Reports **selbständig
-erstellen, konfigurieren und überarbeiten können**. Projekt-DB liefert die
-Daten, Frontend zeigt Visualisierungen, alles versionierbar im Projektordner.
-
-**Drei geprüfte Wege mit Trade-off:**
-
-1. **Evidence.dev (Markdown + SQL → HTML):** Disco schreibt
-   `dashboards/foo.md` mit SQL-Blöcken, Evidence rendert statische Seiten.
-   MIT-Lizenz, SQLite nativ. Nachteil: Node-Stack + Build-Schritt kommen
-   ins Projekt.
-2. **Vega-Lite JSON-Specs + eigener Renderer (empfohlen):** Disco schreibt
-   `dashboards/foo.json`, Frontend rendert im bestehenden Viewer-Panel mit
-   Vega-Lite (~40 KB). Kein Fremd-Stack, max. Kontrolle, Dashboards sind
-   einfache Files im Projekt. Nachteil: Dashboard-Verwaltung (Liste, Edit,
-   Parameter) bauen wir selbst.
-3. **Metabase lokal (Docker):** Industriestandard, REST-API zum Steuern.
-   Nachteil: Docker-Dependency, Dashboards leben ausserhalb des Projekt-
-   ordners (nicht git-/SharePoint-syncbar).
-
-**Empfehlung: Variante 2** — passt zur lokalen Architektur und zur
-chat-getriebenen Arbeitsweise. Reports (PDF/Excel) lassen sich aus denselben
-Specs generieren (Renderer → Screenshot / Headless-Export), wobei wir fuer
-Excel schon `build_xlsx_from_tables` haben.
-
-**Skizze:**
-- Neuer Projekt-Ordner `dashboards/` mit `.json`-Dateien (Vega-Lite oder
-  erweiterte Disco-Spec mit SQL-Query + Layout-Metadaten).
-- Neues Agent-Tool `dashboard_create/update/delete` plus `dashboard_render`
-  (SQL-Query-Validation + Ergebnis → Vega-Lite-Bindings).
-- Viewer-Panel erkennt `.json` im Dashboard-Ordner und rendert.
-- Reports = Dashboard-Bundle + Markdown-Rahmen; Export-Pipeline baut
-  PDF/Excel.
-
-**Noch offen:** Dashboard-Parameter (Zeitfenster, Gewerke-Filter) — als
-Form im Viewer, oder nur als Chat-Instruktion an Disco?
-
-Ursprung: UAT-Session 2026-04-22, Feature-Wunsch des Nutzers.
-
----
 
 ### Tabellen-Katalog pro Projekt-DB (Priorität: mittel) — 2026-04-22
 
@@ -876,6 +535,145 @@ Ursprung: UAT-Session 2026-04-20, Wunsch des Nutzers.
 
 ---
 
+## ★ System-Prompt + Skill + Tool Review-Session (Prio: TOP — geplant 2026-05-07)
+
+**User-Anforderung 2026-05-07**: gemeinsamer Walkthrough durch
+System-Prompt, alle Skills und alle Tools. Ziel: kritisch prüfen,
+was wirklich gebraucht wird, was redundant ist, was unklar
+formuliert ist. Ergebnis ist eine deutlich gestraffte Disco-
+Persönlichkeit ohne Funktionsverlust.
+
+### Vorbereitung (von Disco vor der Session)
+
+**1. System-Prompt-Mapping** — `src/disco/agent/system_prompt.md`,
+heute 38 KB / 782 Zeilen / 41 Sections:
+- Pro Section: Zweck, Länge, getriggerte Use-Cases der letzten 30 Tage
+- Doppelungen markieren (Audit hat schon: Verzeichnisstruktur ↔
+  Architektur-Ebenen, drei Persönlichkeits-Sektionen, Pipeline-Hinweis
+  zweimal, Anti-Halluzination + Faktenbasiert + kein Raten)
+- Tool-Detail-Sektionen: stehen schon im Tool-Schema, hier redundant?
+
+**2. Skill-Inventur** — `skills/*.md`, heute 11 Skills:
+- Pro Skill: Trigger-Phrasen aktuell, Aufruf-Häufigkeit (30d), letzter
+  Update, Frontmatter-Konsistenz
+- Audit hat: `report-builder` nur 1× geladen → Streichung oder
+  Trigger-Schärfung?
+- `excel-formatter` vs `excel-reporter` Überschneidung?
+- `flow-builder` vs `flow-supervisor` Abgrenzung klar?
+
+**3. Tool-Inventur** — alle 42 registrierten Tools:
+- Pro Tool: Aufruf-Häufigkeit (30d), Description-Länge, last-touched,
+  Doppelungen (z.B. mehrere `flow_*`-Tools mit ähnlicher Funktion)
+- Tool-Schemas: Pflicht-Felder konsistent? Beispiele aktuell?
+- Was kann konsolidiert werden ohne Funktionsverlust?
+
+### Format der Session
+
+User liest mit, Disco bringt Material in **kompakten Tabellen** pro
+Bereich. Pro Item: User-Entscheidung in einem Wort
+(behalten / straffen / streichen / mergen-mit-X).
+
+Danach Umsetzung als eigener Block, ähnlich wie Phase-2-Blöcke:
+einzelne Streichungen + Neuformulierungen + agent-setup-Push.
+
+### Erwartete Effekte
+
+- System-Prompt-Volumen: -25 bis -30 % (Audit-Schätzung)
+- Skill-Liste: -1 bis -3 Skills (oder konsolidiert)
+- Tool-Liste: -3 bis -5 Tools (Doppelungen + tote Pfade)
+- Klarere Trigger-Tabelle, weniger Konflikte zwischen Skills
+
+### Erfolgs-Kriterien
+
+- Dev-Chat-Smoketest: typische Use-Cases (sources_register,
+  flow_run, excel-report) laufen weiterhin sauber
+- Token-Verbrauch pro Turn sinkt mit kürzerem Prompt
+- Subjektiv: Disco wirkt fokussierter, weniger ablenkbar
+
+### E2E-Test-Befunde (aus Full-Test 2026-05-07, Szenarien 01+02)
+
+Aus dem ersten gemeinsamen Full-Test (User schaut zu, Claude
+fuehrt Disco im Browser) sind folgende Material-Punkte fuer die
+Review-Session entstanden. Siehe `tests/e2e/scenarios/01-source-onboarding.md`
+und `tests/e2e/scenarios/02-pipeline-fulltest.md` fuer Drehbuch
+und Beobachtungen.
+
+**Befund 1 — Skill `project-onboarding`, FS-Inhalt unsichtbar:**
+Bei "kurz orientieren" macht Disco `fs_list` nur top-level (sieht
+sources/ und context/ als dirs). Wenn `agent_sources` leer ist,
+schliesst er falsch auf "leer" — obwohl FS gefuellt sein kann (vor
+Erst-Scan ist Registry IMMER leer). Skill ergaenzen: vor Bericht
+ueber Quellen/Kontext rekursives `fs_list` machen, oder explizit
+"noch nicht registriert" sagen statt "leer".
+
+**Befund 2 — System-Prompt, Register zaghaft:**
+Auf "Ja, leg mal los. Was haben wir denn fuer Dateien?" hat Disco
+nur gelistet, nicht registriert — fragt nochmal. Erst auf "Ja, mach
+mal." kommt das `sources_register`. `list_skills` ja,
+`load_skill('sources-onboarding')` aber nicht. Trigger schaerfen:
+"User sagt 'los/leg los/mach mal' + sources/ enthaelt unregistrierte
+Files → direkt sources-onboarding-Skill laden + sources_register".
+
+**Befund 3 — Routing-Heuristik bei A3-Plaenen:**
+`02_schaltplan_a3.pdf` (727 KB, A3) wurde mit `pdf-azure-di`
+geroutet, nicht `pdf-azure-di-hr`. A3-Grossformate sollten HR
+triggern. Schwellenwert in `src/disco/docs/routing.py` pruefen
+(`max_page_width_pt > X` → HR). Liegt am Rand, koennte Tunable sein.
+
+**Befund 4 — Excel-Reporter, nur eine Statusspalte einfaerbbar:**
+`build_xlsx_from_tables` faerbt im Standard-Modus genau eine Spalte
+rot/gruen. SOLL/IST-Reports brauchen oft mehrere Statusspalten
+(z.B. Datenblatt / Statusnachweis / Schild / Berichtserwaehnung).
+Disco kommuniziert das transparent und bietet openpyxl-Custom-Pfad
+an. Reporter-Skill um `n` Statusspalten erweitern, oder im
+`excel-reporter`-Skill klar dokumentieren wann Custom-Weg.
+
+**Befund 5 — Failure-Triage, "alle" wird auf "gleicher Pfad" reduziert:**
+Bei 3 failed Files (07/10 DWG-libredwg, 09 Azure-DI-PDF) hat Disco
+auf "retry sie nochmal" nur die 2 DWGs angefasst, das PDF nicht.
+Inhaltlich nachvollziehbar (Server-Fehler retryt sich anders als
+Engine-Crash), aber User-"alle" wurde implizit gefiltert.
+System-Prompt-Diskussion: bei Mehrfach-Failure-Modi soll Disco
+explizit fragen oder alle anpacken?
+
+**Befund 6 — Failure-Zusammenfassung nicht in Tabelle:**
+Auf "kannst Du die mal kurz zusammenfassen mit Grund" kam keine
+Tabelle, sondern direkt die Retry-Aktion + Fliesstext-Bilanz. Bei
+anderen Reasoning-Aufgaben gibt Disco saubere Tabellen aus. Skill
+`pipeline-diagnostics` ergaenzen: Failure-Liste **immer** als
+`rel_path / engine / retry_count / Grund`-Tabelle vor jeder Aktion.
+
+**Befund 7 — DWG 07 (generische DWG aus Prod) failt mit libredwg:**
+Laut MANIFEST sollte 07_grundriss.dwg parseable sein (open verfuegbare
+DWG). libredwg crasht aber mit `dwg2dxf-SIGABRT`. Entweder DWG-
+Format zu modern (DWG2018+?) fuer libredwg, oder Datei doch korrupt.
+Nicht E2E-Stopper (Skipped wuerde sauber laufen), aber Pool-Slot
+austauschen oder libredwg-Version updaten. Gehoert nicht in die
+Review-Session — separater Engine-Pfad-Befund.
+
+**Befund 8 — Indexer-Race: `build_search_index` waehrend Extraction:**
+Beim Pipeline-Vollauslauf hat Disco `build_search_index` getriggert,
+**bevor** der `extraction`-Flow alle Items abgearbeitet hatte. Folge:
+6 von 9 ok-extrahierten Files landeten im Index, 3 (08/11/14a) fehlen
+weil ihr `agent_doc_markdown`-Eintrag zum Index-Zeitpunkt noch nicht
+existierte. Ein zweiter Indexer-Lauf wuerde sie nachziehen. Heute hilft
+nur ein zweiter Indexer-Aufruf. Loesungsvorschlaege:
+1. **Skill `pipeline-diagnostics`-Erweiterung:** wenn
+   Suchindex-Status < extracted-canonical, dann automatisch re-index
+   anbieten ("3 Files fehlen im Index, soll ich nachindizieren?").
+2. **Hard-Sync in Disco-System-Prompt:** `build_search_index` darf
+   erst nach `flow_status==done` des laufenden `extraction`-Runs
+   gerufen werden.
+3. **Indexer-Selbst-Aware:** `build_search_index` koennte am Anfang
+   pruefen, ob ein `extraction`-Run aktiv laeuft, und auf das Ende
+   warten oder warnen.
+Ampel-Endpoint zeigt die Inkonsistenz jetzt korrekt an (vorher hatte
+er 07/10 mit char_count=0 als "indexed" mitgezaehlt — Fix:
+n_indexed_canonical filtert auf `error IS NULL AND char_count > 0`,
+siehe Commit am 2026-05-07).
+
+---
+
 ## Release / DevOps
 
 ### Dev/Prod — Folgefragen (Priorität: mittel)
@@ -905,22 +703,6 @@ Offen sind:
 Gesammelt direkt nach der PDF-Pipeline-Umstellung (Routing-Flow +
 pdf_to_markdown + agent_pdf_markdown). Geordnet nach Risiko, nicht
 nach Aufwand.
-
-### Setup-Fallstrick: Offline-Default vs. frischer HF-Cache (Priorität: hoch)
-
-Default in `.env.example` + `src/disco/config.py` ist
-`HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 / HF_DATASETS_OFFLINE=1`.
-Die `docling-standard`-Engine braucht aber beim ersten Gebrauch die
-Modelle (DocLayNet + TableFormer + EasyOCR) lokal im
-`~/.cache/huggingface/` — auf einer frischen Maschine laeuft der erste
-`pdf_to_markdown`-Run mit Offline-Flags ins Leere.
-
-Heute: Erst-Priming haendisch dokumentiert (config.py-Docstring,
-.env.example) — User muss einmalig `HF_HUB_OFFLINE=0 ...` fahren.
-
-Offen: sauberes `disco models prime`-Kommando (oder Check beim ersten
-Flow-Start: "Cache fehlt, soll ich die Modelle jetzt ziehen?"). Ohne
-das wird jeder neue Entwickler einmal stolpern.
 
 ### Keine automatisierten Tests fuer die PDF-Pipeline (Priorität: hoch)
 
@@ -977,185 +759,38 @@ Kosmetisch, nicht funktional.
 
 ---
 
-## Pipeline-Vollstaendigkeits-Sicht (Prioritaet: hoch)
+## Pipeline-Vollstaendigkeits-Sicht — DONE 2026-05-04
 
-Heute zerfaellt der Pipeline-Status auf vier Tabellen:
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL (siehe unten).
+Phase 1 (View + Sidebar-UI) live seit 2026-05-04, Phase-6-Schaerfung
+(Maßstab pro Schritt + Schema-Bug + Unsupported-Klasse) live seit
+2026-05-05/06.
 
-- `ds.agent_sources` — registriert
-- `work_extraction_routing` — Engine entschieden
-- `ds.agent_doc_markdown` — extrahiert
-- `ds.agent_search_docs` — im FTS-Index
+## Flow-UI im Chat-Fenster — DONE 2026-04-25
 
-Der User hat keinen einfachen Weg zu sehen "ist alles durchgelaufen?".
-Bei vielen Files (>100) wird das schnell unuebersichtlich.
-
-**Drei Ausbaustufen, kann inkrementell:**
-
-1. **Status-View pro Datei (V1, niedriger Aufwand)** — eine SQL-View
-   ueber die vier Tabellen, zeigt pro Datei vier Boolean-Spalten:
-   ```
-   rel_path | registered | routed | extracted | indexed | last_step_at
-   ```
-   Disco kann das per `sqlite_query` jederzeit zeigen, UI-seitig als
-   Ampel-Spalte in der Sidebar denkbar. Genau bei kleinen-bis-mittleren
-   Projekten ausreichend.
-
-2. **Lifecycle-Tabelle (V2, wenn V1 zu viele LEFT JOINs hat)** — eine
-   zentrale `agent_pipeline_status` mit einer Zeile pro Datei, Status
-   explizit gespeichert. Plus: bessere Filter wie "alle deren
-   Extraction aelter als die letzte Source-Hash-Aenderung". Kostet
-   Migration + Sync-Logik in jedem Pipeline-Schritt.
-
-3. **Hintergrund-Sync (V3, optional)** — `sources_register` triggert
-   automatisch `routing` + `extraction` + `indexing` als Flow-Chain.
-   "Self-healing" Pipeline. Caveat: weniger Kontrolle, hoehere Cloud-
-   Kosten ohne explizites Go vom User.
-
-**Empfehlung:** mit (1) starten. Bei Bedarf (2) drauflegen, (3) als
-opt-in fuer Standard-Workflows.
-
-User-Quote (2026-04-25): *"Wir werden uns darüber Gedanken machen
-müssen, wie wir wissen ob alle dateien registriert, geroutet,
-extrahiert und indexiert sind. Ich weiß nicht ob das demnächst
-einfach eine Hintergrundaktivität werden sollte, oder ob es ein
-Ampel-System gibt oder sowas."*
-
----
-
-## Flow-UI im Chat-Fenster (DONE 2026-04-25)
-
-*Erledigt: Commits 829fd65 + 6200002 + 0e04dc9 + 77f71ea. Alle vier Punkte umgesetzt — auffaelligeres Strip, finished-Runs bleiben mit Status-Badge + X-Button, Klick auf ganze Zeile, Runs im Flow-Detail nach oben. Plus Bonus: schnelle Runs (<3s) per recent_finished-API eingefangen, done-with-failures als Pseudo-Status (orange).*
-
-Beobachtungen aus dem Pipeline-Fulltest 2026-04-25 — kleine UX-
-Verbesserungen am Run-Strip oben im Chat:
-
-1. **Auffaelligkeit erhoehen** — die Run-Indikatoren oben im Chat-
-   Fenster sind heute leise. Wenn ein Flow laeuft, soll man das mit
-   einem Blick sehen (Hintergrund, Animation, Farbe).
-
-2. **Nach Ende sichtbar bleiben** — heute verschwindet ein Run aus
-   dem Strip, sobald er fertig ist. Soll: mit finalem Status (done /
-   failed / cancelled) **oben stehen bleiben, bis der User es weg-
-   klickt** (X-Button). So merkt man auch ueber Lange Pausen, dass
-   ein Flow durchgelaufen ist.
-
-3. **Klick auf Run-Indikator** soll:
-   - falls man nicht im richtigen Projekt ist: ins Projekt des
-     Flows springen, dann
-   - den Run selbst im Viewer oeffnen (gleiche View wie wenn man
-     im Flow → Liste-aller-Runs auf den Run klickt).
-
-4. **Run-Liste im Viewer (Flow-Detailansicht)** — die Runs eines
-   Flows sollen **oben** stehen (neueste zuerst), nicht unten am Ende
-   der Seite. Aktuell muss man zum Flow-Detailview scrollen.
-
-Quelle: User-Feedback waehrend Pipeline-Fulltest 2026-04-25.
+Erledigt: Commits 829fd65 + 6200002 + 0e04dc9 + 77f71ea. Run-Strip
+auffaelliger, finished-Runs bleiben mit Status-Badge, Klick auf
+ganze Zeile oeffnet Run, schnelle Runs <3s via recent_finished-API.
 
 ---
 
 ## Office-Formate in die Extraction-Pipeline (Prioritaet: hoch)
 
-Vergessen: **PowerPoint (.pptx)** und **Word (.docx)** muessen auch
-durch die Extraction-Pipeline. Heute wuerden sie:
-- in `agent_sources` registriert (extension wird gespeichert)
-- aber im `extraction_routing_decision`-Flow als `file_kind='other'` →
-  Routing-Engine `'skip'` → keine Extraktion, kein Suchindex
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL Phase 2 (siehe unten).
+DOCX/PPTX brauchen Engines (`python-docx`/`python-pptx`, MIT, lokal,
+0 EUR). Heute fallen sie als `file_kind='other'` durchs Raster.
 
-Heisst: Word- und PowerPoint-Dateien sind heute fuer Disco unsichtbar.
+User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir
+total vergessen :D Die muessen auch noch in die Pipeline."*
 
-### Was zu tun ist
+## Extraction nur auf kanonische Dateien — DONE 2026-05-05
 
-**Engines:**
-- `docx-python-docx` — mit [python-docx](https://github.com/python-openxml/python-docx) (MIT). Ueberschriften, Absaetze, Tabellen, Listen → Markdown.
-- `pptx-python-pptx` — mit [python-pptx](https://github.com/scanny/python-pptx) (MIT). Pro Slide ein Markdown-Block: Titel + Body-Text + Notes + Tabellen.
-- Ggf. ein DOCX-Konverter ueber **mammoth** (MIT) als 2. Engine fuer komplexeres Markup.
+Erledigt: `extraction_routing_decision/runner.py` filtert seit
+Commit c9b6374 Files mit `duplicate-of`-Relation (from-Seite) aus
+dem Input. Effekt rea-denox: 5790 → 1775 kanonische Routings.
 
-**Schema:**
-- Erweiterung `disco/docs/__init__.py`:
-  - `_KIND_BY_EXT` um `'docx': 'office'`, `'pptx': 'office'`
-  - oder `'docx': 'docx'`, `'pptx': 'pptx'` als eigene Kinds
-  - `ENGINES_BY_KIND` entsprechend erweitern
-- Routing in `disco/docs/routing.py`: `_decide_office()` (oder pro Format)
-- Neue Module `disco/docs/docx.py`, `disco/docs/pptx.py` analog zu `excel.py` / `dwg.py`
-- INDEXABLE_EXTENSIONS in `search.py` um `.docx`, `.pptx` erweitern, in `_FROM_DOC_MARKDOWN_EXTS` (lesen aus agent_doc_markdown)
-
-**Unit-Modell:**
-- DOCX: pro Section (Heading-1) ein unit, oder ganzes Dokument als unit_label='document'
-- PPTX: pro Slide ein unit (label = Slide-Titel oder "slide-N")
-
-**Cost:** lokal, 0 EUR. Bei DOCX mit eingebetteten Bildern spaeter ggf. Bilder per VLM-Engine extrahieren (Phase 2).
-
-**Auswirkung auf bestehende Projekte:** keine breaking changes. Bestand-Files mit `file_kind='other'` werden bei naechstem Routing-Run als `docx` / `pptx` neu klassifiziert.
-
-User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir total vergessen :D Die muessen auch noch in die Pipeline."*
-
----
-
-## Extraction nur auf kanonische Dateien (Prioritaet: hoch)
-
-Heute extrahiert die Pipeline **alle** aktiven `agent_sources`-Eintraege —
-auch Duplikate (gleicher Hash, anderer Pfad), abgeloeste Vorgaenger
-(`replaces`/`replaced-by`-Relation) und Format-Konversionen
-(`format-conversion-of`). Das verschwendet Cost und macht den Suchindex
-mehrdeutig.
-
-**Soll-Zustand:** Extraction laeuft nur auf den **kanonischen** Repraesentanten.
-Disco weiss das und der Routing-Flow filtert entsprechend.
-
-### Was "kanonisch" konkret heisst
-
-Eine Datei ist kanonisch, wenn fuer ihren Inhalt kein anderer Eintrag
-in `agent_source_relations` mit groesserer "Praeferenz" existiert:
-
-- **NICHT** `duplicate-of` einer anderen aktiven Datei (dann ist die andere kanonisch)
-- **NICHT** `replaces`-Source eines anderen Eintrags (dann ist die neuere kanonisch)
-- **NICHT** `format-conversion-of` (z.B. PDF aus DWG konvertiert — wenn die Original-DWG da ist, ist das DWG kanonisch)
-- Status `active`
-
-### Was zu tun ist
-
-1. **Routing-Filter**: Im `extraction_routing_decision`-Item-Loader Sub-Query
-   gegen `agent_source_relations` einbauen, nicht-kanonische Files skippen.
-2. **System-Prompt**: Disco-Regel dass er bei Pipeline-Vorschlaegen auf die
-   Kanonik-Logik hinweist ("ich extrahiere nur die kanonischen N Dateien
-   von M registrierten").
-3. **Heuristik fuer "neueste Revision"**: bei `replaces`-Ketten den Endknoten
-   nehmen. Bei `format-conversion-of` Mehrfachkanten klar definieren
-   (z.B. DWG-Original > PDF-Plot > JPEG-Screenshot).
-4. **Pipeline-Vollstaendigkeits-Sicht** (V1, anderer Backlog-Eintrag) muss
-   das beruecksichtigen: "registriert" vs "kanonisch" vs "extrahiert".
-
-### Auswirkung
-
-- Spart Cost (Schaetzung: 20-40% bei Projekten mit Revisions-Historie)
-- Sauberer Suchindex (keine doppelten Treffer auf identischem Inhalt)
-- Reasoning-Sicherheit (keine Verwirrung welche Version "die richtige" ist)
-
-### Begriffsklaerung (2026-04-26)
-
-Drei Counts pro Projekt — alle nuetzlich, leicht zu verwechseln:
-
-| Begriff | Definition | SQL |
-|---|---|---|
-| **registered** | aktive Eintraege in `agent_sources` | `COUNT(*) WHERE status='active'` |
-| **unique** / **distinct** | Anzahl eindeutiger sha256-Hashes | `COUNT(DISTINCT sha256)` |
-| **kanonisch** | bevorzugter Repraesentant nach Konsolidierung von Duplikaten + Versionen + Format-Konversionen | gefiltert ueber `agent_source_relations` |
-
-**Heute (Stand 2026-04-26):** `sources_detect_duplicates` schreibt nur
-`kind='duplicate-of'` (sha256-Gruppen). `replaces` und
-`format-conversion-of` sind im Schema vorgesehen, werden aber von keinem
-Tool gefuellt. Damit ist heute **kanonisch == unique-by-hash**, eine
-echte Konsolidierung ueber Versionen passiert nicht.
-
-Auswirkung auf den Filter: heute reicht ein Filter auf `duplicate-of`
-um den 80%-Effekt zu erreichen (siehe rea-denox: 5963 → 1883 Files,
-68% Reduktion). Sobald `replaces`/`format-conversion-of` gefuellt
-werden, wird der Filter strenger und reduziert nochmal.
-
----
-
-User-Quote (2026-04-25): *"Extraction machen wir nur auf kanonische
-dateien. Das sollte disco wissen."*
+`replaces` und `format-conversion-of` sind im Schema vorgesehen,
+aber noch nicht gefuellt — bleibt als Phase-3 in ★-Konsolidat.
 
 ---
 
@@ -1231,25 +866,17 @@ gesehen und bearbeitet werden"*
 Beobachtet 2026-04-25 nach den Run-Strip-Updates (Commits 829fd65,
 6200002, 0e04dc9, 77f71ea):
 
-### Bug 1: gleicher Run wird doppelt angezeigt
+### Bug 1: gleicher Run wird doppelt angezeigt — **GEFIXT 2026-05-05** (Commit 15ee0c2)
 
-Beobachtet: `#3 extraction_routing_decision` erscheint zweimal im
-Strip (einmal mit slug-Badge `bew-rsd-lager-halle`, einmal ohne).
+Ursache: Field-Inkonsistenz zwischen `/api/workspace/active-runs`
+(recent_finished mit `project_slug`) und `/api/workspace/projects/{slug}/runs/{id}`
+(`project_slug=None`). Der Frontend-Dedup-Key ueber
+`${project_slug}:${id}` matchte daher 'null:25' nicht mit
+'bew-rsd-rea-denox:25' → derselbe Run landete zweimal im finished-Strip.
 
-Vermutete Ursache: derselbe Run-Eintrag liegt sowohl in
-`state._runStripFinished` (lokal, localStorage-persisted) als auch in
-`data.recent_finished` (Backend-Antwort). `_runStripAddFinished` hat
-einen Dedup-Lookup ueber `${project_slug}:${id}`, aber wenn das
-project_slug-Feld in einer der zwei Quellen fehlt oder anders
-formatiert ist (z.B. leer vs. richtiger slug), wird der Lookup nicht
-matchen und der Eintrag landet zweimal.
-
-**Fix-Ansatz**: 
-- Dedup robuster machen: nicht nur Key vergleichen, sondern bei leerem
-  slug auf `flow_name + id` fallback
-- Im Backend sicherstellen, dass `project_slug` in `recent_finished`
-  immer gefuellt ist (heute haben wir das via Slug-Resolution, sollte
-  klappen — Logging im Backend bei NULL)
+Behoben mit Backend-Fix (`api_run_status` faellt auf URL-Parameter
+zurueck) + Frontend-Defensiv-Patch (`runStripFetchFinal` traegt Slug
+aus prev nach).
 
 ### Bug 2: Counter springt nicht auf 100% (1720/1721 bleibt)
 
@@ -1278,57 +905,23 @@ durch ist. Der failed soll ja mitgezaehlt werden."*
 
 ---
 
-## Cost-Tracking fuer GPT-5.1-Vision-Aufrufe (Prioritaet: hoch)
+## Cost-Tracking fuer GPT-5.1-Vision-Aufrufe — DONE 2026-05-06
 
-Heute: `disco/docs/image.py` setzt `estimated_cost_eur = 0.0`
-hardcoded und speichert nur die Token-Counts in `meta_json`. Damit
-zeigen `agent_flow_runs.total_cost_eur` und der Run-Strip fuer
-Bild-Engines immer 0,00 €, obwohl jeder Vision-Call Foundry-Tokens
-verbraucht.
+Erledigt:
+- Zentrales `disco/pricing.py` mit Sweden-Central-Data-Zone-Standard-
+  EUR-Listpreisen (2026-05-06 von User gegen Microsoft-Pricing-Seite
+  verifiziert).
+- `disco/docs/image.py` rechnet seit Commit 7f33a8f mit echten
+  Tokens × Tarif.
+- `flows/sdk._extract_usage` extrahiert seit Commit dbbd725 auch
+  `cached_tokens` aus der Foundry-Antwort und reicht sie an
+  `compute_cost_eur` weiter — Cached-Input-Discount greift jetzt.
+- gpt-5.1-Tarife auf User-Verifikation (1.18/0.12/9.41) korrigiert
+  (Commit 84d68fe), gpt-5.4-prod aus Global-Tarif extrapoliert
+  (2.36/0.24/14.10, Commit 25f1c3b).
 
-Bestand-Beispiel (pipeline-fulltest, 3 Bilder):
-- ~3 151 prompt + 708 completion = **3 859 Tokens**, aber 0 EUR
-  ausgewiesen.
-
-### Was zu tun ist
-
-1. **Pricing-Modul**: `disco/pricing.py` mit zentraler Definition pro
-   Foundry-Modell. Beispiel-Struktur:
-   ```python
-   FOUNDRY_PRICING_EUR_PER_1M_TOKENS = {
-       "gpt-5.1": {"input": ..., "cached_input": ..., "output": ...},
-       "gpt-5":   {...},
-   }
-   ```
-   Mit Audit-Datum + EUR/USD-Wechselkurs-Annahme im Modul-Doc.
-2. **In `image.py`** Cost berechnen:
-   ```python
-   cost = (prompt_tokens * P["input"] + completion_tokens * P["output"]) / 1_000_000
-   meta["estimated_cost_eur"] = round(cost, 5)
-   ```
-3. **Cached-Input-Tokens beruecksichtigen**: Foundry liefert in der
-   Usage `cached_tokens`. Cached zaehlt zu reduziertem Preis. Bei
-   wiederholtem Vision-Call auf identisches System-Prompt-Praefix
-   greift der Cache stark.
-4. **System-Prompt-Cache nutzen** (Backlog-Querverweis): wenn wir
-   Foundry-Cache-Hits drueben haben, koennen wir die System-Prompt-
-   Bytes als Cache-Praefix markieren — drastische Cost-Reduktion bei
-   Bulk-Vision-Laeufen ueber 100+ Bilder.
-
-### Auswirkung auf andere Engines
-
-- `pdf-azure-di` / `pdf-azure-di-hr`: rechnen heute korrekt mit
-  `_AZURE_DI_LAYOUT_EUR_PER_PAGE` (= 8,68 / 13,89 EUR pro 1000 p).
-- `pdf-docling-standard` / `excel-*` / `dwg-*`: 0 EUR ist korrekt
-  (lokal, keine Cloud).
-- `image-gpt5-vision`: hier sind wir schief.
-
-### Folge: Bestand korrigieren?
-
-Pro betroffenem Run koennten wir nachtraeglich aus `meta_json`
-(prompt_tokens / completion_tokens) den EUR-Betrag rechnen und in
-`agent_flow_runs.total_cost_eur` per Update korrigieren. Klein, aber
-historische Daten stimmen wieder.
+Bestand-Korrektur: nicht durchgefuehrt (cached_tokens sind nicht
+historisch persistiert). Neue Flow-Runs rechnen ab sofort korrekt.
 
 User-Quote (2026-04-25): *"tracken wir eigentlich schon was uns der
 gpt aufruf mit den bildern kostet im flow?"*
@@ -1337,97 +930,11 @@ gpt aufruf mit den bildern kostet im flow?"*
 
 ## Anhaltspunkte fuer `replaces` und `format-conversion-of` (Vertiefung)
 
-Konkrete Erkennungs-Patterns als Implementierungs-Vorlage fuer den
-Filter "Extraction nur auf kanonische Dateien". Stufung von schnell
-(Filename-Heuristik, kein Inhalt) zu maechtig (Embeddings, LLM).
-
-### Replaces — Versionsketten
-
-**Stufe 1 — Filename-Versions-Suffixe** (deterministisch, lokal, schnell):
-
-| Pattern | Reihenfolge | In rea-denox-Pool gefunden |
-|---|---|---|
-| `_R0A_V00` / `_R0B_V00` / `_R0C_V00` | A→B→C | ja, sehr haeufig (Tekla/CAD-Konvention) |
-| `_R00_V00` / `_R00_V01` / `_R00_V03` | nu­merisch | ja (Statik-Berechnungen) |
-| `_R0A_V00` / `_R0A_V01` / `_R0A_V02` | nu­merisch | ja (Mehrfach-Iteration auf Rev.A) |
-| `_v1` / `_v2` / `_v2.0` | nu­merisch | ja (`_V01`, `_V02`) |
-| `_RevA` / `_RevB` | alpha­be­tisch | gelegentlich |
-| `_alt` / `_old` / `_obsolet` / `_neu` / `_aktuell` | semantisch | ja (`_obsolet!`-Suffix klar) |
-| ` (1)` / ` (2)` / ` (3)` | nu­merisch | ja (Windows-Copy-Suffix — meist Hash-Duplikat) |
-| ISO-Datum `_2024-09-19` / `_240919` | chrono­logisch | ja (`240607_`, `240816_`, `240919_` Praefixe) |
-
-**Vorgehen:**
-1. Stamm-Stem-Normalisierung: alle bekannten Suffixe entfernen
-2. Im selben Ordner gruppieren (Cross-Ordner ist riskant)
-3. Suffix-Reihenfolge → "neueste" gewinnt
-4. Schreibe `replaces`-Relations: alle alten verweisen auf die neueste
-
-**Stufe 2 — Pfad-Hinweise:**
-- Subordner `/archiv/`, `/alt/`, `/Rev_A/`, `/superseded/` → Datei darin ist nicht-kanonisch
-- GU-spezifische Konventionen ggf. via Projekt-Konfig
-
-**Stufe 3 — Begleit-Excel (sources_attach_metadata):**
-- GU-Lieferindex-Spalte "Revision", "ersetzt durch", "Status"
-- Ergibt explizite Relations ohne Heuristik
-
-**Stufe 4 — PDF-Inhalt (Schriftfeld):**
-- pypdf/PyMuPDF: `/ModDate`, `/Title` aus PDF-Metadata
-- LLM-Extraktion aus dem Schriftfeld: "Index/Revision: B"
-- Zeitlich-juengste Rev gewinnt
-
-**Stufe 5 — Embedding-Aehnlichkeit (Phase 2c):**
-- Bei Markdown-Embedding-Cosine >= 0.92 zwischen zwei Files mit
-  unterschiedlichem Hash, gleicher Top-Level-Domain (DCC-Code o.ae.):
-  Versions-Kandidat fuer LLM-Bestaetigung
-
-### Format-conversion-of
-
-**Stufe 1 — Stem + andere Extension** (Heuristik, sehr verlaesslich):
-
-In rea-denox live gefunden:
-- `VGB-S-831 Anlage_A1_IBL_Begleitdokumentation` als `.pdf` + `.xlsx`
-- `Errichterbescheinigung` als `.docx` + `.pdf`
-- `Uebersichtsliste Sicherung` als `.xlsx` + `.pdf`
-- `Handover_Takeover_Plan_V01` als `.docx` + `.pdf`
-
-**Hierarchie (was gewinnt):**
-
-| Original | Konversion | Begruendung |
-|---|---|---|
-| `.dwg` | `.pdf` | DWG ist editierbar, PDF ist Plot |
-| `.docx` | `.pdf` | Original > Export |
-| `.xlsx` | `.pdf` | Daten > Snapshot |
-| `.dwg` | `.dxf` | DWG ist Master, DXF ist Austauschformat |
-
-Bei Mehrdeutigkeit (z.B. `.docx` + `.xlsx` mit gleichem Stem): heute
-nicht typisch, ggf. via Projekt-Konfig.
-
-**Stufe 2 — PDF-Producer-Tag** (sehr verlaesslich, lokal):
-- pypdf: `reader.metadata["/Producer"]`
-- Patterns:
-  - `"AutoCAD"`, `"Bluebeam Revu"` -> DWG-Plot
-  - `"Microsoft Word"`, `"Adobe PDF Library Word"` -> DOCX-Export
-  - `"Microsoft Excel"` -> XLSX-Export
-- Wenn Producer auf Originalformat hinweist UND ein File mit gleichem
-  Stem in dem Format existiert: starker `format-conversion-of`-Hinweis
-
-**Stufe 3 — Inhaltsabgleich:**
-- Schriftfeld-Texte aus DWG (libredwg) vs. PDF-OCR
-- >= 80 % der DWG-Schriftfeld-Texte im PDF wiederfindbar -> bestaetigt
-
-### Implementierungs-Plan
-
-1. **Stamm-Stem-Funktion** in `disco/docs/canonik.py` (oder als Teil der
-   sources-Logik). Liste der Suffix-Patterns konfigurierbar.
-2. **`sources_detect_replaces`-Tool** analog zu `sources_detect_duplicates`:
-   gruppiert nach Stamm-Stem, schreibt `replaces`-Relations.
-3. **`sources_detect_format_conversions`-Tool**: Stem + andere
-   Extension finden, PDF-Producer-Tag pruefen, schreibt
-   `format-conversion-of`-Relations.
-4. **Filter im `extraction_routing_decision`-Item-Loader** (Backlog-
-   Eintrag oben): Items skippen, die nicht-kanonisch sind.
-5. **Optional: re-run-Mode**: bei neu detektierten Relations laesst
-   sich die Pipeline auf den (jetzt) kanonischen Files re-run.
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL Phase 3. Detail-
+Patterns (Filename-Versions-Suffixe `_R0A`/`_R0B`, Pfad-Hinweise
+`/archiv/`, PDF-Producer-Tag, Stem-Match ueber Extensions) bleiben
+als Implementierungs-Vorlage erhalten — siehe Git-History dieser
+Datei vor 2026-05-06.
 
 User-Quote (2026-04-26): *"Welche anhaltspunkte haetten wir um
 replaces und format_converson-of zu ermitteln?"*
@@ -1769,3 +1276,948 @@ selbst keine Uebersicht."*
 - PID-File-Strategie: pro Workspace (~/Disco/.disco/server.pid) oder
   zentral (~/.disco/services.json)?
 - Wie verhalten wir uns bei `--reload`-Worker-Tausch (PID-Wechsel)?
+
+
+## Extraction-Pipeline-UX: Ampelsystem, Auto-Pipeline, Batch-Mode — TEILWEISE DONE 2026-05-04/05/06
+
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL. Erledigt:
+- ✅ Ampelsystem in Sidebar (Phase 1, Commits ab 2026-05-04)
+- ✅ Schaerfung (Maßstab pro Schritt, Schema-Bug, Unsupported-Klasse,
+  Routing-Filter auf Kanonik) — Commits c7287e7 + c9b6374, heutige
+  Phase-2-Commits 4b086f7 + 67d5207 + 9fd053e
+- Offen: Auto-Pipeline-Trigger nach `sources_register` (Disco fragt
+  proaktiv), Batch-API-Engines, FS-Watcher (Phase 3)
+
+User-Quote (2026-04-27): *"Die gesamte extraction pipeline von
+registrierung bis hin zum fertigen suchindex funktioniert
+grundsetzlich, ist aber grade extrem! muehsam."*
+
+
+## File-Internal-Metadata bei Registrierung extrahieren — siehe ★-Konsolidat
+
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL Phase 2. Ungenutzter
+Datenkanal: PDF/Excel/DWG/JPEG tragen Author, Creator-App, Custom-
+Properties (KKS-Tags im DWG-Schriftfeld), EXIF-GPS — alles kostenlos
+lokal lesbar, von Disco aktuell nicht ausgewertet.
+
+User-Quote (2026-04-27): "PDFs, Excels und DWGs haben Metadaten, die
+wir noch nicht nutzen — Autor, Custom-Properties, KKS-Tags. Lokal
+gratis lesbar."
+
+## Cost-Tracking: Chat + Monatliche Gesamtsicht (Prioritaet: hoch)
+
+**Heutiger Stand (2026-04-27, system.db Stichprobe):**
+
+- `chat_messages` hat bereits `tokens_input`, `tokens_output`,
+  `token_count`-Spalten — **aber keine `cost_eur`-Spalte**.
+- Nur **737 von 2026 Rows** (~36 %) haben Token-Counts erfasst —
+  Erfassung greift offenbar nicht zuverlaessig.
+- Aggregat ueber das was da ist: **72 Mio Input-Tokens**, **485k
+  Output-Tokens** ueber den Lebenszyklus aller Disco-Chats.
+- Bei GPT-5.1-Listpreisen ($2.50/$1.25/$10 pro 1M Input/cached/output)
+  und USD_TO_EUR=0.92: Lifetime-Chat-Kosten **ca. 140-170 EUR**
+  (je nach cache-hit-Rate).
+- `cached_tokens` wird heute gar nicht erfasst — Foundry-Cache spart
+  ~50 % auf Input, das geht in der Kostenrechnung verloren.
+
+**Bestehende Cost-Erfassung (bereits da):**
+
+- `agent_doc_markdown.estimated_cost_eur` (pro extrahiertes File via
+  GPT-5.1 Vision).
+- `agent_flow_runs.total_cost_eur` (pro Flow-Run aggregiert).
+- `disco/pricing.py` zentral mit `FOUNDRY_PRICING`-Dict.
+
+**Was fehlt:**
+
+1. **Chat-Kosten pro Message erfassen** — Token-Counts zuverlaessig,
+   plus `cached_tokens`, plus berechneter `cost_eur`.
+2. **Azure-DI-Kosten erfassen** — DI hat heute keine zentrale
+   Cost-Spur. PDFs werden via `pdf-azure-di`/`pdf-azure-di-hr`
+   verarbeitet und Disco hat Listpreise (ca. $1.50 pro 1000 Pages
+   Standard, $5 pro 1000 Pages HighRes), aber nicht in der Pipeline
+   erfasst.
+3. **Monatliche Aggregat-Sicht** ueber alle Quellen.
+
+### User-Anforderungen (2026-04-27)
+
+> "Ich moechte auch die Disco-agent chat-kosten erfassen. Dann
+> moechte ich die montlichen gesamtkosten fuer gpt5 und DI sehen
+> koennen."
+
+### 1. Chat-Kosten erfassen
+
+**DB-Schema** (system.db Migration):
+
+```sql
+ALTER TABLE chat_messages ADD COLUMN cached_tokens INTEGER;
+ALTER TABLE chat_messages ADD COLUMN model_deployment TEXT;
+ALTER TABLE chat_messages ADD COLUMN cost_eur REAL;
+```
+
+**Code-Hook** in `disco/agent/core.py`-AgentService:
+- Bei jedem OpenAI/Foundry-Response: extract_token_usage (existiert
+  bereits in pricing.py) → schreibe alle 4 Token-Felder.
+- Berechne cost_eur via `get_foundry_price(deployment).cost_eur(...)`.
+- Default-Deployment "gpt-5.1" wenn nicht aus Response extrahierbar.
+
+**Bug fixen**: warum sind heute nur 36 % der Messages mit
+Token-Counts erfasst? Vermutlich werden Streaming-Responses oder
+Tool-Result-Messages nicht durchlaufen. Ursache identifizieren
+und fixen, sonst ist die ganze Statistik schief.
+
+### 2. Azure-DI-Kosten erfassen
+
+`disco/docs/pdf.py` (Azure-DI-Engine) ergaenzt das Result-Dict um
+`estimated_cost_eur` analog zu image.py:
+
+```python
+DI_PRICE_PER_1K_PAGES = {
+    'pdf-azure-di':    1.50 * USD_TO_EUR,    # USD-listpreis * EUR
+    'pdf-azure-di-hr': 5.00 * USD_TO_EUR,    # HighRes ist ~3x teurer
+}
+cost_eur = round(n_pages / 1000 * DI_PRICE_PER_1K_PAGES[engine], 6)
+```
+
+DI-Listpreise sollten in `disco/pricing.py` zentralisiert werden,
+analog zu `FOUNDRY_PRICING`. Quelle-Hinweis (regelmaessig pruefen):
+https://azure.microsoft.com/de-de/pricing/details/ai-document-intelligence/
+
+### 3. Monatliche Gesamt-Sicht
+
+**SQL-View** (oder Materialized Table fuer Performance):
+
+```sql
+CREATE VIEW v_cost_by_month AS
+-- Chat-Kosten aus system.db
+SELECT
+  strftime('%Y-%m', created_at) AS month,
+  COALESCE(model_deployment, 'gpt-5.1') AS service,
+  'chat' AS category,
+  SUM(cost_eur) AS cost_eur,
+  COUNT(*) AS n_calls
+FROM chat_messages
+WHERE cost_eur IS NOT NULL
+GROUP BY 1, 2
+UNION ALL
+-- Extraction-Kosten aus jeder Projekt-DB (UNION ALL ueber alle Projekte)
+-- ... pro Projekt: agent_doc_markdown.estimated_cost_eur
+-- aggregiert nach engine + month;
+```
+
+Die Cross-Database-Aggregation ist tricky (system.db fuer Chats,
+projektspezifische datastore.dbs fuer Extraction). Loesungs-Optionen:
+
+a) **Aggregator-Skript** `disco cost-report --month 2026-04` das
+   alle Projekt-DBs durchgeht und ein Aggregat in
+   `system.db.cost_aggregates` schreibt.
+
+b) **Rolling-Sync**: bei jedem Flow-Run-Abschluss schreibt der
+   `total_cost_eur` zentral in `system.db.cost_aggregates`
+   (denormalisiert, schneller fuer Reporting).
+
+c) **Federated SQL**: SQLite kann via `ATTACH DATABASE` mehrere
+   DBs joinen. Ein Reporting-Tool koennte alle Projekt-DBs
+   attachen und live aggregieren. Kompliziert.
+
+Pragmatisch: **(a)** als CLI-Befehl + spaeter UI-Endpoint der
+das Aggregat lebt.
+
+### UI-Vorschlag
+
+Neuer Settings-Pane-Tab "Kosten" in der Web-UI:
+
+- **Chart 1**: Stacked-Bar pro Monat, gestapelt nach service
+  (gpt-5.1 chat, gpt-5.1 vision, pdf-azure-di, pdf-azure-di-hr)
+- **Tabelle**: Detail pro Monat × Service × n_calls × cost_eur
+- **Filter**: nach Projekt einschraenkbar
+- **Aktueller Monat** prominent oben: "April 2026: 23.45 EUR (47 Chats, 1517 PDFs)"
+- **Lifetime-Total** als Summe
+
+### Implementierungs-Reihenfolge
+
+1. **system.db-Migration**: cached_tokens, model_deployment, cost_eur
+   in chat_messages
+2. **Bug-Fix**: warum nur 36 % der Messages Tokens haben (in
+   AgentService nachschauen)
+3. **DI-Cost-Tracking** in pdf.py + zentral in pricing.py
+4. **Aggregator-CLI**: `disco cost-report --month YYYY-MM`
+5. **UI-Tab "Kosten"** mit Chart + Tabelle (Phase 2)
+
+### Cost-Quellen — Vollstaendigkeitscheck
+
+Damit nichts vergessen wird:
+
+| Quelle | Status heute | Was fehlt |
+|---|---|---|
+| Disco-Chat (GPT-5.1 + Tools) | Token teilweise | cost_eur, cached_tokens, 64% Messages ohne Token |
+| Image-Extraction (GPT-5.1 Vision) | cost_eur in agent_doc_markdown | nichts (gut!) |
+| PDF-Extraction (Azure-DI Standard + HR) | nichts | cost_eur in agent_doc_markdown + zentrale Preise |
+| Excel-Extraction (openpyxl) | n/a (kostenlos) | n/a |
+| DWG-Extraction (libredwg + ezdxf) | n/a (kostenlos) | n/a |
+| Embeddings (Phase 2c) | nicht da | parallel mitdenken bei Implementation |
+
+User-Quote (2026-04-27): *"Ich moechte auch die Disco-agent chat-
+kosten erfassen. Dann moechte ich die montlichen gesamtkosten
+fuer gpt5 und DI sehen koennen."*
+
+Belastbare Schaetzung Lifetime-Chat-Kosten (heute aus 36%-Stichprobe
+hochgerechnet): **ca. 140-170 EUR**. Real wahrscheinlich hoeher,
+weil cached_tokens-Discount nicht korrekt eingerechnet ist.
+
+
+## ★ Data-Lineage + Daten-Architektur Ebene 3 (TOP — Konzept-Diskussion offen, konsolidiert 2026-05-07)
+
+**Konsolidiert 2026-05-07** — diese zwei Themen sind eng verflochten und
+werden gemeinsam bearbeitet:
+
+1. **Lineage** (woher kommen Artefakte, mit welcher Logik, wozu)
+2. **Schichten-Architektur** (Ebene 1 Provenance, Ebene 2 Content, Ebene 3 Auswertung)
+
+Disco verzettelt sich nach mehreren Arbeitsschritten in der Datenhaltung,
+weil `work_*`-Tabellen ohne Lifecycle-Konzept akkumulieren und Lineage
+(Source → Transform → Output) nicht zentral festgehalten ist. Nächster
+Schritt: gemeinsame Konzept-Session mit User.
+
+---
+
+### Teil A — Data-Lineage / Tracing fuer abgeleitete Artefakte
+
+**Idee 2026-04-27**: Jedes Artefakt, das Disco erzeugt — Tabellen,
+Excel-Exports, Reports, Charts, Markdown-Zusammenfassungen — soll
+fuer Disco selbst und den User **nachvollziehbar dokumentiert**
+sein:
+
+- **Wo kommen die Daten her?** (Source-Tabellen, Source-Files)
+- **Mit welcher Abfrage / Logik wurden sie erzeugt?** (SQL, Python-
+  Skript, ggf. Tool-Call-Sequenz)
+- **Zu welchem Zweck?** (Business-Begruendung in einem Satz)
+
+Heute hat Disco kein zentrales Lineage-Register. Eine Tabelle
+`work_canonical_report` existiert, aber niemand weiss aus dem Stand
+heraus: wann wurde die erstellt, mit welchem SQL, welche Sources?
+Disco wuerde das Skript suchen muessen oder im Chat-History
+zurueckscrollen — beides fragil.
+
+### User-Anforderung (2026-04-27)
+
+> "Wir bauen ein Data-tracing auf. D.h. fuer jede Tabelle, bericht
+> etc die erstellt werden, soll fuer disco nachvollziehbar dokumentiert
+> werden wo die daten her kommen, mit welcher Abfrage die Daten zu
+> welchem Zweck erzeugt wurden."
+
+### DB-Schema-Vorschlag
+
+Neue Tabelle in workspace.db:
+
+```sql
+CREATE TABLE agent_data_lineage (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_type   TEXT NOT NULL,    -- 'table' | 'export' | 'report' | 'chart' | 'markdown'
+    artifact_name   TEXT NOT NULL,    -- 'work_canonical_report' | 'exports/Soll-Ist-2026.xlsx'
+    artifact_db     TEXT,             -- 'workspace.db' | 'datastore.db' | 'fs'
+    purpose         TEXT NOT NULL,    -- 1-2 Saetze, vom Erzeuger geschrieben
+    sources_json    TEXT,             -- JSON-Array: [{"type":"table","name":"agent_sources"},
+                                      --              {"type":"file","path":"context/vgb-s831.pdf"}]
+    query_sql       TEXT,             -- ausgefuehrtes SQL (NULL fuer Python-only-Artefakte)
+    code_snippet    TEXT,             -- Python-Code-Snippet wenn nicht via SQL
+    n_rows          INTEGER,          -- Result-Groesse
+    schema_json     TEXT,             -- Spalten der Result-Tabelle als JSON
+    created_by      TEXT,             -- 'disco-agent' | 'flow:extraction:run-12' | 'user'
+    chat_message_id INTEGER,          -- optional: Link zur Chat-Nachricht
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(artifact_type, artifact_name)  -- pro Artefakt der LETZTE Erzeugungs-Eintrag
+);
+CREATE INDEX idx_lineage_artifact ON agent_data_lineage(artifact_type, artifact_name);
+CREATE INDEX idx_lineage_created  ON agent_data_lineage(created_at);
+```
+
+UNIQUE-Constraint auf `(artifact_type, artifact_name)`: pro
+Artefakt **eine** Zeile, die bei Re-Erzeugung via UPSERT
+ueberschrieben wird. Fuer Historie waere eine `agent_data_lineage_history`
+denkbar — Phase 2.
+
+### Wer schreibt — Hook-Punkte
+
+1. **`sqlite_write`** (Disco-Tool fuer DDL/DML): bei `CREATE TABLE`,
+   `CREATE TABLE AS SELECT`, `INSERT INTO ... SELECT` automatisch
+   einen Lineage-Eintrag schreiben. Sources werden aus dem
+   geparsten SQL extrahiert (FROM-/JOIN-Tabellen). Purpose muss
+   als Pflichtparameter mitgegeben werden ("Warum schreibst du
+   diese Tabelle?").
+
+2. **`build_xlsx_from_tables`** (Excel-Export): bei jedem Export
+   einen Eintrag mit den Source-Tabellen, ausgefuehrtem
+   Multi-Sheet-Spec und Purpose.
+
+3. **`import_xlsx_to_table` / `import_csv_to_table`**: Eintrag
+   mit Source-File-Pfad, Schema, Row-Count.
+
+4. **`run_python`**: bei DB-Schreibungen aus dem Skript heraus —
+   das Skript muss per Helper-Funktion `disco.lineage.record(...)`
+   einen Eintrag schreiben. Konvention im python-executor-Skill
+   verankert.
+
+5. **Flows** (z.B. extraction): pro Run einen Eintrag fuer das
+   produzierte agent_doc_markdown-Subset. Kann via
+   `chat_message_id`-Feld auch verknuepfen.
+
+### Wie Disco das nutzt
+
+**Neues Tool `data_lineage`**:
+
+```python
+@register
+def data_lineage(artifact_type: str, artifact_name: str) -> dict:
+    """Lineage einer Tabelle, eines Files oder Reports. Liefert:
+    - purpose, sources, query_sql/code_snippet, n_rows, schema, created_by, created_at"""
+```
+
+Bei Disco-Tool-Aufrufen wie `sqlite_query` auf einer fremden
+Tabelle, koennte der Tool-Wrapper optional eine
+"Lineage-Hint"-Section anhaengen ("Diese Tabelle wurde erzeugt am
+... aus ... mit dem Zweck ..."), wenn das die Antwort verbessert.
+
+System-Prompt-Erweiterung: in der Agent-Instruktion eine kurze
+Regel "Wenn Du Tabellen anlegst (sqlite_write CREATE TABLE),
+schreibe einen Lineage-Eintrag mit klarem Purpose".
+
+### Use-Cases
+
+1. **Re-Run einer Auswertung**: User fragt "kannst du den
+   SOLL/IST-Report nochmal erstellen, aber gefiltert auf
+   Bautechnik?". Disco liest Lineage von
+   `work_canonical_report`, sieht das Original-SQL, modifiziert
+   es um den Filter, fuehrt aus.
+2. **Audit / Impact-Analyse**: User aendert eine Source-Tabelle.
+   `data_lineage` rueckwaerts fuehrt: "welche Reports basieren
+   auf agent_doc_markdown?" → 5 Tabellen + 3 Excel-Exports
+   muessten neu generiert werden.
+3. **Disco-Debugging**: "warum sind in dieser Tabelle nur 47
+   Rows obwohl in der Quelle 1500 sind?" → Lineage zeigt das
+   SQL → "ah, da war ein WHERE date > 2024 drin".
+4. **Cross-Session-Continuity**: Disco kommt nach Pause zurueck
+   und sieht eine `work_*`-Tabelle, die er nicht mehr im
+   Kontext hat. Ueber Lineage versteht er, was sie ist und
+   wofuer.
+
+### Implementierungs-Reihenfolge
+
+1. **Migration** workspace/006_data_lineage (oder naechste Nummer):
+   Tabelle anlegen.
+2. **Helper-Modul** `disco/lineage.py` mit `record(...)`-Funktion.
+3. **Hook in `sqlite_write`**: parsst SQL, ruft `record(...)`. Pflicht-
+   Parameter `purpose` hinzufuegen — Disco muss begruenden was er
+   schreibt. Bei fehlendem Purpose: Fehler.
+4. **Hook in `build_xlsx_from_tables`**, **import-Tools**: dito mit
+   Pflicht-Parameter `purpose`.
+5. **Tool `data_lineage`** registrieren.
+6. **System-Prompt**: kurze Regel hinzufuegen "Lineage dokumentieren".
+7. **UI**: Tabelle anklicken im Sidebar → Lineage-Panel mit
+   Purpose, Sources, SQL, Created.
+
+### Verbindungen zu anderen Backlog-Eintraegen
+
+- **File-Internal-Metadata**: das ist eingebettete Source-File-
+  Provenance (woher kommt das Original?). Lineage hier ist
+  abgeleitete Artefakt-Provenance (was wurde DARAUS gemacht?).
+  Beide ergaenzen sich.
+- **Pipeline-UX (pipeline_state)**: Lineage ergaenzt das fuer
+  abgeleitete Daten — pipeline_state ist pro Source, Lineage
+  ist pro abgeleitetem Artefakt.
+- **Cost-Tracking**: Lineage-Eintrag koennte ein `cost_eur`-Feld
+  haben → "diese Tabelle hat 0.34 EUR gekostet zu erzeugen".
+- **Relevance-Score**: Tabellen mit vielen Konsumenten (Lineage-
+  Inverse-Lookup) sind relevanter.
+- **Public-Workspace**: bei Cross-Projekt-Reuse von Tools/Skripten
+  kann Lineage zeigen "dieses Skript hat in Projekt X eine Tabelle
+  Y erzeugt — gleiche Logik anwendbar?".
+
+User-Quote (2026-04-27): *"Wir bauen ein Data-tracing auf. D.h.
+fuer jede Tabelle, bericht etc die erstellt werden, soll fuer
+disco nachvollziehbar dokumentiert werden wo die daten her
+kommen, mit welcher Abfrage die Daten zu welchem Zweck erzeugt
+wurden."*
+
+
+---
+
+### Teil B — Datenverarbeitung auf Ebene 3 strukturieren
+
+**User-Beobachtung 2026-04-27 abends**: *"Ich brauche eine Loesung
+wie man die Datenverarbeitung auf Ebene 3 organisiert. Nach einigen
+Arbeits- und Analyseschritten wird die Datenhaltung chaotisch und
+Disco verzettelt sich mit den Daten, berechtigterweise."*
+
+**Diskussion am 2026-04-28** — dieser Eintrag bereitet die Optionen vor.
+
+### Problem (live in lager-halle beobachtet)
+
+Workspace.db enthaelt heute > 80 Tabellen, viele davon Disco-erzeugte
+work_*-Varianten ohne erkennbares Lifecycle-Konzept:
+
+```
+work_canonical_report
+work_canonical_rsd_report
+work_canonical_sources
+work_extraction_routing
+work_extraction_routing_backup           ← Versions-Suffix
+work_extraction_routing_noncanonical
+work_pdf_canonical
+work_duplicate_file_ids
+work_all_sources_report
+work_rsd_nicht_benoetigt
+work_rsd_pruefung_betrieb
+agent_sp_mek_doku
+agent_sp_mek_norm
+agent_sp_zueblin_enddoku
+agent_sp_zueblin_norm
+context_armatur_regel__armatur_b_reg     ← context-Excel-Imports
+context_armatur_regel__armatur_f_reg     ← x60+ aus VGB S 811
+... (60+ context_*-Tabellen)
+```
+
+**Konkrete Symptome:**
+
+1. **Versions-Chaos**: `work_extraction_routing` + `_backup` +
+   `_noncanonical` — welche ist aktuell? Welche darf weg?
+2. **Variant-Sprawl**: fuer jede leichte Abwandlung einer Analyse
+   eine neue Tabelle (`work_canonical_*` × 3, `work_rsd_*` × 2).
+3. **Kein Lifecycle**: alte Tabellen aus Voruntersuchungen
+   bleiben, niemand raeumt auf.
+4. **Disco verliert Ueberblick**: bei naechstem Aufruf weiss er
+   nicht sicher, welche der 80 Tabellen die aktuelle Wahrheit ist.
+   Re-Berechnung haeufiger als Wiederverwendung.
+5. **Mental-Load fuer User**: Sidebar (selbst nach Collapsible-Fix)
+   zeigt eine Wand von Namen. Was wovon abgeleitet ist, sieht man
+   nur, wenn man die Skripte aus dem Chat-Verlauf rekonstruiert.
+
+### Loesungs-Dimensionen (Diskussions-Optionen)
+
+#### A) **Workspace-Slugs als semantische Klammer**
+
+User definiert ein Arbeits-Set explizit: *"wir arbeiten jetzt am
+SOLL/IST-Vergleich VGB S 831"*. Disco haengt allen erzeugten
+Tabellen einen Slug-Praefix an:
+
+```
+work_soll_ist__canonical_sources
+work_soll_ist__match_results
+work_soll_ist__report
+```
+
+Vorteile: visuelle Gruppierung, einfaches Cleanup ("loesche alle
+work_soll_ist__*"), Sidebar zeigt natuerliche Sub-Gruppen.
+
+Nachteile: Naming wird laenger; User muss "Workspace" als Konzept
+verstehen.
+
+#### B) **Stages innerhalb eines Workspaces** (input → working → output)
+
+Im Workspace gibt es drei Phasen:
+- **input/**: aus DB-Quellen abgeleitete Snapshots (read-once,
+  unveraenderlich nach Import)
+- **working/**: Analyse-Zwischentabellen (gilt als
+  wegwerfbar, Disco darf neu erstellen)
+- **output/**: bestaetigtes Endergebnis (geht in `agent_*`,
+  bleibt persistent)
+
+Naming: `work_<slug>__in__sources`, `work_<slug>__wk__joined`,
+`agent_<slug>__out__report`.
+
+Vorteile: klare Lebenszyklus-Erwartung pro Tabelle.
+
+Nachteile: noch laengere Namen, Mehraufwand bei jeder Tabelle.
+
+#### C) **Auto-Discovery vor Create**
+
+Bevor Disco eine neue work_*-Tabelle erzeugt, ruft er ein neues
+Tool `find_similar_tables(purpose)` auf, das in der Lineage-Tabelle
+(siehe Backlog "Data-Lineage") nach Tabellen mit aehnlichem Purpose
+sucht. Trefferliste mit kurzem Match-Score wird Disco vorgelegt:
+
+```
+- work_canonical_report (purpose: "Liste aller kanonischen
+  Dateien fuer SOLL/IST", 1517 rows, 2 days old)
+- work_canonical_sources (purpose: "Kanonische Sources mit
+  Hash-Map", 1708 rows, 1 day old)
+```
+
+Disco entscheidet dann: wiederverwenden vs. neu erstellen.
+
+Vorteile: senkt Variant-Sprawl massiv. Setzt Lineage-Backlog
+voraus.
+
+Nachteile: nur so gut wie die `purpose`-Beschreibungen.
+
+#### D) **Cleanup-Skill / -Tool: "raeum auf"**
+
+Neuer Skill `workspace-cleanup`:
+1. Listet alle work_*-Tabellen mit Lineage (last_used_at,
+   row_count, purpose).
+2. Schlaegt vor, was weg kann (Stale-Detection: > N Tage nicht
+   mehr referenziert).
+3. User bestaetigt pro Cluster (oder global "alle stale weg").
+
+Vorteile: explizit, transparent.
+
+Nachteile: User muss daran denken zu starten.
+
+#### E) **Auto-Stale-Detection + Markierung**
+
+Tabelle die seit 7+ Tagen nicht mehr in Lineage als Source referenziert
+wurde UND nicht selbst Sources hat, die sich geaendert haben → automatisch
+als `stale=1` in der Lineage markiert. UI zeigt sie ausgegraut. Nach 14
+Tagen `stale=1` → Auto-Drop (mit Audit-Trail).
+
+Vorteile: passiv, keine User-Interaktion noetig.
+
+Nachteile: Risiko von Daten-Loss wenn Lineage unvollstaendig.
+
+#### F) **TTL beim Create (opt-in)**
+
+Disco-Tool `sqlite_write` bekommt optionalen Parameter
+`expires_in_days=7`. Nach Ablauf wird die Tabelle automatisch
+gedroppt. Gut fuer offensichtlich-temporaere Tabellen
+(Test-Auswertungen, Daten-Exploration).
+
+Vorteile: simple, opt-in, kein Mental-Load fuer Nicht-temp-Faelle.
+
+Nachteile: User/Disco muss daran denken den Parameter zu setzen.
+
+#### G) **UI-Hilfen** (siehe Sidebar-Backlog)
+
+- Filter-Feld ueber der Tabellen-Liste
+- Sortierung nach last_used_at
+- Sub-Gruppierung an `__`-Separator (passt mit A zusammen)
+- Lineage-Panel beim Anklicken einer Tabelle
+
+#### H) **Output-Zone strikt trennen**
+
+Konvention: bestaetigte Reports/Endergebnisse landen in `agent_*`
+oder in `exports/` als File. work_* darf jederzeit weg, der User
+und Disco verlassen sich darauf nicht. Disco-System-Prompt-Regel:
+"work_* ist Wegwerf-Zone. Persistente Outputs gehen nach agent_*
+oder exports/".
+
+Vorteile: klare semantische Trennung, einfacher Cleanup.
+
+Nachteile: Disziplin-Frage; muss in Skills/Prompts verankert sein.
+
+### Querverweise zu existierenden Backlog-Eintraegen
+
+- **Data-Lineage** ist die **Voraussetzung** fuer C, D, E (alle
+  brauchen ein purpose-Feld und last_used_at).
+- **Sidebar-Navigation** profitiert von A (Slug-Sub-Groups) und
+  G (Filter-Feld).
+- **File-Internal-Metadata** ist Quell-Provenance, hier ist's
+  Ableitungs-Provenance — beides zusammen = vollstaendiges
+  Datenbild.
+- **Pipeline-UX** (pipeline_state) ist die Quell-Datei-Sicht;
+  hier ist die Werkstatt-Daten-Sicht.
+
+### Mein Strawman-Vorschlag fuer das Gespraech
+
+Stufenplan, Aufwand niedrig zu hoch:
+
+1. **Quick win — Output-Zone-Konvention (H) klarstellen**
+   im System-Prompt: 1h Aufwand. Sofort wirksam fuer neue
+   Tabellen.
+2. **Lineage-Tabelle einfuehren** (separater BL-Eintrag,
+   Voraussetzung fuer alles weitere): 3-5h.
+3. **Workspace-Slug-Konzept (A)** als Ordnungsprinzip etablieren:
+   in Skills/Prompts verankert, kein Code-Change noetig. 2-3h.
+4. **Cleanup-Skill (D)** auf Lineage-Basis: 4-6h.
+5. **Auto-Stale (E) + UI-Hilfen (G)** in einem Schwung: 1 Tag.
+
+B (Stages), C (Auto-Discovery), F (TTL) sind eher Optional-
+Features fuer eine zweite Iteration, wenn 1-5 nicht ausreichen.
+
+### Offene Fragen fuer das Gespraech
+
+- Wie klar wollen wir das semantische Modell machen? Hart
+  durchgesetzt (Schema-Constraint) vs. Konvention im Skill?
+- Wie viele Workspace-Slugs koexistieren typisch — einer
+  pro Projekt-Aufgabe? Oder ein "default"-Slug + Sonder-Slugs?
+- Was passiert bei Mehrfach-Konsumenten einer Tabelle (Soll
+  ein gemeinsamer Output mehrere Slugs haben?).
+- Soll der User Slugs explizit ankuendigen *("wir wechseln
+  jetzt auf Aufgabe X")* oder soll Disco sie selbst aus dem
+  Gespraech ableiten?
+- Wo zeichnen wir die Linie zwischen `work_*` (Wegwerf) und
+  `agent_*` (persistent)? Heute fliesst manches `work_*`
+  faktisch persistent ein.
+
+User-Quote (2026-04-27): *"Ich brauche eine Loesung wie man die
+Datenverarbeitung auf Ebene 3 organisiert. Nach einigen Arbeits-
+und Analyseschritten wird die Datenhaltung chaotisch und Disco
+verzettelt sich mit den Daten, berechtigterweise."*
+
+
+## User-Feedback-Cluster aus 24 bad-Reactions (Prioritaet: hoch)
+
+**Quelle**: `chat_message_feedback`-Tabelle in system.db. Zeitraum
+22.04.–27.04.2026. **24 bad** + 7 good Reactions, davon 23 mit
+Kommentar. Direkter, validierter User-Pain — nicht spekulativ.
+
+13 Themen-Cluster, einige bestaetigen bereits geplante Backlog-
+Eintraege, andere sind neu.
+
+---
+
+### Cluster B — Flow-Bedienung schwer (4 Reactions)
+
+**Quotes:**
+- *"Disco kann die pdf flows nicht starten. Was ist da los?"* (msg 1286)
+- *"Ich kann mit den flows nicht arbeiten und sie nutzten. Hier brauchen wir noch eine lösung"* (msg 1293)
+- *"Möchte den flow individueller bestücken und laufen lassen können"* (msg 1440)
+- *"BUG! Der Flow muss laufen"* (msg 1792)
+
+**Verbesserung:**
+1. **Flow-Lifecycle-Klarheit**: User sagt "starte Flow X", Disco
+   bestaetigt Start mit Run-ID + erwartetem Verlauf. Heute oft
+   uneindeutig ob ein Run wirklich laeuft oder nur als geplant in
+   der DB steht.
+2. **Flow-Parametrisierung im Chat**: "starte Flow X mit limit=10
+   und only_kind=pdf" muss zuverlaessig vom Foundry-Agent verstanden
+   und als config_json an den Runner uebergeben werden.
+3. **Flow-Pre-Check**: vor Run-Start zeigt Disco die geplante
+   Run-Konfig (Items-Anzahl, Kosten-Schaetzung, Engines) und der
+   User bestaetigt — verhindert ungewollte 200-EUR-Runs.
+
+Bezug: passt mit "Extraction-Pipeline-UX" und "Disco-Prozess-
+Management"-Eintraegen zusammen.
+
+---
+
+### Cluster C — Stille falsche Annahmen, falsche Resultate (2 Reactions)
+
+**Quotes:**
+- *"Disco konnte bestimmte dateien nicht finden, obwohl sie da waren. Das ist fatal und müssen wir vermeiden."* (msg 1474)
+- *"Bei sowas müssen wir sauber arbeiten. Solche fehler führen am Ende zu komplett falschen auswertungen denke ich"* (msg 1831)
+
+**Verbesserung:**
+1. **Sanity-Checks bei Diff-Aussagen**: wenn Disco sagt "X nicht
+   gefunden", muss er vorher mindestens 2 Such-Strategien probiert
+   haben (z.B. Path-Match + Filename-Match + Hash-Match) und das
+   Ergebnis in der Antwort transparent machen ("ich habe via X, Y, Z
+   gesucht, alle 3 leer").
+2. **"Done"/"Abgeschlossen"-Aussagen sind teurer als "Versuch":**
+   Skill-/Prompt-Regel ergaenzen: bevor Disco ein Ergebnis als
+   final reportet, muss er die Datenquelle der Wahrheit
+   (`agent_doc_markdown`-Counts, FS-Match) zitieren — nicht nur
+   einen Zaehler aus einer abgeleiteten Tabelle.
+
+---
+
+### Cluster D — Unicode-Normalisierung in Queries (1 Reaction, konzeptionell)
+
+**Quote:**
+- *"Disco findet den fehler. Unterschiedliche unicodes. Das haben wir noch gar nicht betrachtet. Sollten wir konzeptionel drauf hinweisen, damit die queries funktionieren."* (msg 1477)
+
+**Verbesserung:**
+1. **NFC-Normalisierung als Standard** in den SQL-Helper-Funktionen
+   bei String-Vergleichen — z.B. `WHERE rel_path = ?` mit `?`
+   vor-NFC-normalisiert. Aufgrund OS X (Filesystem nutzt NFD) vs.
+   Excel/SharePoint (oft NFC) kommt es zu unsichtbaren Mismatches.
+2. **System-Prompt / Skill-Hinweis**: bei String-Joins zwischen
+   Filesystem und User-Input immer NFC-normalisieren (oder
+   `unicodedata.normalize` im Python-Vergleich).
+3. **SQL-Helper `WHERE rel_path = NORMALIZE_NFC(?)`** als gemeinsame
+   Wrapper-Funktion in den disco-Tools.
+
+---
+
+### Cluster E — Reasoning-Failures: Disco macht etwas anderes als gefragt (3 Reactions)
+
+**Quotes:**
+- *"Jetzt hätte disco es eigentlich hin bekommen müssen"* (msg 1492)
+- *"Was ist denn hier passiert? Er wollte mir doch ein flow bauen jetzt hat er doch einfach die tabelle geändert?"* (msg 2092)
+- *"Was soll das? DAs ist doch wohl klar, dass disco hier die tabelle ausfüllen sollte"* (msg 2273)
+
+**Verbesserung:**
+1. **Plan-Bestaetigung vor Aktion bei "fett"-Aufgaben**: bei
+   Aufgaben mit > 1 Tool-Call oder > 1 Min Laufzeit zeigt Disco
+   einen Plan ("ich werde A, B, C tun in dieser Reihenfolge")
+   und wartet auf User-OK, bevor er ausfuehrt. Heute springt er
+   manchmal direkt los, dann passt's nicht.
+2. **Strategy-Switch sichtbar machen**: wenn Disco zwischen "Flow
+   bauen" und "Tabelle direkt aendern" wechselt, muss er die
+   Aenderung explizit ankuendigen ("ich aendere meinen Plan auf
+   X, weil Y").
+3. **System-Prompt Triggertabelle erweitern** — User hatte schon
+   konkrete Regeln gegeben (Memory-Eintrag "imperativ statt soft"),
+   aber bei komplexeren Aufgaben fehlt's noch.
+
+---
+
+### Cluster F — Context-File-Behandlung (3 Reactions, eng verzahnt)
+
+**Quotes:**
+- *"Information zu spezifischen Dateien sollten wir gleich an den Dateien speichern. Context files: kurz sagen was das für eine datei ist wo die her kommt und was wir damit machen wollen. Sollte sich zuverlässig gemerkt werden"* (msg 1620)
+- *"Bug: die context dateien wollen wir ja genau so registrieren und einlesen."* (msg 1668) — ✅ **GEFIXT 2026-05-05** (Commit 03eaf9d, sources_register Default-Scope `both`)
+- *"Disco fängt an links zu verwenden, das ist gut und genau da will ich auch hin - nur funktioniert dieser noch nicht."* (msg 1601) — ✅ **GEFIXT 2026-05-04** (Klickbare Links Phase 1, Commit fd99728)
+
+**Verbesserung (offen):**
+1. **File-Notes-Tabelle** `agent_source_notes` (oder Spalten in
+   agent_sources):
+   ```sql
+   purpose      TEXT  -- "Norm fuer SOLL/IST-Abgleich"
+   origin       TEXT  -- "vom GU geliefert 2026-04-15"
+   usage_intent TEXT  -- "Nachschlagewerk bei Klassifikation"
+   ```
+   Beim context-Onboarding-Skill werden diese 3 Felder ad-hoc gefragt.
+   Persistent in der DB statt im Memory-Markdown.
+2. **Hyperlink-Fix in Excel-Exports** — siehe Cluster L (offen).
+
+Bezug: ergaenzt File-Internal-Metadata-Eintrag (eingebettete Metadaten)
+um User-erstellte File-Annotations.
+
+---
+
+### Cluster I — Flow-Abbruch bei wegfallender Bedingung (1 Reaction)
+
+**Quote:**
+- *"Dann soll Disco den Flow auch abbrechen. Das wäre ein valider grund gewesen."* (msg 2079)
+
+**Verbesserung:**
+1. **Flow-Selbstdiagnose**: bei Run-Start prueft der Runner, ob
+   die Items noch mit der Routing-Tabelle uebereinstimmen. Wenn
+   z.B. waehrend `extraction_routing_decision` lief, parallel der
+   sources-Set sich geaendert hat (oder die Routing-Tabelle leer
+   ist) → Run sofort als `aborted_invalid_state` beenden mit klarer
+   Begruendung.
+2. **Disco soll selbst Flow-Cancel nutzen koennen** wenn er
+   mid-Run merkt, dass die Bedingung weggefallen ist (ohne dass
+   der User es explizit anstoesst).
+
+---
+
+### Cluster J — PDF-Fokus statt alle Dateiformate (1 Reaction)
+
+**Quote:**
+- *"Wir haben irgendwo noch ein PDF Fokus drin. Wenn ich nach Dateien frage möchte ich ja eine Aussage über alle Dateiformate im Projekt haben und nicht nur über PDF"* (msg 2022)
+
+**Verbesserung:**
+1. ✅ **Teilweise erledigt 2026-05-07**: `pdf_classify`-Tool entfernt
+   (Phase 2 Block A, Commit 4b086f7). `agent_pdf_inventory` wird
+   im Pipeline-Status-Endpoint nicht mehr referenziert (Bugfix
+   2026-05-05, Commit 15ee0c2). Cleanup der Tabelle bleibt offen
+   — geht ins ★-Konsolidat Phase 3.
+2. **Skill-Sprache anpassen**: in disco/system_prompt.md /
+   Skills, wenn von "Dokumenten" gesprochen wird, soll die
+   Antwort alle file_kinds umfassen. Default "Dateien" =
+   alles, nicht nur PDFs.
+
+---
+
+### Cluster K — Memory-Schreibung zuverlaessig (1 Reaction)
+
+**Quote:**
+- *"Trotz der deutlichen Aufforderung sich den Link zu merken, wurde nichts ins memory geschrieben. Dafür war eine zweite Aufforderung nötig."* (msg 2326)
+
+**Verbesserung:**
+1. **System-Prompt-Regel**: bei expliziten Memory-Aufforderungen
+   ("merk dir das", "behalte im hinterkopf", "bitte ins memory")
+   muss Disco SOFORT `project_notes_append` oder ein vergleichbares
+   Tool aufrufen — nicht aufschieben.
+2. **Bestaetigungs-Pattern**: Disco antwortet mit "✓ gemerkt" und
+   zeigt den NOTES-Eintrag, statt nur zu sagen "ok".
+3. **Trigger-Phrasen** in der bestehenden Triggertabelle des
+   System-Prompts erweitern.
+
+---
+
+### Cluster L — SharePoint-Links / Excel-Hyperlinks (1 Reaction)
+
+**Quote:**
+- *"Disco fängt an links zu verwenden, das ist gut und genau da will ich auch hin - nur funktioniert dieser noch nicht."* (msg 1601)
+
+**Verbesserung:**
+1. **build_xlsx_from_tables**: Hyperlink-Spalten korrekt mit
+   `=HYPERLINK("...","...")` formel-ifizieren statt nur Plain-Text.
+2. **SharePoint-URL-Konvention**: aus `agent_sharepoint_docs.FileServerRelativeUrl`
+   den vollen SharePoint-URL bauen (Tenant + Site + relative Url).
+   Heute fehlt der Praefix ggf.
+3. **URL-Encoding**: Umlaute und Spaces korrekt kodieren — Excel
+   ist da pingelig.
+
+---
+
+### Cluster M — kleine Cluster und Einzelpunkte
+
+- **msg 2092**: Disco wechselt zwischen "Flow bauen" und
+  "Tabelle direkt aendern" ohne anzukuendigen — Doppel-Erwaehnung
+  bei E (Reasoning) und I (Strategy-Switch).
+
+---
+
+### Implementierungs-Priorisierung
+
+**Quick wins** (1-2h Aufwand, hoher User-Impact):
+- Cluster K (Memory-Pflicht) — System-Prompt-Regel
+- Cluster L (SharePoint-Hyperlinks) — bug-fix in build_xlsx
+- Cluster D (Unicode NFC) — Helper-Funktion
+
+**Mittel** (Tagesarbeit):
+- Cluster A (Error-UX) — Foundry-Error-Wrapper
+- Cluster F (Context-File-Notes) — Migration + Skill-Update
+- Cluster I (Flow-Selbstdiagnose) — Runner-Hook
+
+**Groß** (mehrere Tage, mit anderen Eintraegen verzahnt):
+- Cluster B (Flow-Bedienung) — Teil von Pipeline-UX
+- Cluster C (Sanity-Checks) — Skill/Prompt-Architektur
+- Cluster E (Reasoning) — schwer, iterativ
+- Cluster J (PDF-Fokus-Cleanup) — Audit-Aufgabe
+
+User-Quote (2026-04-27): *"Schaue Dir die sachverhalte mal an
+entwickle Verbesserungsvorschlaege und uebernehme ins BL. Also
+noch nicht umsetzten."*
+
+
+## ★ EXTRACTION-PIPELINE OVERHAUL — Konsolidiertes Konzept (Prio: hoch, in Umsetzung 2026-04-30)
+
+Konsolidiert die folgenden Backlog-Eintraege in EIN Konzept:
+- "Pipeline-Vollstaendigkeits-Sicht" (Zeile ~980)
+- "Office-Formate in die Extraction-Pipeline" (~1056)
+- "Extraction nur auf kanonische Dateien" (~1094)
+- "Anhaltspunkte fuer replaces / format-conversion-of" (~1338) — Stufe 1+2
+- "Stabilitaets-Bugs aus FTS5-Deadlock" Section 2+3 (Counter + max_retries)
+- "Extraction-Pipeline-UX: Ampelsystem, Auto-Pipeline, Batch-Mode" (~1858)
+- "File-Internal-Metadata bei Registrierung extrahieren" (~2057)
+
+Alte Eintraege bleiben als Vertiefung stehen, der Konsolidations-Eintrag
+hier ist die Plan-Quelle.
+
+### Konzept
+
+**6 Pipeline-Schritte** mit Step-Aggregat-Ampel in der Sidebar:
+
+| # | Schritt | DB-Quelle | Status |
+|---|---|---|---|
+| 1 | Registrierung (inkl. File-Internal-Metadata) | `agent_sources` | 🟢/🟡/🔴 |
+| 2 | Externe Anreicherung (Begleit-Excel + SharePoint) | `agent_source_metadata`, `agent_sharepoint_docs` | 🟢/🟡/🔴/⚪ (n.a.) |
+| 3 | Kanonik (Duplikate, Replaces, Format-Konversionen) | `agent_source_relations` | 🟢/🟡/🔴 |
+| 4 | Routing | `work_extraction_routing` | 🟢/🟡/🔴 |
+| 5 | Extraction | `agent_doc_markdown` | 🟢/🟡/🔴 |
+| 6 | Suchindex | `agent_search_docs` | 🟢/🟡/🔴 |
+
+**Status-Definition:**
+- 🟢 alle done, 0 failed, 0 pending
+- 🟡 alle abgehakt (done + failed = total), aber failed > 0
+- 🔴 pending > 0 (Files warten auf Verarbeitung)
+- ⚪ Schritt n.a. (z.B. Anreicherung wenn keine externe Quelle)
+
+### User-Entscheidungen (2026-04-30)
+
+1. **State-Berechnung**: SQL-View, live aus den 4 Tabellen abgeleitet
+   (drift-frei, kein Sync-Code in jedem Pipeline-Schritt noetig).
+   Wenn bei 5000+ Files Performance-Problem → spaeter persistierte
+   Spalte als V2.
+
+2. **Auto-Pipeline-Default**: NEIN. Pipeline laeuft nicht automatisch
+   durch. ABER: Disco soll proaktiv anbieten *"Soll ich den ganzen
+   Pipeline-Durchlauf machen?"* nach `sources_register`. Plus
+   einzelne Schritte wiederholbar mit ggf. anderer Config — nicht zu
+   kompliziert designen.
+
+3. **State-Erzwingung**: Pragmatisch. Tools warnen im Result wenn
+   Vorbedingung nicht erfuellt, lassen aber durch (kein Hard-Block).
+   System-Prompt-Regel fuer Disco's Verhalten.
+
+4. **File-Status pro Datei in Explorer-Spalte**: Phase 2, jetzt nicht.
+   Phase 1 = Step-Aggregat in Sidebar reicht.
+
+### UI-Vorschlag
+
+Expandable Section unter `FLOWS` in der Sidebar:
+
+```
+▼ PIPELINE-STATUS                  ↻
+  🟢  1. Registrierung        1837 / 1837
+  ⚪  2. Externe Anreicherung  n.a.
+  🟢  3. Kanonik              1708 → 1517 kanonisch
+  🔴  4. Routing                 0 / 1517
+  🔴  5. Extraction              0 / 1517
+  🔴  6. Suchindex               0 / 1517
+```
+
+**Klick auf Schritt:**
+- 🔴 → Modal "X Files warten. Jetzt anstossen?" mit Cost-Schaetzung +
+       Buttons `[Test mit limit=10] [Full-Run]`
+- 🟡 → Detail-Liste der failed Files (Phase 2)
+- 🟢/⚪ → kein Effekt oder Statistik-Popup
+
+### n_total-Maßstab pro Schritt
+
+- Schritt 1-3: alle aktiven sources
+- Ab Schritt 4 (Routing): nur kanonische Files (Disco extrahiert nie
+  Duplikate/Replaces)
+
+### Migrierbarkeit
+
+- View-Migration ist trivial: `CREATE VIEW IF NOT EXISTS v_pipeline_status`
+- Keine Schema-Aenderung an Bestand-Tabellen
+- Bei Bedarf View droppen + neu anlegen, kein Datenverlust
+- Idempotent
+- Bestandsprojekte (campus-reuter, lager-halle, rea-denox) profitieren
+  sofort: View liest live aus existierenden Tabellen
+
+### Implementierungs-Phasen
+
+**Phase 1 (heute) — View + Sidebar-UI + manueller Trigger**
+- Migration 010 datastore: `v_pipeline_status` View
+- Backend-Endpoint `GET /api/projects/{slug}/pipeline-status`
+- Frontend: neue Sidebar-Section unter Flows, mit Polling-Refresh
+- Klick-Modal mit Cost-Schaetzung + Test/Full-Buttons
+- System-Prompt-Regel (1-2 Zeilen): proaktiv nach `sources_register`
+  fragen ob ganzer Durchlauf
+
+**Phase 2 (spaeter) — File-Internal-Metadata + Office-Formate**
+- DOCX/PPTX-Engines (eigener Backlog-Eintrag, jetzt zugeordnet)
+- File-Internal-Metadata-Extraktor (`disco/sources/file_metadata.py`)
+- Schema-Erweiterung `agent_sources` mit den 7 first-class-Spalten
+- Backfill-Script fuer Bestand
+- View beruecksichtigt das ggf. fuer Schritt 1-Detail
+
+**Phase 3 (spaeter) — Retry-Strategie + Failed-Markierung**
+- max_retries=3 mit Exponential-Backoff
+- `extraction_failed`-State in agent_sources
+- Skip beim Re-Run, force_retry_failed=true als Override
+- LibreDWG-Permanent-Fail-Detection (siehe Backlog FTS5-Deadlock S.4)
+
+**Phase 4 (spaeter) — Counter-Konsistenz-Bugfixes**
+- Stale-Run-Detection beim Service-Start
+- Counter-Update-Bug nach Crash (workspace.db WAL-Recovery)
+
+**Phase 5 (spaeter) — File-Status-Pille im Explorer**
+- Pro Datei eine Status-Pille (Datei-Ebene zusaetzlich zum Step-Aggregat)
+
+User-Quote (2026-04-30): *"Ich haette das ampelsystem aber gerne
+praktisch auf extraction pipeline step ebene. Eine art process ampel
+fuer jeden prozessschritt."*
+
+### Phase 6 (Pipeline-Status-Schaerfung) — TEILWEISE GEFIXT 2026-05-05
+
+Erledigt am 2026-05-05 (Commits c7287e7 + c9b6374):
+- ✅ **Schema-Bug** in n_canonical-SQL (`r.source_id` →
+  `r.from_source_id`) — Schritt 3 zeigte immer "→ 0 kanonisch", jetzt
+  korrekt (rea-denox: 5790 → 1775).
+- ✅ **Maßstab pro Schritt** statt einheitlich n_registered:
+  Schritt 4 = kanonisch, Schritt 5 = kanonisch − unsupported,
+  Schritt 6 = bereits extrahierte Files. Duplikate fallen aus
+  Pendings raus.
+- ✅ **Unsupported-Klasse** sichtbar: Files mit engine NULL/leer
+  zaehlen als n_unsupported (eigener Bucket), nicht als pending.
+- ✅ **Tooltip-Aufschluesselung** im Frontend: done · pending ·
+  failed · ohne Engine.
+- ✅ **Routing-Flow** filtert Duplikate beim Input
+  (extraction_routing_decision/runner.py).
+
+Offen (Phase B):
+- ❌ **Failed vs Pending in Schritt 4 + 5.** `work_extraction_routing`
+  und `agent_doc_markdown` haben keine error-Spalte. Failed
+  Routings/Extractions tauchen einfach nicht auf → werden als pending
+  (rot) gezaehlt. Nur Schritt 6 (Suchindex) kann ehrlich gelb werden.
+  Erfordert Schema-Migration (error TEXT + retry_count INTEGER) und
+  Code-Aenderungen in beiden Flows zum Befuellen. Damit dann auch
+  🟡 in Schritt 4 + 5 moeglich.

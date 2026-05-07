@@ -62,12 +62,20 @@ def _iso_mtime(epoch: float) -> str:
 
 
 def _is_ignored(rel_path: Path) -> bool:
-    """True wenn dieser Pfad beim Scan uebersprungen wird."""
+    """True wenn dieser Pfad beim Scan uebersprungen wird.
+
+    Konvention (siehe CLAUDE.md): Pfad-Parts mit '_'- oder '.'-Prefix sind
+    INTERN und werden generell ignoriert — egal ob Ordner (_meta/, .git/)
+    oder Datei (_manifest.md, .DS_Store, .gitignore). Das haelt die
+    Registry konsistent mit dem Pipeline-Status-Filter, der dieselbe
+    Konvention anwendet.
+    """
     parts = rel_path.parts
-    # Top-Level-Ignore (z.B. _meta/)
-    if parts and parts[0] in SCAN_IGNORE_TOP:
-        return True
-    # Sonder-Pattern irgendwo im Pfad
+    # '_'- oder '.'-Prefix in irgendeinem Pfad-Part: intern, ignorieren
+    for p in parts:
+        if p.startswith("_") or p.startswith("."):
+            return True
+    # Sonder-Pattern irgendwo im Pfad (zusaetzlich zu Prefix-Filter)
     for p in parts:
         if p in SCAN_IGNORE_PATTERNS:
             return True
@@ -381,11 +389,13 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
         "Scannt den gewaehlten Scope (sources/, context/ oder beides) rekursiv "
         "und aktualisiert die agent_sources-Registry. Erkennt neue, geaenderte "
         "und geloeschte Dateien ueber sha256-Hash-Vergleich. Idempotent — "
-        "Wiederholung auf unveraendertem Stand liefert 0 Delta. Ordner '_meta' "
-        "wird ignoriert. Nach dem Scan wird agent_pdf_inventory (Input der "
-        "PDF-Pipeline) automatisch synchronisiert — damit laufen Context-PDFs "
-        "durch *dieselben* Flows (extraction_routing_decision, extraction) wie "
-        "Source-PDFs, nur mit kind='context'."
+        "Wiederholung auf unveraendertem Stand liefert 0 Delta. Pfad-Parts "
+        "mit '_'- oder '.'-Prefix (z.B. _meta/, _manifest.md, .DS_Store) "
+        "gelten als intern und werden ignoriert. Nach dem Scan wird "
+        "agent_pdf_inventory (Input der PDF-Pipeline) automatisch synchroni- "
+        "siert — damit laufen Context-PDFs durch *dieselben* Flows "
+        "(extraction_routing_decision, extraction) wie Source-PDFs, nur "
+        "mit kind='context'."
     ),
     parameters={
         "type": "object",
@@ -393,14 +403,17 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
             "scope": {
                 "type": "string",
                 "enum": ["sources", "context", "both"],
+                "default": "both",
                 "description": (
                     "Welcher Unterbaum gescannt wird. "
-                    "'sources' (Default, bisheriges Verhalten) scannt nur "
-                    "sources/ und tagged die Zeilen kind='source'. "
-                    "'context' scannt context/ und tagged kind='context' — "
-                    "Context-PDFs werden dadurch auch ins agent_pdf_inventory "
-                    "gespiegelt und koennen durch die Pipeline laufen. "
-                    "'both' scannt nacheinander beides."
+                    "**Lass diesen Parameter in der Regel weg** — der "
+                    "Default 'both' scannt sources/ UND context/ nacheinander, "
+                    "was fast immer das Gewuenschte ist (damit context-PDFs "
+                    "auch ins agent_pdf_inventory wandern und durch die "
+                    "Pipeline laufen koennen). "
+                    "Setze scope NUR explizit, wenn der Nutzer ausdruecklich "
+                    "nur einen Unterbaum will: 'sources' nur sources/ "
+                    "(kind='source'), 'context' nur context/ (kind='context')."
                 ),
             },
             "subpath": {
@@ -408,8 +421,8 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
                 "description": (
                     "Optionaler Unterordner unter dem scope-Root "
                     "(z.B. 'Elektro' bei scope='sources'). "
-                    "Leer = ganzer Baum. Bei scope='both' wirkt subpath in beiden "
-                    "Baeumen gleich — in der Praxis meist leer lassen."
+                    "Leer = ganzer Baum. Bei scope='both' (Default) wirkt subpath "
+                    "in beiden Baeumen gleich — in der Praxis meist leer lassen."
                 ),
             },
             "skip_hash_if_unchanged": {
@@ -434,7 +447,7 @@ def _sync_pdf_inventory(conn, kinds: list[str]) -> dict[str, int]:
 )
 def _sources_register(
     *,
-    scope: str = "sources",
+    scope: str = "both",
     subpath: str = "",
     skip_hash_if_unchanged: bool = True,
     scan_type: str = "incremental",

@@ -549,12 +549,19 @@ def append_message(
     foundry_message_id: str | None = None,
     tokens_input: int | None = None,
     tokens_output: int | None = None,
+    attachments: list[dict[str, Any]] | None = None,
     db_path=None,
 ) -> dict[str, Any]:
     """Haengt eine Message an den Projekt-Chat an.
 
     Legt den project_chat_state-Eintrag bei Bedarf an (Idempotenz fuer
     den ersten User-Turn eines Projekts).
+
+    Args:
+        attachments: Optional Liste von Anhang-Refs (id/filename/mime_type/
+            size/kind/rel_path) — zur Persistenz der Datei-Anhaenge einer
+            Chat-Message. Datei selbst lebt im Filesystem unter
+            <project>/.disco/chat-attachments/<uuid>.<ext>.
 
     Returns:
         Das geschriebene Message-Dict inkl. id, token_count, created_at.
@@ -565,6 +572,9 @@ def append_message(
     tool_calls_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
     tool_results_json = (
         json.dumps(tool_results, ensure_ascii=False) if tool_results is not None else None
+    )
+    attachments_json = (
+        json.dumps(attachments, ensure_ascii=False) if attachments else None
     )
     token_count = _estimate_tokens(content, tool_calls_json, tool_results_json)
 
@@ -580,8 +590,9 @@ def append_message(
         cur = conn.execute(
             "INSERT INTO chat_messages "
             "  (project_slug, role, content, tool_calls_json, tool_results_json, "
-            "   foundry_message_id, tokens_input, tokens_output, token_count) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "   foundry_message_id, tokens_input, tokens_output, token_count, "
+            "   attachments_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 project_slug,
                 role,
@@ -592,6 +603,7 @@ def append_message(
                 tokens_input,
                 tokens_output,
                 token_count,
+                attachments_json,
             ),
         )
 
@@ -632,7 +644,7 @@ def list_active_messages(
             "SELECT id, project_slug, role, content, tool_calls_json, "
             "       tool_results_json, foundry_message_id, "
             "       tokens_input, tokens_output, token_count, "
-            "       is_compacted, created_at "
+            "       is_compacted, created_at, attachments_json "
             "FROM chat_messages "
             "WHERE project_slug = ? AND is_compacted = 0 "
             "ORDER BY id ASC",
@@ -811,7 +823,7 @@ def list_all_messages(
             "SELECT id, project_slug, role, content, tool_calls_json, "
             "       tool_results_json, foundry_message_id, "
             "       tokens_input, tokens_output, token_count, "
-            "       is_compacted, created_at "
+            "       is_compacted, created_at, attachments_json "
             "FROM chat_messages WHERE project_slug = ? "
         )
         if not include_compacted:
@@ -847,7 +859,7 @@ def _get_message(message_id: int, conn: sqlite3.Connection) -> dict[str, Any]:
         "SELECT id, project_slug, role, content, tool_calls_json, "
         "       tool_results_json, foundry_message_id, "
         "       tokens_input, tokens_output, token_count, "
-        "       is_compacted, created_at "
+        "       is_compacted, created_at, attachments_json "
         "FROM chat_messages WHERE id = ?",
         (message_id,),
     ).fetchone()
@@ -860,8 +872,10 @@ def _hydrate_message(msg: dict[str, Any]) -> dict[str, Any]:
     """Parst die JSON-Strings zurueck zu Python-Strukturen."""
     tc = msg.pop("tool_calls_json", None)
     tr = msg.pop("tool_results_json", None)
+    at = msg.pop("attachments_json", None)
     msg["tool_calls"] = json.loads(tc) if tc else None
     msg["tool_results"] = json.loads(tr) if tr else None
+    msg["attachments"] = json.loads(at) if at else None
     return msg
 
 

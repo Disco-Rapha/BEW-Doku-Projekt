@@ -10,6 +10,13 @@ Context-Dateien sind **Arbeitsgrundlagen** — Normen, Kataloge,
 Richtlinien, Referenztabellen. Disco muss sie **inhaltlich verstehen**
 um sie bei der Arbeit gezielt nachschlagen zu koennen.
 
+**`context/` wird klein und scharf gehalten** — nur das, was zur
+konkreten Bearbeitung des Projekts wirklich gebraucht wird (anders
+als `sources/`, das gross sein darf). Wenn Du unsicher bist, ob
+eine Datei nach context/ gehoert: lieber zurueckfragen als rein-
+laden. Faustregel: prefer weniger und scharf statt mehr und unscharf.
+Spaeter nachladen ist jederzeit moeglich.
+
 ## Voraussetzung: Projektziel muss bekannt sein
 
 Bevor Du context/ analysierst, pruefe ob README.md ein Projektziel
@@ -120,22 +127,27 @@ das Token-Limit und der Turn crasht. `pdf_markdown_read` nutzt
 standardmaessig eine 50-KB-Kappung und setzt `truncated=true`, um
 das zu verhindern.
 
-#### Excel/CSV — Default: IMMER importieren
+#### Excel/CSV — Default: Markdown via Pipeline
 
-Excel/CSV in `context/` sollen automatisch als SQL-Tabellen verfuegbar
-sein, weil sie typischerweise Lookup-Daten sind (DCC-Listen, KKS-Hierar-
-chien, Norm-Matrizen). Heuristik bewusst hart:
+Seit 2026-05-07 werden context-Excels per Default wie sources-Excels
+zu Markdown extrahiert (`excel-openpyxl`-Engine im Routing). Damit
+sind sie Search-Index-faehig (FTS5) und liegen einheitlich in
+`agent_doc_markdown` — kein workspace.db-Bläh durch dutzende
+`context_*`-Tabellen.
+
+Vorgehen bei einer **frischen** context-Excel:
 
 ```text
 xlsx_inspect({"path": "context/<datei>.xlsx"})
 ```
 
-**Standard:** importieren, ohne Rueckfrage. Zieltabelle:
+Kurz beschreiben was Du siehst (Sheets, Header, Stichprobe). Dann
+laeuft sie automatisch durch die Pipeline (Routing → Extraction →
+Suchindex), sobald der Nutzer den naechsten Pipeline-Lauf anstoesst.
 
-- bei einem Sheet:    `context_<file_slug>`
-- bei mehreren Sheets: `context_<file_slug>__<sheet_slug>`
-
-(Slug = lowercase, Sonderzeichen → `_`, max 50 Zeichen.)
+**SQL-Tabellen-Import als BEWUSSTE Aktion** — nur wenn der Nutzer
+Joins gegen die Excel braucht (z.B. *"importier mir die KKS-Liste,
+ich will die mit agent_sources joinen"*):
 
 ```text
 import_xlsx_to_table({
@@ -145,27 +157,20 @@ import_xlsx_to_table({
 })
 ```
 
-**Abbruch + Rueckfrage NUR bei:**
+**Wann ist SQL-Import wirklich noetig?**
+- Lookup-Tabelle, gegen die man oft per `WHERE column = ?` filtert
+- Cross-Project-Master-Daten (KKS-Hierarchie, DCC-Katalog)
+- Strukturierte Norm-Matrizen mit Joins gegen Projekt-Daten
 
-- Mehrfach-Header (Zeile 1 UND Zeile 2 sehen beide nach Header aus)
-- Merged Cells in der Header-Zeile
-- Pivot-Layout (Spalten = Kategorien, Zeilen = Werte)
-- Weniger als 3 Datenzeilen (Schema unklar)
+**Wann reicht Markdown?**
+- Norm-Texte (VGB-S-831 etc.) — Such-Index findet relevante Stellen
+- Excels mit Frei-Text-Spalten (Beschreibungen, Kommentare)
+- Listen, die Disco nur "ueberblicken" muss, nicht filtern
 
-Bei Abbruch: kurz beschreiben was Du gesehen hast, und den Nutzer
-fragen, ob die Datei trotzdem importiert werden soll (z.B. "alles als
-TEXT in eine Spalte") — oder ob sie nur als Markdown-Inhalt indiziert
-werden soll.
-
-**Nach dem Import:**
-- `sqlite_query` mit `LIMIT 5` als Stichprobe an den Nutzer.
-- Manifest-Eintrag pflegen (siehe naechster Abschnitt) — **mit
-  Tabellen-Name + Spalten + Zeilenanzahl**, damit spaetere Flows die
-  Lookup-Tabelle direkt finden.
-
-**Bei Hash-Aenderung (Update einer bestehenden context-Excel):**
-Alte Tabelle DROP + neu CREATE. Manifest-Eintrag aktualisieren. Damit
-DCC-Listen-Updates etc. sauber durchlaufen.
+**Bestand in Prod**: bestehende `context_*`-Tabellen aus alter Routing-
+Logik bleiben unveraendert. Wenn der User Lust auf Cleanup hat, kann
+er einzelne droppen — sobald die zugehoerigen Excels Markdown haben
+(was nach naechstem Pipeline-Lauf der Fall ist).
 
 #### Markdown/TXT (< 50 KB)
 

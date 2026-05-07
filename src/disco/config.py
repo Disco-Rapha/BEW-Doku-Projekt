@@ -6,27 +6,10 @@ Disco trennt strikt zwischen:
 
 Diese Trennung ist DSGVO-relevant: Kundendaten landen nie im Code-Repo,
 auch wenn `git add -A` versehentlich falsch tippt.
-
-Offline-Policy
---------------
-Beim Modul-Import werden HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE /
-HF_DATASETS_OFFLINE in os.environ gesetzt, damit alle Subprozesse
-(Flow-Worker, run_python) sie erben. Default: alle drei auf 1.
-Das verhindert, dass Docling/transformers/HF-Hub beim Laden eines
-gecachten Modells einen Online-Check macht — hat uns bei einem
-frueheren Flow-Run 3 min Socket-Hang gekostet.
-
-Voraussetzung: die Docling-Modelle (DocLayNet + TableFormer + EasyOCR)
-muessen einmalig im HF-Cache liegen. Beim ersten Gebrauch auf einer
-frischen Maschine die Flags via Shell temporaer ausschalten, z.B.
-`HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 uv run disco flow run ...`
-— Docling laedt die Modelle dann automatisch einmal herunter. Danach
-wieder zurueck auf Default (1).
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -76,7 +59,12 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str | None = None
     azure_openai_key: str | None = None
     azure_openai_api_version: str = "preview"
-    azure_openai_deployment: str | None = None
+    # Hinweis: settings.azure_openai_deployment wurde 2026-04-29 ENTFERNT.
+    # Modell-Wahl laeuft jetzt explizit ueber foundry_model_deployment
+    # (Disco-Agent) und foundry_flow_model_deployment (LLM-Flows). Ein
+    # alter projekt-eigener Flow, der noch settings.azure_openai_deployment
+    # liest, bricht zur Laufzeit mit AttributeError — bewusst, damit
+    # Disco den Flow auf foundry_flow_model_deployment migriert.
 
     msal_tenant_id: str | None = None
     msal_client_id: str | None = None
@@ -88,6 +76,22 @@ class Settings(BaseSettings):
     foundry_api_key: str | None = None
     foundry_model_deployment: str = "gpt-5"
     foundry_agent_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # Flow-LLM-Modell — getrennt vom Disco-Agent-Modell.
+    #
+    # Disco-Agent (Chat) nutzt foundry_model_deployment (gpt-5.4-prod
+    # heute). LLM-basierte Flows (Image-Extraktion, kuenftige Klassifi-
+    # katoren) nutzen foundry_flow_model_deployment — typisch das
+    # guenstigere Modell weil's Bulk-Mengen sind.
+    #
+    # Trennung im Config-Layer (nicht im System-Prompt) — System-Prompt
+    # bleibt schlank, Modell-Wahl wird durch ENV-Variablen gesteuert.
+    #
+    # Mittelfristig kann pro Run weiterhin per Flow-Config-Override ein
+    # anderes Modell gewaehlt werden (z.B. fuer Benchmark-Tests).
+    # ------------------------------------------------------------------
+    foundry_flow_model_deployment: str = "gpt-5.1"
 
     # ------------------------------------------------------------------
     # GPT-5.1 Inference-Settings (per Request uebergeben, ueberschreibt
@@ -107,16 +111,6 @@ class Settings(BaseSettings):
     foundry_verbosity: str = "low"
 
     # ------------------------------------------------------------------
-    # Offline-Modus fuer ML-Modelle (default: AN)
-    # ------------------------------------------------------------------
-    # Diese Flags werden beim Modul-Import in os.environ gespiegelt, damit
-    # sie an Subprozesse (Flow-Worker, run_python) vererbt werden.
-    # Verhindert, dass Docling/HF/transformers Online-Checks gegen
-    # huggingface.co machen, wenn das Modell eigentlich im Cache liegt.
-    hf_hub_offline: bool = True
-    transformers_offline: bool = True
-    hf_datasets_offline: bool = True
-
     # ------------------------------------------------------------------
     # Pfad-Properties — alles geht durchs Workspace
     # ------------------------------------------------------------------
@@ -193,25 +187,4 @@ class Settings(BaseSettings):
         return self.workspace_root / ".msal_token_cache.json"
 
 
-def _apply_offline_env(s: Settings) -> None:
-    """Spiegelt die Offline-Flags in os.environ, damit Subprozesse sie erben.
-
-    Wir respektieren aber explizit bereits gesetzte Werte in der aktuellen
-    Umgebung — dann kann z.B. `HF_HUB_OFFLINE=0 uv run ...` einen
-    einmaligen Online-Pfad erzwingen (z.B. um Docling-Modelle beim
-    ersten Gebrauch in den HF-Cache zu laden).
-    """
-    mapping = {
-        "HF_HUB_OFFLINE": s.hf_hub_offline,
-        "TRANSFORMERS_OFFLINE": s.transformers_offline,
-        "HF_DATASETS_OFFLINE": s.hf_datasets_offline,
-    }
-    for key, flag in mapping.items():
-        # Wenn der User die Var im Shell gesetzt hat, nicht ueberschreiben.
-        if key in os.environ:
-            continue
-        os.environ[key] = "1" if flag else "0"
-
-
 settings = Settings()
-_apply_offline_env(settings)

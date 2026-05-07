@@ -550,76 +550,6 @@ def _check_writable(target: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# fs_read_bytes (Binaer als base64)
-# ---------------------------------------------------------------------------
-
-
-@register(
-    name="fs_read_bytes",
-    description=(
-        "Liest eine BINAERE Datei (Excel, PDF, PNG, ZIP, etc.) unter data/ und "
-        "gibt sie base64-kodiert zurueck. Genau dafuer gedacht, um Excel-/Bild-/"
-        "PDF-Inhalte in den Code Interpreter zu uebergeben: dort dann "
-        "`base64.b64decode(content_base64)` aufrufen und z.B. nach /tmp/x.xlsx "
-        "schreiben. Der Code-Interpreter-Sandbox hat KEINEN direkten Zugriff "
-        "auf data/, dieser Tool-Call ist die Bruecke. "
-        "Limit: 5 MB pro Datei (groesser bitte aufteilen oder Worker-Job)."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Pfad relativ zu data/ (z.B. 'raw/referenz/kks.xlsx').",
-            },
-            "max_bytes": {
-                "type": "integer",
-                "description": f"Max. Bytes (Default {DEFAULT_READ_BYTES}, Hard-Max {MAX_READ_BYTES_BINARY}).",
-            },
-        },
-        "required": ["path"],
-    },
-    returns="{path, content_base64, bytes_read, size_bytes, truncated}",
-)
-def _fs_read_bytes(
-    *,
-    path: str,
-    max_bytes: int = DEFAULT_READ_BYTES,
-) -> dict[str, Any]:
-    import base64
-
-    if not path:
-        raise ValueError("path ist erforderlich.")
-
-    target = _resolve_under_data(path)
-    if not target.exists():
-        raise ValueError(f"Datei nicht gefunden: {path!r}")
-    if not target.is_file():
-        raise ValueError(f"Pfad ist keine Datei: {path!r}")
-
-    effective_max = max(1, min(int(max_bytes or DEFAULT_READ_BYTES), MAX_READ_BYTES_BINARY))
-    size = target.stat().st_size
-
-    try:
-        with target.open("rb") as fh:
-            raw = fh.read(effective_max + 1)
-    except OSError as exc:
-        raise ValueError(f"Lesefehler: {exc}") from exc
-
-    truncated = len(raw) > effective_max
-    if truncated:
-        raw = raw[:effective_max]
-
-    return {
-        "path": str(target.relative_to(_data_root())),
-        "content_base64": base64.b64encode(raw).decode("ascii"),
-        "bytes_read": len(raw),
-        "size_bytes": size,
-        "truncated": truncated,
-    }
-
-
-# ---------------------------------------------------------------------------
 # fs_write (Text)
 # ---------------------------------------------------------------------------
 
@@ -629,7 +559,7 @@ def _fs_read_bytes(
     description=(
         "Schreibt eine Textdatei unter data/. Legt fehlende Ordner automatisch "
         "an. Append=true haengt an eine bestehende Datei an statt zu ueberschreiben. "
-        "Fuer Binaerdaten (Excel, PNG) bitte fs_write_bytes mit base64 verwenden. "
+        "Fuer Binaerdaten (Excel) bitte build_xlsx_from_tables verwenden. "
         "Kein Zugriff ausserhalb von data/. DB-Dateien/.env sind gesperrt."
     ),
     parameters={
@@ -688,67 +618,6 @@ def _fs_write(
         "bytes_written": len(encoded),
         "total_size": target.stat().st_size,
         "mode": "append" if append else "overwrite",
-    }
-
-
-# ---------------------------------------------------------------------------
-# fs_write_bytes (Binaer via base64)
-# ---------------------------------------------------------------------------
-
-
-@register(
-    name="fs_write_bytes",
-    description=(
-        "Schreibt eine Binaerdatei (Excel, PNG, PDF, ...) unter data/ aus einem "
-        "base64-kodierten Content-String. Typischer Use-Case: der Code Interpreter "
-        "erzeugt ein xlsx im Sandbox-Filesystem, liest es als bytes, encoded es "
-        "per base64 und schickt es hier rein — so landet es auf dem Host unter "
-        "data/exports/. DB-Dateien/.env gesperrt."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Pfad relativ zu data/ (z.B. 'exports/report_2026-04-16.xlsx').",
-            },
-            "content_base64": {
-                "type": "string",
-                "description": "Datei-Inhalt base64-kodiert.",
-            },
-        },
-        "required": ["path", "content_base64"],
-    },
-    returns="{path, bytes_written, total_size}",
-)
-def _fs_write_bytes(*, path: str, content_base64: str) -> dict[str, Any]:
-    import base64
-
-    if not path:
-        raise ValueError("path ist erforderlich.")
-
-    target = _resolve_under_data(path)
-    _check_writable(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        raw = base64.b64decode(content_base64, validate=False)
-    except Exception as exc:
-        raise ValueError(f"base64-Decoding fehlgeschlagen: {exc}") from exc
-
-    if len(raw) > MAX_WRITE_BYTES:
-        raise ValueError(
-            f"Decoded content {len(raw)} Bytes ueberschreitet Limit {MAX_WRITE_BYTES}."
-        )
-
-    with target.open("wb") as fh:
-        fh.write(raw)
-
-    root = _data_root()
-    return {
-        "path": str(target.relative_to(root)),
-        "bytes_written": len(raw),
-        "total_size": target.stat().st_size,
     }
 
 
