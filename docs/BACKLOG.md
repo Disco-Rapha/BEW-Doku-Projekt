@@ -733,6 +733,46 @@ siehe Commit am 2026-05-07).
 
 ## Release / DevOps
 
+### Foundry-Chain-Invalidation bei Code-Update (Prio: hoch — gilt fuer naechsten Pipeline-Code-Change)
+
+**Symptom 2026-05-07 (lager-halle, Prod):** Nach Deploy von
+Compaction-v3 (`e7e5382` — Tool-Output-Truncation in
+`build_responses_api_input`) crashte der naechste User-Turn mit
+Foundry-Fehler `400: No tool output found for function call
+call_<id>`. Alle DB-Eintraege waren sauber gepaart; Ursache war der
+Foundry-Server-State unter `previous_response_id`, der noch das alte
+volle Output-Format erwartete und beim neuen truncated Format aus
+unserem Input nicht matchte.
+
+**Reparatur damals**: per Hand SQL-Update auf `project_chat_state`
+auf Prod **und** Dev — `foundry_response_id`,
+`measured_context_tokens`, `measured_at`, `measured_model`,
+`measured_cached_tokens` auf NULL fuer alle Projekte mit aktiver
+Chain (8 Prod, 12 Dev). Naechster Turn lief Stateless durch, Foundry
+hat frische response_id vergeben, alles sauber.
+
+**Was aufzubauen ist:**
+
+- **Format-Version-Tracker:** im Code von `build_responses_api_input`
+  eine Konstante `INPUT_FORMAT_VERSION` halten. Bei strukturellen
+  Aenderungen am Input-Format (Truncation-Logik, neue Item-Types,
+  geaenderte Reihenfolge) wird die hochgezaehlt.
+- **DB-Spalte `project_chat_state.input_format_version`** — wird beim
+  Schreiben einer `foundry_response_id` mitgespeichert.
+- **Lese-Zeit-Check:** wenn `input_format_version != INPUT_FORMAT_VERSION`,
+  wird `foundry_response_id` ignoriert (Stateless-Modus erzwingen) und
+  beim naechsten erfolgreichen Turn neu gesetzt.
+
+**Alternativ einfacher** (Migration-Hook): jede Migration, die
+`build_responses_api_input` oder die Persistenz-Schicht aendert,
+laesst ein `UPDATE project_chat_state SET foundry_response_id=NULL`
+mitlaufen. Weniger elegant, aber sicher.
+
+**Wichtig**: Nicht in der Naehe der Memory-Architektur-Reform (TOP-2)
+liegen lassen — die wird vermutlich auch Persistenz-Format
+veraendern und triggert sonst denselben Crash. Vor der Memory-Reform
+fertig haben.
+
 ### Dev/Prod — Folgefragen (Priorität: mittel)
 
 Minimal Viable Split laeuft seit 2026-04-20: dev-Branch + zwei
