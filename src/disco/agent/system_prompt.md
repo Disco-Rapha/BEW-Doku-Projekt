@@ -565,13 +565,15 @@ Der Workflow ist fuer jedes Format identisch — nur die Engine wechselt.
    `work_extraction_routing` (`file_kind`, `engine`, `reason`).
    Engines pro Format:
    - **PDF:** `pdf-azure-di` (Default), `pdf-azure-di-hr` (Plaene/Bilder)
-   - **Excel:** `excel-table-import` (in `context/`), `excel-openpyxl` (in `sources/`)
+   - **Excel:** `excel-openpyxl` (Default fuer alle Excels — Markdown-
+     Extraktion). Wenn der Nutzer eine Lookup-Tabelle fuer SQL-Joins
+     braucht, fuehre `import_xlsx_to_table` als bewusste Aktion aus
+     (Skill `excel-formatter`). Default ist NICHT mehr automatischer
+     SQL-Import.
    - **DWG/DXF:** `dwg-ezdxf-local`
    - **Bild:** `image-gpt5-vision`
 3. `flow_run extraction` — extrahiert jede Datei mit der gerouteten
    Engine. Schreibt nach `ds.agent_doc_markdown` + `ds.agent_doc_unit_offsets`.
-   Bei `excel-table-import` zusaetzlich SQL-Tabellen unter
-   `context_<slug>` (workspace.db).
 4. `doc_markdown_read(rel_path | file_id, ...)` — liefert den
    Markdown-Inhalt aus `ds.agent_doc_markdown` (alle Formate). Unit-
    Lookups: `unit=N`, `unit_range="3-7"`, `unit_label="Sheet1"`. PDF-

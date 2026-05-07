@@ -10,6 +10,76 @@ Kontext, Entscheidung, Konsequenzen.
 
 ---
 
+## 2026-05-07 — context-Excel-Default zu Markdown gewechselt
+
+**Status:** aktiv
+
+### Kontext
+
+Bisher routete `extraction_routing_decision` für context-Excels
+automatisch die `excel-table-import`-Engine — das schreibt Excel-
+Sheets direkt als SQL-Tabellen `context_<slug>` in `workspace.db`.
+sources-Excels gingen via `excel-openpyxl` zu Markdown.
+
+Folge in der Praxis: **60+ `context_*`-Tabellen pro Projekt**
+(z.B. rea-denox aus VGB-S-811-Imports), viele davon ungenutzt.
+Wildwuchs in `workspace.db`, Sidebar unübersichtlich, Disco
+verlor Übersicht über die Lookup-Strukturen, Search-Index nicht
+über Excel-Inhalte konsultiert.
+
+### Entscheidung
+
+Default-Routing für context-Excels auf `excel-openpyxl` (Markdown)
+umstellen. SQL-Tabellen-Import ist **bewusste User-Aktion** via
+`import_xlsx_to_table`, nicht mehr automatischer Pipeline-Schritt.
+
+### Was sich ändert
+
+- `disco/docs/routing.py:_decide_excel` ignoriert `file_role` und
+  liefert immer `excel-openpyxl`.
+- Migration `workspace/006_excel_context_remigrate.sql` löscht
+  bestehende Routings mit `engine='excel-table-import'` — beim
+  nächsten `extraction_routing_decision`-Lauf werden die Files
+  neu klassifiziert (zu `excel-openpyxl`), beim folgenden
+  `extraction`-Lauf zu Markdown extrahiert.
+- `context-onboarding`-Skill: Default-Verhalten dokumentiert,
+  SQL-Import als bewusster Pfad markiert.
+- System-Prompt: kompakter Hinweis ergänzt.
+
+### Was bleibt
+
+- Bestehende `context_*`-Tabellen in Prod-Workspaces bleiben
+  unverändert (nicht-destruktiv). Wenn der User sicher ist, dass
+  ein Markdown-Pendant da ist und nichts mehr dagegen joint, kann
+  er einzelne droppen.
+- `import_xlsx_to_table`-Tool bleibt erhalten — wird über Skill
+  `excel-formatter` getriggert.
+- `excel-table-import`-Engine als Code bleibt erhalten — Tabellen-
+  Imports sind weiterhin möglich, nur eben nicht automatisch.
+
+### Konsequenzen
+
+- Pipeline-Ampel zeigt nach Migration die zugehörigen Files in
+  Schritt 4+5+6 als pending → User sieht gezielt, welche context-
+  Excels noch kein Markdown haben, und kann Cleanup gezielt
+  ansteuern.
+- Search-Index-Coverage für context-Inhalte vollständig.
+- workspace.db-Wildwuchs gestoppt.
+- Bei Lookup-Tabellen-Bedarf etwas mehr Disziplin — User muss
+  bewusst sagen *„importier mir die KKS-Liste"*, statt dass das
+  automatisch passiert.
+
+### Wann zurück?
+
+Falls der manuelle SQL-Import-Pfad zu mühsam wird (z.B. weil bei
+jedem Projekt 3–5 Standard-Lookups gefragt sind), könnten wir einen
+**Lookup-Hinweis-Mechanismus** einbauen: ein Marker-File
+`context/_lookup_tables.txt` listet pro Excel den gewünschten
+SQL-Import-Modus, der `excel-openpyxl`-Pfad respektiert das.
+Aktuell zu früh — abwarten, ob der manuelle Pfad reicht.
+
+---
+
 ## 2026-05-06 — docling als PDF-Engine entfernt
 
 **Status:** aktiv
