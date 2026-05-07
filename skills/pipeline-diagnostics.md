@@ -202,6 +202,48 @@ sqlite_write("DELETE FROM ds.agent_doc_markdown WHERE file_id = ?")
 flow_run({"flow_name": "extraction", "config": {"only_file_ids": [<id>]}})
 ```
 
+### Suchindex-Drift erkennen + nachindizieren
+
+**Wann auftreten:** Der Indexer (`build_search_index`) wurde gerufen,
+**bevor** der `extraction`-Flow alle Items abgearbeitet hatte. Files,
+die spaeter extrahiert wurden, fehlen dann im Index. Frueher (vor
+2026-05-07) ein stiller Fehler — heute bricht der Indexer mit Warnung
+ab, wenn ein extraction-Run laeuft.
+
+**Drift erkennen** (Pipeline-Status-Endpoint reicht):
+
+```text
+# Pipeline-Ampel abfragen — Schritt 6 zeigt n_pending = Drift
+GET /api/projects/<slug>/pipeline-status
+
+# Konkrete Files vergleichen:
+SELECT d.rel_path
+FROM ds.agent_doc_markdown d
+WHERE d.error IS NULL AND d.char_count > 0
+  AND d.rel_path NOT IN (
+    SELECT sd.rel_path FROM ds.agent_search_docs sd
+    WHERE sd.error IS NULL
+  )
+```
+
+**Reparatur** — einfach erneut indizieren:
+
+```text
+# Erst sicherstellen, dass keine extraction laeuft
+flow_runs({"flow_name": "extraction", "limit": 1})
+
+# Dann komplett-Indizierung anstossen
+build_search_index()
+
+# Wenn es schnell gehen soll: nur die Drift-Files
+build_search_index({"paths": ["sources/<konkrete_datei.pdf>", ...]})
+```
+
+Indexer ist idempotent: bestehende Files mit unveraendertem Hash +
+gleicher `indexer_version` werden uebersprungen, nur die fehlenden /
+geaenderten landen neu im Index.
+```
+
 ## Was Du dem Nutzer zeigst
 
 Bei einer Diagnose-Frage **immer** in dieser Reihenfolge antworten:

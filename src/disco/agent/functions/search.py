@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from . import register
-from ..context import connect_datastore_rw
+from ..context import connect_datastore_rw, get_workspace_db_path
 from .fs import _data_root, _resolve_under_data
 
 
@@ -209,6 +209,30 @@ def _build_search_index(
     force_reindex: bool = False,
     max_files: int | None = None,
 ) -> dict[str, Any]:
+    # Race-Schutz: wenn gerade ein extraction-Run laeuft, sind die
+    # agent_doc_markdown-Eintraege im Fluss. Indexer wartet nicht ab —
+    # er bricht mit klarem Hinweis ab, damit der Skill-Workflow den
+    # Indexer-Aufruf hinter `flow_status==done` schiebt. Vorher: Indexer
+    # lief mittendrin, indizierte 5-6 Files, der Rest fehlte und kam
+    # erst beim manuellen zweiten Aufruf nach.
+    active_extraction = _active_extraction_run()
+    if active_extraction is not None:
+        return {
+            "status": "deferred",
+            "n_indexed": 0,
+            "n_skipped": 0,
+            "n_errors": 0,
+            "total_chunks": 0,
+            "total_pages": 0,
+            "warning": (
+                f"extraction-Flow Run #{active_extraction['run_id']} laeuft "
+                f"noch ({active_extraction['done']}/{active_extraction['total']} "
+                f"items). Suchindex-Bau abgebrochen — sonst fehlen die "
+                f"spaet-extrahierten Files im Index. Sobald der Run done "
+                f"ist (`flow_status`), nochmal `build_search_index` rufen."
+            ),
+        }
+
     roots = _resolve_indexing_roots(paths)
     files = _collect_indexable_files(roots)
     if max_files is not None and max_files > 0:
@@ -600,28 +624,168 @@ def _resolve_indexing_roots(paths: list[str] | None) -> list[Path]:
     return resolved
 
 
+def _is_internal_path(rel: Path | str, *, data_root: Path | None = None) -> bool:
+    """Konvention: Pfade mit '_' oder '.' als Prefix in irgendeiner Komponente
+    sind intern (z.B. `_meta/`, `_manifest.md`, `.disco/`, `.DS_Store`).
+    `sources_register` filtert nach demselben Pattern — der Indexer muss
+    konsistent sein, sonst zaehlt der Pipeline-Status `_manifest.md` als
+    indexed obwohl es nie ein doc_markdown bekommt.
+    """
+    if isinstance(rel, str):
+        path = Path(rel)
+    else:
+        path = rel
+    if data_root is not None and path.is_absolute():
+        try:
+            path = path.relative_to(data_root)
+        except ValueError:
+            return False
+    return any(part.startswith("_") or part.startswith(".")
+               for part in path.parts)
+
+
 def _collect_indexable_files(roots: list[Path]) -> list[Path]:
-    """Sammelt alle indizierbaren Dateien unter den Wurzeln."""
+    """Sammelt alle zu indizierenden Files.
+
+    Zwei Quellen, kombiniert ohne Duplikate:
+
+    1. **agent_doc_markdown** fuer Doku-Format-Files (PDF, Excel, DWG,
+       Bild) — alle Eintraege mit error IS NULL UND char_count > 0,
+       deren absolute Datei noch im FS existiert. Damit ist der Indexer
+       race-frei: Files, die der Extraction-Flow schon erledigt hat,
+       werden zuverlaessig gefunden — auch wenn sie zwischen FS-Walk-
+       Zeitpunkt und Extraction-Insert reingekommen sind.
+
+    2. **FS-Walk** fuer Markdown/TXT (nicht ueber Extraction-Pipeline)
+       und fuer Doku-Format-Files, die im FS sind aber noch keinen
+       doc_markdown haben — die werden vom Indexer als "errors" gemeldet,
+       damit der User sieht, dass extraction nachgezogen werden muss.
+
+    In beiden Faellen: Files mit '_' oder '.' in einer Pfad-Komponente
+    werden ausgefiltert (`_meta/`, `_manifest.md`, `.disco/` usw.) —
+    konsistent zu `sources_register`.
+    """
     files: list[Path] = []
     seen: set[Path] = set()
+    data_root = _data_root()
+
+    # --- 1) Doku-Files aus agent_doc_markdown ---------------------------
+    # Race-freie Quelle: alle Files, die der Extraction-Flow erfolgreich
+    # erledigt hat. Liefert auch Files, die nach dem letzten FS-Walk
+    # extrahiert wurden.
+    try:
+        conn = connect_datastore_rw()
+        try:
+            rows = conn.execute(
+                "SELECT rel_path FROM agent_doc_markdown "
+                "WHERE error IS NULL AND char_count > 0 "
+                "ORDER BY rel_path"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:  # DB nicht da, Tabelle fehlt → leere Liste
+        logger.debug("agent_doc_markdown nicht lesbar (%s) — fallback FS-only", exc)
+        rows = []
+
+    for r in rows:
+        rel = r["rel_path"] if hasattr(r, "__getitem__") else r[0]
+        if not rel:
+            continue
+        if _is_internal_path(rel):
+            continue
+        abs_path = data_root / rel
+        if not abs_path.is_file():
+            continue
+        ext = abs_path.suffix.lower()
+        if ext not in _FROM_DOC_MARKDOWN_EXTS:
+            continue
+        # Roots-Filter: nur Files unterhalb der angeforderten Wurzeln
+        if not any(_is_under(abs_path, r) for r in roots):
+            continue
+        if abs_path in seen:
+            continue
+        files.append(abs_path)
+        seen.add(abs_path)
+
+    # --- 2) FS-Walk *nur* fuer Nicht-Doku-Format-Files ------------------
+    # Doku-Format-Files (PDF/Excel/DWG/JPG) liefen schon ueber Quelle 1
+    # und kommen nur ueber agent_doc_markdown rein. FS-walk wuerde hier
+    # Files anlegen, die kein doc_markdown haben (z.B. Duplikate ohne
+    # canonical-Status, oder noch nicht extrahierte Files) — der Indexer
+    # haette dann ValueErrors und wuerde Lauf nach Lauf dieselben File-
+    # System-Eintraege als "errors" melden.
+    #
+    # MD/TXT laufen ausschliesslich ueber FS — sie sind nicht Teil der
+    # extraction-Pipeline und haben keinen agent_doc_markdown-Eintrag.
     for root in roots:
         if root.is_file():
-            if root.suffix.lower() in INDEXABLE_EXTENSIONS and root not in seen:
+            ext = root.suffix.lower()
+            if (ext in INDEXABLE_EXTENSIONS
+                    and ext not in _FROM_DOC_MARKDOWN_EXTS
+                    and root not in seen
+                    and not _is_internal_path(root, data_root=data_root)):
                 files.append(root)
                 seen.add(root)
             continue
         for p in sorted(root.rglob("*")):
             if not p.is_file():
                 continue
-            if p.name.startswith("."):
+            ext = p.suffix.lower()
+            if ext not in INDEXABLE_EXTENSIONS:
                 continue
-            if p.suffix.lower() not in INDEXABLE_EXTENSIONS:
+            if ext in _FROM_DOC_MARKDOWN_EXTS:
+                # Kommt aus agent_doc_markdown — FS-walk skippt's hier.
+                continue
+            if _is_internal_path(p, data_root=data_root):
                 continue
             if p in seen:
                 continue
             files.append(p)
             seen.add(p)
+
     return files
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    """True wenn `path` unterhalb `root` liegt (oder gleich `root` ist)."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _active_extraction_run() -> dict[str, Any] | None:
+    """Pruefe, ob gerade ein `extraction`-Flow-Run laeuft.
+
+    Liefert ein Dict mit run_id/done/total wenn aktiv, sonst None. Wird
+    am Anfang von `build_search_index` benutzt, um den Race zu vermeiden:
+    Indexer-Lauf waehrend Extraction = unvollstaendiger Index.
+
+    Defensiv: wenn workspace.db oder Tabelle fehlt, gibt None zurueck —
+    dann nimmt der Indexer den FS-Walk-Pfad an, was den Status quo vor
+    dieser Aenderung ist.
+    """
+    ws_path = get_workspace_db_path()
+    if ws_path is None or not ws_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(ws_path), timeout=3.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            r = conn.execute(
+                "SELECT id, done_items, total_items "
+                "FROM agent_flow_runs "
+                "WHERE flow_name = 'extraction' AND status = 'running' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:
+        return None
+    if r is None:
+        return None
+    return {"run_id": r["id"], "done": r["done_items"], "total": r["total_items"]}
 
 
 def _rel_to_data(abs_path: Path) -> str:
