@@ -115,11 +115,75 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
     role_prefix = "context" if file_role == "context" else "sources"
     fs_rel_path = Path(role_prefix) / rel_path
     abs_path = (run.project_root / fs_rel_path).resolve()
+
+    # Vorigen retry_count lesen, damit wir ihn inkrementieren statt resetten.
+    prev = run.db.query(
+        "SELECT retry_count FROM work_extraction_routing WHERE file_id = ?",
+        [file_id],
+    )
+    prev_retries = int(prev[0]["retry_count"]) if prev else 0
+
     if not abs_path.is_file():
+        # File ist registriert, aber im FS verschwunden — Routing kann nichts
+        # entscheiden. Eintrag mit error schreiben, kein Crash.
+        run.db.insert_row(
+            "work_extraction_routing",
+            {
+                "file_id": file_id,
+                "rel_path": rel_path,
+                "file_kind": None,
+                "engine": None,
+                "reason": "Datei nicht im Filesystem auffindbar",
+                "router_version": ROUTER_VERSION,
+                "heuristics_json": None,
+                "n_pages": None, "kind_counts_json": None,
+                "n_scan_pages": None, "n_vdrawing_pages": None,
+                "n_text_pages": None, "n_mixed_pages": None,
+                "share_scan_or_vdrawing": None,
+                "max_page_width_pt": None, "n_large_image_pages": None,
+                "duration_ms": None,
+                "run_id": run.run_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "error": f"FileNotFoundError: {fs_rel_path}",
+                "retry_count": prev_retries + 1,
+            },
+            on_conflict="replace",
+        )
         raise FileNotFoundError(f"Datei nicht gefunden: {fs_rel_path}")
 
     t0 = time.monotonic()
-    decision = decide(rel_path=rel_path, abs_path=abs_path, file_role=file_role)
+    try:
+        decision = decide(rel_path=rel_path, abs_path=abs_path, file_role=file_role)
+    except Exception as exc:
+        # Routing-Heuristik selbst gecrashed (z.B. PyMuPDF-Read-Fehler).
+        # Eintrag mit error schreiben, dann re-raise — Flow-Runner markiert
+        # Item als failed.
+        duration_ms = (time.monotonic() - t0) * 1000.0
+        run.db.insert_row(
+            "work_extraction_routing",
+            {
+                "file_id": file_id,
+                "rel_path": rel_path,
+                "file_kind": None,
+                "engine": None,
+                "reason": f"Routing-Crash: {type(exc).__name__}",
+                "router_version": ROUTER_VERSION,
+                "heuristics_json": None,
+                "n_pages": None, "kind_counts_json": None,
+                "n_scan_pages": None, "n_vdrawing_pages": None,
+                "n_text_pages": None, "n_mixed_pages": None,
+                "share_scan_or_vdrawing": None,
+                "max_page_width_pt": None, "n_large_image_pages": None,
+                "duration_ms": duration_ms,
+                "run_id": run.run_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+                "retry_count": prev_retries + 1,
+            },
+            on_conflict="replace",
+        )
+        raise
+
     duration_ms = (time.monotonic() - t0) * 1000.0
 
     file_kind = decision["file_kind"]
@@ -168,6 +232,9 @@ def process_item(run: FlowRun, row: Dict) -> Dict:
             "duration_ms": duration_ms,
             "run_id": run.run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            # Status: erfolgreich → error=NULL, retry_count inkrementiert
+            "error": None,
+            "retry_count": prev_retries + 1,
         },
         on_conflict="replace",
     )

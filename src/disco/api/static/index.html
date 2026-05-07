@@ -3431,11 +3431,12 @@ async function loadPipelineStatus(slug) {
     for (const step of (data.steps || [])) {
       const row = document.createElement('div');
       row.className = 'ps-row' + (step.n_pending > 0 ? ' has-pending' : '');
-      // Tooltip mit Bucket-Aufschluesselung — done / pending / failed / unsupported.
+      // Tooltip mit Bucket-Aufschluesselung — done / pending / failed / empty / unsupported.
       const buckets = [];
       buckets.push(`${step.n_done} done`);
       if (step.n_pending > 0) buckets.push(`${step.n_pending} pending`);
       if (step.n_failed > 0)  buckets.push(`${step.n_failed} failed`);
+      if (step.n_empty > 0)   buckets.push(`${step.n_empty} leer extrahiert`);
       if (step.n_unsupported > 0) buckets.push(`${step.n_unsupported} ohne Engine`);
       row.title = `${step.step_name}: ${buckets.join(' · ')} (von ${step.n_total} Soll)`;
       row.innerHTML = `
@@ -3459,6 +3460,9 @@ function onPipelineStepClick(slug, step) {
     `Done: ${step.n_done} / Total: ${step.n_total}`,
     `Failed: ${step.n_failed}, Pending: ${step.n_pending}`,
   ];
+  if (step.n_empty > 0) {
+    lines.push(`Leer extrahiert: ${step.n_empty} (Datei lief durch, Output war leer — z.B. PDF ohne Text-Inhalt)`);
+  }
   if (step.n_unsupported > 0) {
     lines.push(`Ohne Engine: ${step.n_unsupported} (nicht verarbeitbar — Format hat keine passende Engine)`);
   }

@@ -804,38 +804,71 @@ async def api_pipeline_status(slug: str):
     # Unsupported zaehlt NICHT als pending — der Schritt kann sie nicht
     # weiter bearbeiten; das ist kein Bug, sondern ein Bestand.
 
-    # Routing
+    # Routing — drei Buckets pro Datei:
+    #   - supported:   engine != null AND error IS NULL
+    #   - unsupported: engine IS NULL/'' (kein Engine-Mapping vorhanden)
+    #   - failed:      error IS NOT NULL (Routing-Versuch ist gecrashed)
+    # Files koennen zwischen failed und supported wandern, wenn Retry
+    # erfolgreich. Anti-Doppelzaehlung: failed UND error gefuellt → wir
+    # verwenden engine + error gemeinsam.
     n_routed_supported = _count(f"""
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
         WHERE w.engine IS NOT NULL AND w.engine != ''
+        AND w.error IS NULL
         AND w.file_id IN ({CANONICAL_SUBQUERY})
     """)
     n_routed_unsupported = _count(f"""
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
         WHERE (w.engine IS NULL OR w.engine = '')
+        AND w.error IS NULL
         AND w.file_id IN ({CANONICAL_SUBQUERY})
     """)
-    # Pending Routing = kanonisch − bereits bewertet (mit oder ohne Engine)
+    n_routed_failed = _count(f"""
+        SELECT COUNT(DISTINCT w.file_id)
+        FROM work_extraction_routing w
+        WHERE w.error IS NOT NULL
+        AND w.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    # Pending Routing = kanonisch − bereits bewertet (in irgendeiner Form)
     n_routed_pending = max(
-        0, n_canonical - n_routed_supported - n_routed_unsupported,
+        0, n_canonical - n_routed_supported - n_routed_unsupported - n_routed_failed,
     )
 
-    # Extraction — nur kanonische Files mit Engine sind verarbeitbar
+    # Extraction — nur kanonische Files mit Engine sind verarbeitbar.
+    # Drei Buckets:
+    #   - extracted:   doc_markdown-Eintrag mit error IS NULL UND md_content != ''
+    #   - failed:      doc_markdown-Eintrag mit error IS NOT NULL
+    #   - empty:       doc_markdown-Eintrag mit error IS NULL UND char_count = 0
     n_extracted_canonical = _count(f"""
         SELECT COUNT(DISTINCT d.file_id)
         FROM ds.agent_doc_markdown d
-        WHERE d.file_id IN ({CANONICAL_SUBQUERY})
+        WHERE d.error IS NULL AND d.char_count > 0
+        AND d.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    n_extracted_failed = _count(f"""
+        SELECT COUNT(DISTINCT d.file_id)
+        FROM ds.agent_doc_markdown d
+        WHERE d.error IS NOT NULL
+        AND d.file_id IN ({CANONICAL_SUBQUERY})
+    """)
+    n_extracted_empty = _count(f"""
+        SELECT COUNT(DISTINCT d.file_id)
+        FROM ds.agent_doc_markdown d
+        WHERE d.error IS NULL AND COALESCE(d.char_count, 0) = 0
+        AND d.file_id IN ({CANONICAL_SUBQUERY})
     """)
     # Soll-Menge fuer Extraction = kanonisch ohne unsupported. Wenn Routing
     # noch nicht durch ist, kennen wir die finalen unsupported nicht — dann
     # nehmen wir vorlaeufig die ganze kanonische Menge und der Schritt zeigt
     # mehr Pending. Sobald Routing 100% durch ist, bekommen wir den exakten
     # Maßstab.
-    extraction_total = max(0, n_canonical - n_routed_unsupported)
+    extraction_total = max(0, n_canonical - n_routed_unsupported - n_routed_failed)
     extracted_clamped = min(n_extracted_canonical, extraction_total) if extraction_total else 0
-    n_extracted_pending = max(0, extraction_total - extracted_clamped)
+    n_extracted_pending = max(
+        0, extraction_total - extracted_clamped - n_extracted_failed - n_extracted_empty,
+    )
 
     # Suchindex — Soll-Menge = bereits extrahierte kanonische Files.
     # agent_search_docs.rel_path matcht agent_doc_markdown.rel_path
@@ -919,31 +952,39 @@ async def api_pipeline_status(slug: str):
         {
             "step_order": 4, "step_name": "Routing",
             "n_total": n_canonical, "n_done": n_routed_supported,
-            "n_failed": 0, "n_unsupported": n_routed_unsupported,
+            "n_failed": n_routed_failed,
+            "n_unsupported": n_routed_unsupported,
             "n_pending": n_routed_pending,
             "status": _status(
                 n_done=n_routed_supported,
                 n_total=n_canonical,
+                n_failed=n_routed_failed,
                 n_pending=n_routed_pending,
             ),
             "label": _bucket_label(
                 n_canonical, n_routed_supported, n_routed_pending,
-                n_failed=0, n_unsupported=n_routed_unsupported,
+                n_failed=n_routed_failed,
+                n_unsupported=n_routed_unsupported,
             ),
         },
         {
             "step_order": 5, "step_name": "Extraction",
             "n_total": extraction_total, "n_done": extracted_clamped,
-            "n_failed": 0, "n_unsupported": 0,
+            "n_failed": n_extracted_failed,
+            "n_empty": n_extracted_empty,
+            "n_unsupported": 0,
             "n_pending": n_extracted_pending,
             "status": _status(
                 n_done=extracted_clamped,
                 n_total=extraction_total,
+                n_failed=n_extracted_failed,
                 n_pending=n_extracted_pending,
             ),
             "label": _bucket_label(
                 extraction_total, extracted_clamped, n_extracted_pending,
-                n_failed=0, n_unsupported=0,
+                n_failed=n_extracted_failed,
+                n_empty=n_extracted_empty,
+                n_unsupported=0,
             ),
         },
         {
@@ -967,9 +1008,10 @@ async def api_pipeline_status(slug: str):
 
 
 def _bucket_label(n_total: int, n_done: int, n_pending: int,
-                  *, n_failed: int = 0, n_unsupported: int = 0) -> str:
+                  *, n_failed: int = 0, n_unsupported: int = 0,
+                  n_empty: int = 0) -> str:
     """Formatiert die Pillen-Beschriftung. Hauptanzeige `done / total`,
-    Zusatz-Tag bei Failed/Unsupported (`+N nicht unterstuetzt`).
+    Zusatz-Tags bei Failed/Empty/Unsupported.
     """
     if n_total == 0 and n_unsupported == 0:
         return "leer"
@@ -977,6 +1019,8 @@ def _bucket_label(n_total: int, n_done: int, n_pending: int,
     extras = []
     if n_failed > 0:
         extras.append(f"{n_failed} Fehler")
+    if n_empty > 0:
+        extras.append(f"{n_empty} leer")
     if n_unsupported > 0:
         extras.append(f"{n_unsupported} ohne Engine")
     return base + (f" ({', '.join(extras)})" if extras else "")
