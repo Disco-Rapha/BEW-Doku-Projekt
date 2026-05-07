@@ -667,6 +667,19 @@ async def api_pipeline_status(slug: str):
         ".docx", ".pptx",
         ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".gif",
     }
+    # ROUTABLE_EXT — Teilmenge von INDEXABLE_EXT, die das Routing-Modul
+    # `disco.docs.routing` heute kennt. Files ausserhalb dieser Menge
+    # (z.B. .docx, .pptx, .md, .txt) werden vom Routing nicht angefasst —
+    # sie zaehlen in der Pipeline-Ampel als 'unsupported' (kein Pending),
+    # damit der Schritt nicht ewig auf rot stehenbleibt. Sobald eine
+    # Engine fuer ein neues Format dazukommt (z.B. docx-mammoth), Eintrag
+    # hier ergaenzen — synchron mit `disco.docs._KIND_BY_EXT`.
+    ROUTABLE_EXT = {
+        ".pdf",
+        ".xlsx", ".xlsm", ".xls",
+        ".dwg", ".dxf",
+        ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".gif",
+    }
     n_fs = 0
     for root_name in ("sources", "context"):
         root_dir = proj_dir / root_name
@@ -715,6 +728,8 @@ async def api_pipeline_status(slug: str):
     # indexable), agent_doc_markdown nur Dokumente, die schon extrahiert
     # wurden (per Definition indexable), agent_search_docs nur indizierte
     # Dokumente. → Extension-Filter nur auf agent_sources noetig.
+    ROUTABLE_LIST = ",".join(f"'{e.lstrip('.')}'" for e in sorted(ROUTABLE_EXT))
+    EXT_ROUTABLE_AS = f"LOWER(s.extension) IN ({ROUTABLE_LIST})"
 
     n_registered = _count(
         f"SELECT COUNT(*) FROM ds.agent_sources s "
@@ -790,6 +805,25 @@ async def api_pipeline_status(slug: str):
     """
     n_canonical = _count(f"SELECT COUNT(*) FROM ({CANONICAL_SUBQUERY}) c")
 
+    # Schmalere Subquery: nur kanonische Files mit Extension, die das
+    # Routing-Modul tatsaechlich versteht. Files ausserhalb (z.B. DOCX,
+    # PPTX, MD, TXT) zaehlen separat als 'unsupported'.
+    CANONICAL_ROUTABLE_SUBQUERY = f"""
+        SELECT s.id FROM ds.agent_sources s
+        WHERE s.status='active' AND {AS_F} AND {EXT_ROUTABLE_AS}
+        AND NOT EXISTS (
+            SELECT 1 FROM ds.agent_source_relations r
+            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
+        )
+    """
+    n_canonical_routable = _count(
+        f"SELECT COUNT(*) FROM ({CANONICAL_ROUTABLE_SUBQUERY}) c"
+    )
+    # Implizit unsupported: kanonisch UND Extension nicht in ROUTABLE.
+    # Diese Files werden vom Routing-Flow nie angefasst — der Schritt
+    # darf sie NICHT als pending fuehren.
+    n_routed_unsupported_by_ext = max(0, n_canonical - n_canonical_routable)
+
     # Schritte 4-6 — neuer Maßstab pro Schritt:
     #   Schritt 4 Routing:    Soll-Menge = kanonische Files
     #   Schritt 5 Extraction: Soll-Menge = kanonisch UND mit Engine
@@ -818,22 +852,31 @@ async def api_pipeline_status(slug: str):
         AND w.error IS NULL
         AND w.file_id IN ({CANONICAL_SUBQUERY})
     """)
-    n_routed_unsupported = _count(f"""
+    n_routed_unsupported_explicit = _count(f"""
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
         WHERE (w.engine IS NULL OR w.engine = '')
         AND w.error IS NULL
         AND w.file_id IN ({CANONICAL_SUBQUERY})
     """)
+    # Gesamt-unsupported = explizit (Routing-Flow hat Eintrag mit engine='' angelegt)
+    # PLUS implizit (Extension nicht routable, Routing-Flow ignoriert die Datei).
+    # Beide gehoeren in dieselbe Kategorie: Schritt kann sie nicht weiter
+    # bearbeiten, sie sind aber bekannt und nicht "noch zu tun".
+    n_routed_unsupported = n_routed_unsupported_explicit + n_routed_unsupported_by_ext
     n_routed_failed = _count(f"""
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
         WHERE w.error IS NOT NULL
         AND w.file_id IN ({CANONICAL_SUBQUERY})
     """)
-    # Pending Routing = kanonisch − bereits bewertet (in irgendeiner Form)
+    # Pending Routing = kanonisch-routable − bereits bewertet. Die
+    # implizit unsupported Files (Extension nicht routable) zaehlen NICHT
+    # in den Nenner fuer Pending — sie sind ein eigener Bucket.
     n_routed_pending = max(
-        0, n_canonical - n_routed_supported - n_routed_unsupported - n_routed_failed,
+        0,
+        n_canonical_routable - n_routed_supported
+        - n_routed_unsupported_explicit - n_routed_failed,
     )
 
     # Extraction — nur kanonische Files mit Engine sind verarbeitbar.
@@ -859,35 +902,45 @@ async def api_pipeline_status(slug: str):
         WHERE d.error IS NULL AND COALESCE(d.char_count, 0) = 0
         AND d.file_id IN ({CANONICAL_SUBQUERY})
     """)
-    # Soll-Menge fuer Extraction = kanonisch ohne unsupported. Wenn Routing
-    # noch nicht durch ist, kennen wir die finalen unsupported nicht — dann
-    # nehmen wir vorlaeufig die ganze kanonische Menge und der Schritt zeigt
-    # mehr Pending. Sobald Routing 100% durch ist, bekommen wir den exakten
-    # Maßstab.
-    extraction_total = max(0, n_canonical - n_routed_unsupported - n_routed_failed)
+    # Soll-Menge fuer Extraction = kanonisch-routable abzueglich der
+    # Files, die das Routing als unsupported (kein Engine-Mapping) oder
+    # failed gefuehrt hat. Files mit nicht-routabler Extension waren nie
+    # Kandidat fuer den Extraction-Flow — die zaehlen schon in Schritt 4
+    # als unsupported und tauchen in der Extraction-Bilanz nicht auf.
+    extraction_total = max(
+        0,
+        n_canonical_routable - n_routed_unsupported_explicit - n_routed_failed,
+    )
     extracted_clamped = min(n_extracted_canonical, extraction_total) if extraction_total else 0
     n_extracted_pending = max(
         0, extraction_total - extracted_clamped - n_extracted_failed - n_extracted_empty,
     )
 
-    # Suchindex — Soll-Menge = bereits extrahierte kanonische Files.
-    # agent_search_docs.rel_path matcht agent_doc_markdown.rel_path
-    # (beide projekt-relativ mit sources/-/context/-Praefix dank Migration 009).
+    # Suchindex — Soll-Menge = bereits erfolgreich extrahierte kanonische
+    # Files (error IS NULL UND char_count > 0). agent_search_docs.rel_path
+    # matcht agent_doc_markdown.rel_path (beide projekt-relativ mit
+    # sources/-/context/-Praefix dank Migration 009).
+    #
+    # Zaehler beachtet beide Bedingungen:
+    #   - search_docs ohne error (sonst zaehlt er als failed)
+    #   - rel_path muss zu einem OK-extrahierten kanonischen doc_markdown
+    #     gehoeren (nicht nur zu irgendeinem doc_markdown — sonst zaehlen
+    #     fehlerhafte/leere Extracts mit, was passiert ist als der Indexer
+    #     vor unserer Failure-Aware-Filterung lief).
+    OK_EXTRACTED_REL_PATHS = f"""
+        SELECT d.rel_path FROM ds.agent_doc_markdown d
+        WHERE d.file_id IN ({CANONICAL_SUBQUERY})
+        AND d.error IS NULL AND d.char_count > 0
+    """
     n_indexed_canonical = _count(f"""
         SELECT COUNT(*) FROM ds.agent_search_docs sd
         WHERE sd.error IS NULL
-        AND sd.rel_path IN (
-            SELECT d.rel_path FROM ds.agent_doc_markdown d
-            WHERE d.file_id IN ({CANONICAL_SUBQUERY})
-        )
+        AND sd.rel_path IN ({OK_EXTRACTED_REL_PATHS})
     """)
     n_indexed_failed_canonical = _count(f"""
         SELECT COUNT(*) FROM ds.agent_search_docs sd
         WHERE sd.error IS NOT NULL
-        AND sd.rel_path IN (
-            SELECT d.rel_path FROM ds.agent_doc_markdown d
-            WHERE d.file_id IN ({CANONICAL_SUBQUERY})
-        )
+        AND sd.rel_path IN ({OK_EXTRACTED_REL_PATHS})
     """)
     indexed_total = n_extracted_canonical
     indexed_clamped = min(n_indexed_canonical, indexed_total) if indexed_total else 0
@@ -951,18 +1004,23 @@ async def api_pipeline_status(slug: str):
         },
         {
             "step_order": 4, "step_name": "Routing",
-            "n_total": n_canonical, "n_done": n_routed_supported,
+            # Maßstab fuer den Schritt: kanonisch-routable. Files mit
+            # nicht-routabler Extension werden in n_unsupported gezeigt,
+            # zaehlen aber NICHT in den Nenner (sonst stuende der Schritt
+            # ewig auf "rot" wegen DOCX/PPTX, die das Routing nie anfasst).
+            "n_total": n_canonical_routable,
+            "n_done": n_routed_supported,
             "n_failed": n_routed_failed,
             "n_unsupported": n_routed_unsupported,
             "n_pending": n_routed_pending,
             "status": _status(
                 n_done=n_routed_supported,
-                n_total=n_canonical,
+                n_total=n_canonical_routable,
                 n_failed=n_routed_failed,
                 n_pending=n_routed_pending,
             ),
             "label": _bucket_label(
-                n_canonical, n_routed_supported, n_routed_pending,
+                n_canonical_routable, n_routed_supported, n_routed_pending,
                 n_failed=n_routed_failed,
                 n_unsupported=n_routed_unsupported,
             ),

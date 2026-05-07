@@ -590,6 +590,88 @@ einzelne Streichungen + Neuformulierungen + agent-setup-Push.
 - Token-Verbrauch pro Turn sinkt mit kürzerem Prompt
 - Subjektiv: Disco wirkt fokussierter, weniger ablenkbar
 
+### E2E-Test-Befunde (aus Full-Test 2026-05-07, Szenarien 01+02)
+
+Aus dem ersten gemeinsamen Full-Test (User schaut zu, Claude
+fuehrt Disco im Browser) sind folgende Material-Punkte fuer die
+Review-Session entstanden. Siehe `tests/e2e/scenarios/01-source-onboarding.md`
+und `tests/e2e/scenarios/02-pipeline-fulltest.md` fuer Drehbuch
+und Beobachtungen.
+
+**Befund 1 — Skill `project-onboarding`, FS-Inhalt unsichtbar:**
+Bei "kurz orientieren" macht Disco `fs_list` nur top-level (sieht
+sources/ und context/ als dirs). Wenn `agent_sources` leer ist,
+schliesst er falsch auf "leer" — obwohl FS gefuellt sein kann (vor
+Erst-Scan ist Registry IMMER leer). Skill ergaenzen: vor Bericht
+ueber Quellen/Kontext rekursives `fs_list` machen, oder explizit
+"noch nicht registriert" sagen statt "leer".
+
+**Befund 2 — System-Prompt, Register zaghaft:**
+Auf "Ja, leg mal los. Was haben wir denn fuer Dateien?" hat Disco
+nur gelistet, nicht registriert — fragt nochmal. Erst auf "Ja, mach
+mal." kommt das `sources_register`. `list_skills` ja,
+`load_skill('sources-onboarding')` aber nicht. Trigger schaerfen:
+"User sagt 'los/leg los/mach mal' + sources/ enthaelt unregistrierte
+Files → direkt sources-onboarding-Skill laden + sources_register".
+
+**Befund 3 — Routing-Heuristik bei A3-Plaenen:**
+`02_schaltplan_a3.pdf` (727 KB, A3) wurde mit `pdf-azure-di`
+geroutet, nicht `pdf-azure-di-hr`. A3-Grossformate sollten HR
+triggern. Schwellenwert in `src/disco/docs/routing.py` pruefen
+(`max_page_width_pt > X` → HR). Liegt am Rand, koennte Tunable sein.
+
+**Befund 4 — Excel-Reporter, nur eine Statusspalte einfaerbbar:**
+`build_xlsx_from_tables` faerbt im Standard-Modus genau eine Spalte
+rot/gruen. SOLL/IST-Reports brauchen oft mehrere Statusspalten
+(z.B. Datenblatt / Statusnachweis / Schild / Berichtserwaehnung).
+Disco kommuniziert das transparent und bietet openpyxl-Custom-Pfad
+an. Reporter-Skill um `n` Statusspalten erweitern, oder im
+`excel-reporter`-Skill klar dokumentieren wann Custom-Weg.
+
+**Befund 5 — Failure-Triage, "alle" wird auf "gleicher Pfad" reduziert:**
+Bei 3 failed Files (07/10 DWG-libredwg, 09 Azure-DI-PDF) hat Disco
+auf "retry sie nochmal" nur die 2 DWGs angefasst, das PDF nicht.
+Inhaltlich nachvollziehbar (Server-Fehler retryt sich anders als
+Engine-Crash), aber User-"alle" wurde implizit gefiltert.
+System-Prompt-Diskussion: bei Mehrfach-Failure-Modi soll Disco
+explizit fragen oder alle anpacken?
+
+**Befund 6 — Failure-Zusammenfassung nicht in Tabelle:**
+Auf "kannst Du die mal kurz zusammenfassen mit Grund" kam keine
+Tabelle, sondern direkt die Retry-Aktion + Fliesstext-Bilanz. Bei
+anderen Reasoning-Aufgaben gibt Disco saubere Tabellen aus. Skill
+`pipeline-diagnostics` ergaenzen: Failure-Liste **immer** als
+`rel_path / engine / retry_count / Grund`-Tabelle vor jeder Aktion.
+
+**Befund 7 — DWG 07 (generische DWG aus Prod) failt mit libredwg:**
+Laut MANIFEST sollte 07_grundriss.dwg parseable sein (open verfuegbare
+DWG). libredwg crasht aber mit `dwg2dxf-SIGABRT`. Entweder DWG-
+Format zu modern (DWG2018+?) fuer libredwg, oder Datei doch korrupt.
+Nicht E2E-Stopper (Skipped wuerde sauber laufen), aber Pool-Slot
+austauschen oder libredwg-Version updaten. Gehoert nicht in die
+Review-Session — separater Engine-Pfad-Befund.
+
+**Befund 8 — Indexer-Race: `build_search_index` waehrend Extraction:**
+Beim Pipeline-Vollauslauf hat Disco `build_search_index` getriggert,
+**bevor** der `extraction`-Flow alle Items abgearbeitet hatte. Folge:
+6 von 9 ok-extrahierten Files landeten im Index, 3 (08/11/14a) fehlen
+weil ihr `agent_doc_markdown`-Eintrag zum Index-Zeitpunkt noch nicht
+existierte. Ein zweiter Indexer-Lauf wuerde sie nachziehen. Heute hilft
+nur ein zweiter Indexer-Aufruf. Loesungsvorschlaege:
+1. **Skill `pipeline-diagnostics`-Erweiterung:** wenn
+   Suchindex-Status < extracted-canonical, dann automatisch re-index
+   anbieten ("3 Files fehlen im Index, soll ich nachindizieren?").
+2. **Hard-Sync in Disco-System-Prompt:** `build_search_index` darf
+   erst nach `flow_status==done` des laufenden `extraction`-Runs
+   gerufen werden.
+3. **Indexer-Selbst-Aware:** `build_search_index` koennte am Anfang
+   pruefen, ob ein `extraction`-Run aktiv laeuft, und auf das Ende
+   warten oder warnen.
+Ampel-Endpoint zeigt die Inkonsistenz jetzt korrekt an (vorher hatte
+er 07/10 mit char_count=0 als "indexed" mitgezaehlt — Fix:
+n_indexed_canonical filtert auf `error IS NULL AND char_count > 0`,
+siehe Commit am 2026-05-07).
+
 ---
 
 ## Release / DevOps
