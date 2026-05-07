@@ -24,31 +24,6 @@ Disco weiß aktuell nicht, wie das Frontend aussieht. Er soll:
 → System-Prompt um eine kurze UI-Beschreibung ergänzen, damit Disco
   weiss welche Elemente wo sind.
 
-### Klickbare Links im Chat → Viewer + Explorer (Priorität: hoch)
-
-Wenn Disco im Chat eine Datei oder DB-Tabelle erwähnt, soll das ein
-**klickbarer Link** sein. Klick öffnet:
-- Datei im **Viewer** (rechts)
-- Datei im **Explorer** (links, selektiert/aufgeklappt)
-
-Beispiel im Chat:
-> "Ich habe die Ergebnisse in [`exports/ibl_2026-04-17_v1.xlsx`](#) 
-> gespeichert. Die Tabelle [`agent_sources`](#) enthält jetzt 1763 
-> Einträge."
-
-Klick auf den Excel-Link → Viewer öffnet die Excel rechts.
-Klick auf den Tabellen-Link → Viewer zeigt die DB-Tabelle paginiert.
-
-**Technisch:**
-- Disco gibt im Markdown spezielle Links:
-  `[dateiname](disco://file/exports/ibl.xlsx)` oder
-  `[tabellenname](disco://table/agent_sources)`
-- Frontend erkennt das `disco://`-Protokoll und routet entsprechend
-- Alternativ: ein `data-`-Attribut im HTML das das Frontend abfängt
-
-→ System-Prompt: "Wenn Du Dateien oder Tabellen im Chat erwähnst,
-  verlinke sie, damit der Nutzer direkt draufklicken kann."
-
 ### Slash-Referenzen im Chat-Input (Priorität: hoch)
 
 Der Nutzer will im Chat einfach auf **konkrete Ressourcen des aktiven
@@ -137,73 +112,6 @@ Infrastruktur steht.
 **Optional, nicht entschieden:** `xlsx_inspect_full` — Read-Tool, das
 Styles/Merges/Formeln strukturiert als JSON liefert, damit Disco fuers
 reine Anschauen nicht jedes Mal 15 Zeilen Python schreiben muss.
-
----
-
-### build_xlsx_from_tables erweitern (Prioritaet: mittel — zurueckgestellt 2026-05-05)
-
-Heute deckt das Tool nur den Standard-Look ab (Header-Style, Zebra,
-AutoFilter, Status-Farben, Hyperlinks). Sobald der Nutzer mehr will
-(Conditional Formatting, Number-Formats pro Spalte, Multi-Level-
-Header, Cell Comments, gezielte Freeze-Pane-Position), greift Disco
-korrekt zu `excel-formatter` + run_python — aber das kostet Tokens
-und ist langsamer als ein Spec-Tool.
-
-**Vorgeschlagene v2-Spec-Felder pro Sheet:**
-- `number_formats` — `{column_key: "#,##0.00" | "0.00%" | "yyyy-mm-dd"}`
-- `conditional_formatting` — Liste von Regeln pro Spalte (greater_than,
-  contains, older_than_days etc. → fill/font_bold)
-- `cell_comments` — `{column_key: "Tooltip"}` fuer Header oder Werte
-- `freeze_pane` — explizit setzbar (Default A2)
-- `multi_header` — zwei Header-Zeilen mit Spalten-Gruppen
-- `widen_columns` / `fix_column_width` — Override gegen Auto-Breite
-
-Bewusst NICHT in v2: Charts, Pivot-Tables. Die bleiben im
-`excel-formatter`-Pfad (zu spezifisch fuer Spec-Tool).
-
-**Status:** Entwurf steht. Wartet auf User-Praxis-Feedback nach den
-Routing-Aenderungen — wenn der openpyxl-Pfad in der Praxis bequem
-genug ist, koennen wir die Spec-Erweiterung evtl. ganz sparen.
-
----
-
-## Chat-Funktionalität
-
-### Chat haengt nach Foundry `response.failed` (Bug, Priorität: hoch — aus UAT 2026-04-20)
-
-**Symptom:** Waehrend ein Flow mit demselben Modell-Deployment lief
-(`gpt-5.1_prod`, Flow #4 dcc_repredict_lagerhalle), brach ein Agent-
-Turn mit "FEHLER: Foundry meldet Fehler: unbekannt" ab. Danach blieb
-der Chat in "Disco denkt..." haengen — neue User-Nachrichten
-liefen ins Leere, auch nach Browser-Reload (Cmd-R). Einziger Ausweg
-war ein **Prozess-Neustart des Servers**.
-
-**Vermutete Ursache:** Nach `response.failed` zeigt
-`previous_response_id` noch auf die vergiftete Response; Foundry
-kann die Chain nicht weiterbedienen, der Agent-Loop blockiert still
-im naechsten Stream-Aufruf (kein 400, kein Timeout sichtbar). Der
-Trigger-Fehler selbst war wahrscheinlich ein **429 / Quota-Limit**
-durch den parallel laufenden Flow (siehe Eintrag "Getrennte Modell-
-Deployments" unter Flows).
-
-**Teil-Fix bereits in Dev:** Reichere Fehlermeldung in
-`src/disco/agent/core.py` — statt "unbekannt" werden `code`, `type`
-und `message` aus `event.response.error` extrahiert und geloggt.
-Hilft beim Diagnostizieren, heilt aber den Hang nicht.
-
-**Noch zu bauen:**
-1. Nach `response.failed` die `previous_response_id` sofort auf NULL
-   setzen (Chain abbrechen, frischer Start beim naechsten User-Input).
-2. Server-seitigen WebSocket-Keepalive haerten: wenn der Agent-
-   Turn-Generator haengt, nach Timeout (z. B. 5 min) abbrechen und
-   dem Client ein Error-Event schicken, statt stumm zu blockieren.
-3. Im UI: Wenn "Disco denkt..." laenger als z. B. 90 s, eine
-   Hinweisbox mit "Neuen Turn starten"/"Verbindung ruecksetzen"
-   anzeigen.
-
-Schwesternbug zu "No tool output found" oben — gleicher Mechanismus
-(verseuchte Chain), anderer Trigger (response.failed statt offener
-Tool-Call).
 
 ---
 
@@ -364,74 +272,6 @@ Fix: auf `pdfjs-dist@3.11.174` gepinnt (letzte UMD-Version), in Dev
 
 ## Document Intelligence
 
-### Kosten-Monitoring + Sicherheitsgrenzen (Priorität: hoch)
-
-Alle externen Dienste kosten pro Call/Seite/Token. Risiko: ein
-festgefahrener Loop oder ein zu großer Batch kann unerwartet hohe
-Kosten verursachen.
-
-**Was wir absichern müssen:**
-
-1. **Agent-Calls (GPT-5):**
-   - MAX_TOOL_ROUNDS ist auf 24 gedeckelt → schützt vor Endlos-Loops
-   - Aber: Token-Kosten pro Turn sind nicht gedeckelt. Ein Turn mit
-     20 Tool-Calls und großen Results kann leicht 50-100k Tokens
-     fressen → 0.50-1.00 € pro Turn
-   - → Kosten-Tracker pro Session: nach jedem Turn die kumulierten
-     Tokens addieren, bei > X € warnen
-
-2. **Document Intelligence:**
-   - Pro Seite 0.00868 € (azure-di) bis 0.01389 € (azure-di-hr).
-     Eine 800-Seiten-Norm = 7-11 €.
-   - Risiko: User legt versehentlich 100 PDFs in context/ →
-     Disco jagt alle durch DI → 500-1000 €
-   - → Sicherheitsgrenze: max. N Seiten pro Context-Onboarding-Run
-     (z.B. 500 Seiten), danach Rückfrage. Oder: max. N PDFs pro
-     Run (z.B. 10), Rest manuell bestätigen.
-
-3. **Pipelines (Zukunft):**
-   - Pro Dokument ein LLM-Call = akkumulierte Kosten
-   - → Kosten-Schätzung VOR dem Run, Budget-Limit WÄHREND des Runs
-
-**Kurzfristig (jetzt):**
-- Im Flow `pdf_to_markdown`: Budget-Check vor dem Run
-  (Summe `estimated_cost_eur` aller gerouteten PDFs), bei > Limit
-  Rückfrage / Dry-Run-Mode
-- Im Context-Onboarding-Skill: nach > 5 PDFs oder > 300 Seiten
-  kumuliert Rückfrage an den User
-- Token-Zähler im Chat-Status-Bar unten (haben wir schon teilweise)
-
-**Mittelfristig:**
-- Kosten-Dashboard im UI (pro Projekt, pro Session, pro Tag)
-- Budget-Limits in der Projekt-Config (README oder .disco/config.json)
-- Alert wenn ein einzelner Turn > 1 € kostet
-
-### Kostenlimit verifizieren — ziehen die existierenden Schutzmechanismen wirklich? (Priorität: hoch — aus UAT 2026-04-20)
-
-Status: Kurz-Notiz aus Live-Test. Wir haben an mehreren Stellen Deckel
-eingebaut (MAX_TOOL_ROUNDS, DI-Page-Check im Skill, Flow-Budget), aber
-**noch nie überprüft, ob die auch wirklich greifen**, wenn Disco in
-einen Kostenfresser hineinrennt.
-
-**Test-Szenarien, die durchlaufen werden sollten:**
-
-1. **Agent-Loop-Deckel:** Disco in eine Schleife schicken
-   (z.B. "rufe list_skills 40× hintereinander auf") — bricht er bei
-   Round 24 ab? Was sieht der Nutzer?
-2. **DI-Page-Limit:** PDF mit > 200 Seiten durch Flow `pdf_to_markdown`
-   (Engine `azure-di-hr`) jagen — kommt eine Warnung? Wird der Call
-   trotzdem ausgeführt oder blockiert? (aktuell: weder Warnung noch
-   Blockade — Policy muss erst definiert werden).
-3. **Flow-Budget:** Flow-SDK hat `budget_eur`-Feld (siehe flows/sdk.py).
-   Mini-Flow schreiben, der bewusst das Budget überschreiten würde —
-   stoppt der Worker wirklich, oder läuft er einfach weiter?
-4. **Context-Onboarding > 5 PDFs:** Context-Ordner mit 10 kleinen PDFs
-   füllen — fragt Disco wirklich nach, oder schickt er alle auf
-   einmal los?
-
-**Ergebnis der Tests in Backlog nachtragen** und offene Lücken
-(z.B. Flow-Budget zieht nicht) als separate Bug-Einträge aufmachen.
-
 ### DI-Kosten im Chat sichtbar machen (Priorität: hoch — aus UAT 2026-04-20)
 
 Status: Nutzer-Beobachtung — "Bei DI sind keine Kosten sichtbar.
@@ -485,51 +325,6 @@ Qualitaetsvorteil gegenueber docling-standard.
 
 ## Sicherheit / Projekt-Isolation
 
-### Projekt-Lifecycle gehört dem Nutzer, nicht dem Agenten (Priorität: hoch — aus UAT 2026-04-20)
-
-Disco lebt **innerhalb** eines Projekts und darf Projekte weder anlegen
-noch löschen. Das ist eine bewusste Rollen-Trennung, nicht ein
-Implementierungs-Detail:
-
-- **Mensch:** entscheidet welche Projekte es gibt, wie sie heißen, wann
-  sie weg dürfen. Mandantengrenze.
-- **Disco:** arbeitet innerhalb der Sandbox des aktiven Projekts. Keine
-  Projekt-übergreifende Manipulation.
-
-Aktueller Zustand:
-- Projekt-Anlage geht nur per CLI (`disco project init <slug>`). Im FE
-  gibt es keinen Button dafür.
-- Projekt-Löschung geht gar nicht — man muss den Ordner unter
-  `~/Disco/projects/` manuell wegräumen, die DB-Zeile in `projects`
-  bleibt liegen.
-- Der Agent hat theoretisch Tools (`list_projects`), die ihm die
-  Projekt-Existenz zeigen — er kann sie aber (zu Recht) nicht anlegen
-  oder löschen. Diese Lücke darf er auch nie bekommen.
-
-Umsetzung:
-
-1. **FE:** Sidebar oben rechts neben dem Projekt-Dropdown zwei Buttons:
-   - „+" → Modal „Neues Projekt anlegen" (slug, name, description,
-     Checkbox „Sample-Dateien anlegen"). Ruft `POST /api/workspace/projects`.
-   - „🗑" → bei ausgewähltem Projekt → Bestätigungsdialog mit Slug
-     zum Abtippen (destructive confirm), dann `DELETE /api/workspace/projects/<slug>`.
-     Löscht DB-Zeile + Verzeichnisbaum (vorher Backup in
-     `~/Disco/.trash/<slug>-<timestamp>/`).
-
-2. **Backend:**
-   - `POST /api/workspace/projects` (neu) — ruft dieselbe
-     `init_project()`-Routine wie die CLI.
-   - `DELETE /api/workspace/projects/<slug>` (neu) — mit
-     `move-to-trash`-Semantik, nicht sofort `rm -rf`.
-
-3. **Agent-Tools bleiben so wie sie sind:**
-   - `list_projects` darf nur lesen (und nach „Nicht ausgewählte
-     Projekte dürfen unsichtbar sein" ggf. auch nicht mehr alle sehen).
-   - Es wird KEIN `create_project`- oder `delete_project`-Tool geben.
-     Wenn Disco im Chat fragt „soll ich ein neues Projekt anlegen?",
-     ist die richtige Antwort: „Bitte leg es selbst über die Sidebar an,
-     ich darf das nicht."
-
 ### `run_python` härten gegen Prompt-Injection (Priorität: mittel)
 
 Heute ist `run_python` die einzige Tool-Klasse, bei der Disco den
@@ -564,113 +359,6 @@ echten sensiblen Quellen notwendig.
 ---
 
 ## Flows / Worker-System
-
-### Cached-Input-Rabatt in Kostenberechnung (Priorität: mittel — 2026-04-22)
-
-Aktuell rechnet [compute_cost_eur](../src/disco/flows/sdk.py:135) jeden
-Input-Token zum Voll-Tarif ($1.38/1M bei GPT-5.1). Azure gewaehrt aber
-einen Cached-Input-Rabatt von **90 %** ($0.138/1M) fuer Tokens, die im
-Prompt-Cache gelandet sind (bleibt 5 Min warm).
-
-**Warum das viel ausmacht:**
-- Bei Flow-Loops (gleicher System-Prompt + Projekt-Kontext + Skill-Body
-  ueber 1000 Items) bleibt ein grosser Prompt-Anteil konstant.
-- Hitrate typisch 60–90 %, sprich: wir ueberschaetzen die Kosten aktuell
-  um 50–80 %.
-- Die echte Azure-Rechnung wird dann immer niedriger sein als unser
-  Live-Tracker anzeigt — konservativ, aber irritierend.
-
-**Was zu tun ist:**
-1. **Verifizieren:** Foundry Responses API liefert bei GPT-5.1 das Feld
-   `usage.input_tokens_details.cached_tokens`. Sobald ein Flow laeuft,
-   einmal die JSON-Response loggen und bestaetigen.
-2. **Signatur erweitern:** `compute_cost_eur(tokens_in, tokens_out, cached_in=0)`.
-   Formel: `billable_in = (tokens_in - cached_in) * rate_in + cached_in * rate_in * 0.10`.
-3. **Aufrufer umstellen:** In `FlowRun.add_cost_from_azure_response()`
-   (`src/disco/flows/sdk.py`) die Cached-Tokens aus der Response ziehen
-   und durchreichen. Auch im Agent-Core (chat-Turns, wo verfuegbar).
-4. **Retroaktive Nachberechnung** fuer Runs in `agent_flow_runs`:
-   nur moeglich, wenn wir Token-Counts granular in `agent_tool_calls`
-   gespeichert haben. Falls ja — kleiner Migrations-Run. Falls nein,
-   Historie stehen lassen.
-
-Abhaengigkeit: Prompt-Cache-Hits lohnen sich nur, wenn der System-Prompt
-+ Projekt-Kontext vor den variablen Teilen steht und > ca. 1024 Tokens
-ist. Prompt-Aufbau mal auditieren, falls die Hitrate zu niedrig ist.
-
-### Parallele Flow-Runs (Priorität: mittel — aus UAT 2026-04-19)
-
-Aktuell faehrt Disco Flows strikt sequentiell: er startet einen Flow,
-wartet bis er durch ist, dann den naechsten. Bei einem Projekt mit
-mehreren unabhaengigen Pipelines (z.B. DCC-Klassifikation + Metadaten-
-Extraktion + Excel-Export) wuerde paralleles Laufen die Wartezeit
-spuerbar verkuerzen — v.a. weil die LLM-Flows je Dokument die meiste
-Zeit auf Azure warten (I/O-bound).
-
-Anforderung aus UAT-Session 2026-04-19:
-> "merke dir noch, dass es die moeglichkeit geben soll mehrere flows
-> gleichzeitig laufen zu lassen"
-
-Offene Designpunkte:
-- **Scope:** darf ein einzelner Flow parallel zu sich selbst laufen
-  (2 Runs desselben Flows)? Oder nur unterschiedliche Flows?
-- **Isolation:** jeder Flow hat eigenen Worker-Prozess — SQLite-Writes
-  muessen WAL-Mode-tolerant sein (sollte bereits der Fall sein, pruefen).
-- **UI:** Flow-Panel muss mehrere laufende Runs gleichzeitig anzeigen.
-  Aktuell ist unklar, ob die Flow-Ansicht das rendert.
-- **Budget-Tracking:** globales Kosten-Budget vs. per-Run?
-- **Abhaengigkeiten:** darf ich Flow-B starten bevor Flow-A done ist,
-  wenn Flow-B auf Daten von Flow-A liest? Vermutlich ja (der User weiss
-  was er tut), aber Warnhinweis im Chat waere nett.
-
-Test-Szenario: in `uat-2026-04-19` DCC-Klassifikation und Metadaten-
-Extraktion gleichzeitig anwerfen — beide lesen aus `agent_md_extracts`,
-schreiben in unterschiedliche Tabellen, keine Kollision.
-
-### Standard-Flows fuer jedes Projekt (Priorität: mittel — aus UAT 2026-04-20)
-
-Es sollte eine Menge von Standard-Flows geben, die in **jedem neu angelegten
-Projekt automatisch vorhanden** sind (via Projekt-Template analog zu den
-Template-Migrationen). Damit startet kein Projekt auf der gruenen Wiese —
-die Basics liegen bereit, der Nutzer triggert sie nur.
-
-Muss vor Umsetzung einmal gemeinsam diskutiert werden:
-
-- **Welche Flows sind „Standard"?** Kandidaten:
-  - `sources_scan_and_register` — Sources scannen, hashen, in `agent_sources`
-    registrieren (heute Tool, koennte aber als Flow laufen fuer Audit-Trail)
-  - `pdf_routing_decision` + `pdf_to_markdown` — bereits als Library-Flows
-    umgesetzt (liegen unter `src/disco/flows/library/`), koennten aber per
-    Default in jedem neu angelegten Projekt sichtbar sein
-  - `dcc_classify_gpt5` — DCC-Klassifikation ueber Markdown-Extrakte
-  - `duplicate_detect` — Duplikat-Analyse per Hash + Name + Inhalt
-  - `context_manifest_refresh` — Kontext-Ordner neu indizieren
-- **Template vs. generiertes Code-Skelett?** Tradeoff:
-  - *Template-Kopie:* Runner + README als Datei-Template, wird beim
-    `disco project init` ins Projekt kopiert. Flexibler bei Anpassung,
-    aber Drift zwischen Projekten moeglich.
-  - *Shared Runner:* ein globaler Runner in `src/bew/flows/standard/`,
-    Projekt hat nur die README als Referenz. Weniger Drift, aber weniger
-    anpassbar pro Projekt.
-- **Aktualisierung:** wie bekommen bestehende Projekte einen neuen
-  Standard-Flow (oder ein Update)? `disco flow sync` als neues Kommando?
-- **Konfiguration pro Projekt:** Standard-Flows haben typische
-  Default-Configs (Budget, Engine-Wahl), die pro Projekt ueberschreibbar
-  sein muessen.
-- **Discoverability:** neues UI-Element „Standard-Flows" im Flow-Panel,
-  getrennt von projekt-spezifischen Flows.
-
-Ziel: ein neues Projekt ist nach `disco project init` direkt
-„produktionsbereit" — Sources registrieren, Markdown extrahieren,
-DCC klassifizieren geht One-Click, ohne dass Disco fuer jedes neue
-Projekt denselben Flow nochmal baut.
-
-Ursprung: UAT-Session 2026-04-20, als waehrend eines laufenden
-Extraction-Runs parallel eine zweite Engine-Variante als eigener Flow
-nachgezogen wurde — dabei wurde klar, dass solche Arbeit fuer jedes
-Projekt wiederholt wird, obwohl die Flows strukturell identisch sind.
-Teil davon ist inzwischen ueber die Flow-Library (`src/disco/flows/library/`)
-geloest, der Gesamt-Bootstrap steht aber noch aus.
 
 ### Overnight-Betrieb + Resume nach Sleep/Restart (Priorität: hoch — aus UAT 2026-04-20)
 
@@ -729,57 +417,6 @@ Ursprung: UAT-Session 2026-04-20, Nutzer-Frage nach Run #15:
 > nachdem disco neu gestartet wird bzw während des flows der
 > computer ausgeschaltet (oder sleep) wurde"
 
-### Getrennte Modell-Deployments fuer Agent vs. Flow (Priorität: hoch — aus UAT 2026-04-20)
-
-**Beobachtung:** Solange der Agent-Chat (`gpt-5.1_prod`) und der
-Flow-Worker (ebenfalls `gpt-5.1_prod`) auf **demselben Azure-
-Deployment** laufen, teilen sie sich **dieselbe TPM/RPM-Quota**.
-Waehrend Flow #4 mit ~27.600 TPM In lief, konnte der Agent parallel
-keinen Chat-Turn mehr abschliessen — vermutlich weil Foundry
-intern auf 429 lief und die Response verunglueckte (siehe Bug-
-Eintrag "Chat haengt nach Foundry response.failed" oben).
-
-**Wichtig zur Einordnung:** Modell-Deployment und Conversation-
-History sind komplett unabhaengig — der Chat hat weiterhin seine
-eigene `foundry_thread_id` und sein eigenes Context-Window.
-**Das einzige**, was Agent und Flow sich teilen, wenn sie dasselbe
-Deployment nutzen, ist die **Azure-seitige Rate-Limit-Quota** (und
-die Abrechnung).
-
-**Ziel:** Zweites Modell-Deployment in Foundry anlegen, exklusiv
-fuer Flows. Damit der Agent-Chat reaktionsfaehig bleibt, waehrend
-ein Flow an der Quota frisst.
-
-**Vorschlag (Sweden Central):**
-
-| Zweck | Deployment-Name | Verwendet von |
-|---|---|---|
-| Dev-Agent + Dev-Flows | `gpt-5.1` (bereits da) | Dev-Umgebung |
-| Prod-Agent (interaktiv) | `gpt-5.1_prod` (bereits da) | `AgentService` |
-| Prod-Flows (bulk) | `gpt-5.1_prod_flow` (neu) | Flow-Runner |
-
-**Umsetzung:**
-- Neues Deployment `gpt-5.1_prod_flow` im Foundry-Portal anlegen
-  (Modell gpt-5.1, eigene TPM-Quota bekommen). Deployments kosten
-  nichts extra — nur die tatsaechlichen Tokens.
-- `config.py` um `foundry_flow_model_deployment: str | None` erweitern.
-  Fallback auf `foundry_model_deployment`, wenn nicht gesetzt.
-- Flow-SDK (`src/disco/flows/sdk.py`) liest neu dieses Feld.
-- `.env.example` dokumentieren.
-- Runner-Migration: bestehende `runner.py`-Dateien in Flow-Ordnern
-  ziehen den Deployment-Namen aus `FlowRun` — entweder Property oder
-  Env-Variable, die das SDK ihnen durchreicht.
-
-**Parallel-Nebeneffekt:** Wenn mehrere Flows gleichzeitig laufen
-(siehe "Parallele Flow-Runs" oben), teilen die sich weiterhin das
-Flow-Deployment — das ist ok, da Bulk-Jobs inhaerent parallelisierbar
-sind und die Quota gezielt auf Durchsatz auslegbar ist.
-
-**Dev bleibt einfach:** In Dev reicht ein einziges Deployment,
-weil Raphael dort selten Agent+Flow gleichzeitig fahren wird.
-
----
-
 ## Docling / MLX
 
 ### Hybride Markdown-Pipeline (DONE 2026-04-22)
@@ -796,48 +433,6 @@ Ursprung: UAT-Session 2026-04-20 (Granite too slow) → Beschluss
 ---
 
 ## Architektur
-
-### Dashboards + Reports — Disco pflegt sie selbst (Priorität: mittel) — 2026-04-22
-
-**Wunsch des Nutzers:** Disco soll Dashboards und Reports **selbständig
-erstellen, konfigurieren und überarbeiten können**. Projekt-DB liefert die
-Daten, Frontend zeigt Visualisierungen, alles versionierbar im Projektordner.
-
-**Drei geprüfte Wege mit Trade-off:**
-
-1. **Evidence.dev (Markdown + SQL → HTML):** Disco schreibt
-   `dashboards/foo.md` mit SQL-Blöcken, Evidence rendert statische Seiten.
-   MIT-Lizenz, SQLite nativ. Nachteil: Node-Stack + Build-Schritt kommen
-   ins Projekt.
-2. **Vega-Lite JSON-Specs + eigener Renderer (empfohlen):** Disco schreibt
-   `dashboards/foo.json`, Frontend rendert im bestehenden Viewer-Panel mit
-   Vega-Lite (~40 KB). Kein Fremd-Stack, max. Kontrolle, Dashboards sind
-   einfache Files im Projekt. Nachteil: Dashboard-Verwaltung (Liste, Edit,
-   Parameter) bauen wir selbst.
-3. **Metabase lokal (Docker):** Industriestandard, REST-API zum Steuern.
-   Nachteil: Docker-Dependency, Dashboards leben ausserhalb des Projekt-
-   ordners (nicht git-/SharePoint-syncbar).
-
-**Empfehlung: Variante 2** — passt zur lokalen Architektur und zur
-chat-getriebenen Arbeitsweise. Reports (PDF/Excel) lassen sich aus denselben
-Specs generieren (Renderer → Screenshot / Headless-Export), wobei wir fuer
-Excel schon `build_xlsx_from_tables` haben.
-
-**Skizze:**
-- Neuer Projekt-Ordner `dashboards/` mit `.json`-Dateien (Vega-Lite oder
-  erweiterte Disco-Spec mit SQL-Query + Layout-Metadaten).
-- Neues Agent-Tool `dashboard_create/update/delete` plus `dashboard_render`
-  (SQL-Query-Validation + Ergebnis → Vega-Lite-Bindings).
-- Viewer-Panel erkennt `.json` im Dashboard-Ordner und rendert.
-- Reports = Dashboard-Bundle + Markdown-Rahmen; Export-Pipeline baut
-  PDF/Excel.
-
-**Noch offen:** Dashboard-Parameter (Zeitfenster, Gewerke-Filter) — als
-Form im Viewer, oder nur als Chat-Instruktion an Disco?
-
-Ursprung: UAT-Session 2026-04-22, Feature-Wunsch des Nutzers.
-
----
 
 ### Tabellen-Katalog pro Projekt-DB (Priorität: mittel) — 2026-04-22
 
