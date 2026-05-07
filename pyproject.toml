@@ -45,6 +45,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/disco"]
 
+[dependency-groups]
+dev = [
+    "pillow>=12.2.0",
+    "reportlab>=4.5.0",
+]
+
 [project.scripts]
 disco = "disco.cli:main"
 disco-server = "uvicorn:main"
