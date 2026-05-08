@@ -26,7 +26,6 @@ from ..chat import repo as chat_repo
 from ..config import settings
 from ..db import connect
 from ..projects import list_projects, count_documents as proj_doc_count
-from ..sources import list_sources, create_source, get_source, parse_config, count_documents as src_doc_count
 from ..workspace import (
     archive_project as workspace_archive_project,
     bootstrap_all_project_migrations,
@@ -271,178 +270,6 @@ async def api_archive_project_by_slug(slug: str):
         return {"ok": True, **info}
     except (ValueError, FileNotFoundError) as exc:
         return {"error": str(exc)}
-
-
-# ---------------------------------------------------------------------------
-# REST-API: Quellen
-# ---------------------------------------------------------------------------
-
-@app.get("/api/projects/{project_id}/sources")
-async def api_list_sources(project_id: int):
-    sources = list_sources(project_id)
-    return [
-        {**s, "document_count": src_doc_count(s["id"]), "config": parse_config(s)}
-        for s in sources
-    ]
-
-
-@app.post("/api/projects/{project_id}/sources")
-async def api_create_source(project_id: int, body: dict):
-    name = body.get("name", "").strip()
-    site_url = body.get("site_url", "").strip()
-    library = body.get("library_name", "Dokumente").strip()
-    if not name or not site_url:
-        return {"error": "name und site_url sind erforderlich"}
-    try:
-        s = create_source(project_id, name, site_url, library)
-        return {**s, "document_count": 0, "config": parse_config(s)}
-    except ValueError as exc:
-        return {"error": str(exc)}
-
-
-# ---------------------------------------------------------------------------
-# REST-API: Snapshot + Delta Sync
-# ---------------------------------------------------------------------------
-
-# Laufende Sync-Jobs: source_id → {"status": "running"|"done"|"error", "result": ...}
-_sync_jobs: dict[int, dict[str, Any]] = {}
-
-
-def _run_snapshot_bg(source_id: int) -> None:
-    """Snapshot im Hintergrund-Thread."""
-    from ..sharepoint.auth import MSALTokenManager
-    from ..sharepoint.graph import GraphClient
-    from ..sharepoint.sync import SharePointSyncer, SyncError
-
-    _sync_jobs[source_id] = {"status": "running", "mode": "snapshot"}
-    conn = connect()
-    try:
-        source = get_source(source_id)
-        mgr = MSALTokenManager(settings.msal_tenant_id, settings.msal_client_id)
-        graph = GraphClient(mgr)
-        syncer = SharePointSyncer(conn, graph, source)
-        result = syncer.run_snapshot()
-        _sync_jobs[source_id] = {"status": "done", "mode": "snapshot", "result": asdict(result)}
-    except Exception as exc:
-        logger.exception("Snapshot Fehler source %d", source_id)
-        _sync_jobs[source_id] = {"status": "error", "mode": "snapshot", "error": str(exc)}
-    finally:
-        conn.close()
-
-
-def _run_delta_bg(source_id: int) -> None:
-    """Delta-Sync im Hintergrund-Thread."""
-    from ..sharepoint.auth import MSALTokenManager
-    from ..sharepoint.graph import GraphClient
-    from ..sharepoint.sync import SharePointSyncer, SyncError
-
-    _sync_jobs[source_id] = {"status": "running", "mode": "delta"}
-    conn = connect()
-    try:
-        source = get_source(source_id)
-        mgr = MSALTokenManager(settings.msal_tenant_id, settings.msal_client_id)
-        graph = GraphClient(mgr)
-        syncer = SharePointSyncer(conn, graph, source)
-        result = syncer.run_delta()
-        _sync_jobs[source_id] = {"status": "done", "mode": "delta", "result": asdict(result)}
-    except Exception as exc:
-        logger.exception("Delta Fehler source %d", source_id)
-        _sync_jobs[source_id] = {"status": "error", "mode": "delta", "error": str(exc)}
-    finally:
-        conn.close()
-
-
-@app.post("/api/sources/{source_id}/snapshot")
-async def api_snapshot(source_id: int):
-    """Startet einen Metadata-Snapshot (Hintergrund). Kein Dateidownload."""
-    if not settings.msal_tenant_id or not settings.msal_client_id:
-        return {"error": "MSAL_TENANT_ID / MSAL_CLIENT_ID nicht konfiguriert."}
-    job = _sync_jobs.get(source_id, {})
-    if job.get("status") == "running":
-        return {"status": "already_running", "mode": job.get("mode")}
-    threading.Thread(target=_run_snapshot_bg, args=(source_id,), daemon=True).start()
-    return {"status": "gestartet", "mode": "snapshot", "source_id": source_id}
-
-
-@app.post("/api/sources/{source_id}/delta")
-async def api_delta(source_id: int):
-    """Startet einen Delta-Sync (Hintergrund). Nur Änderungen seit letztem Snapshot."""
-    if not settings.msal_tenant_id or not settings.msal_client_id:
-        return {"error": "MSAL_TENANT_ID / MSAL_CLIENT_ID nicht konfiguriert."}
-    job = _sync_jobs.get(source_id, {})
-    if job.get("status") == "running":
-        return {"status": "already_running", "mode": job.get("mode")}
-    threading.Thread(target=_run_delta_bg, args=(source_id,), daemon=True).start()
-    return {"status": "gestartet", "mode": "delta", "source_id": source_id}
-
-
-@app.get("/api/sources/{source_id}/sync-status")
-async def api_sync_status(source_id: int):
-    """Aktueller Status eines laufenden oder abgeschlossenen Sync-Jobs."""
-    return _sync_jobs.get(source_id, {"status": "idle"})
-
-
-@app.post("/api/sources/{source_id}/import-json")
-async def api_import_json(source_id: int, file: UploadFile = File(...)):
-    """Importiert einen SharePoint REST-API JSON-Export (Hintergrund-Thread).
-
-    Akzeptiert eine JSON-Datei die mit dem Browser-Export-Script erstellt wurde.
-    """
-    job = _sync_jobs.get(source_id, {})
-    if job.get("status") == "running":
-        return {"status": "already_running", "mode": job.get("mode")}
-
-    content = await file.read()
-
-    def _run(raw: bytes) -> None:
-        from ..sharepoint.import_json import SharePointJSONImporter
-        _sync_jobs[source_id] = {"status": "running", "mode": "import"}
-        # Temporäre Datei anlegen
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
-            tmp.write(raw)
-            tmp_path = Path(tmp.name)
-        conn = connect()
-        try:
-            importer = SharePointJSONImporter(conn, source_id)
-            result = importer.run(tmp_path)
-            _sync_jobs[source_id] = {
-                "status": "done",
-                "mode": "import",
-                "result": asdict(result),
-            }
-        except Exception as exc:
-            logger.exception("JSON-Import Fehler source %d", source_id)
-            _sync_jobs[source_id] = {
-                "status": "error",
-                "mode": "import",
-                "error": str(exc),
-            }
-        finally:
-            conn.close()
-            tmp_path.unlink(missing_ok=True)
-
-    threading.Thread(target=_run, args=(content,), daemon=True).start()
-    return {"status": "gestartet", "mode": "import", "source_id": source_id, "filename": file.filename}
-
-
-@app.get("/api/sources/{source_id}/sp-fields")
-async def api_sp_fields(source_id: int):
-    """Alle bekannten SP-Feldnamen dieser Quelle (für Spalten-Toggle in UI)."""
-    conn = connect()
-    try:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT f.field_name
-            FROM document_sp_fields f
-            JOIN documents d ON d.id = f.document_id
-            WHERE d.source_id = ?
-            ORDER BY f.field_name
-            """,
-            (source_id,),
-        ).fetchall()
-        return [r["field_name"] for r in rows]
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -737,17 +564,11 @@ async def api_pipeline_status(slug: str):
     )
 
     # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
-    # agent_source_metadata ODER agent_sharepoint_docs.
-    # Soll-Menge = kanonische Files (Duplikate brauchen keine separate
-    # Anreicherung, sie zeigen ueber duplicate-of auf das kanonische
-    # Original).
-    # agent_sharepoint_docs existiert nur in Projekten mit SP-Connector;
-    # deshalb erst pruefen, sonst wuerde die ganze EXISTS-Klausel die
-    # n_enriched-Query abreissen (OperationalError → _count=0).
-    sp_table_exists = bool(_count(
-        "SELECT COUNT(*) FROM sqlite_master "
-        "WHERE type='table' AND name='agent_sharepoint_docs'"
-    ))
+    # agent_source_metadata. Soll-Menge = kanonische Files (Duplikate
+    # brauchen keine separate Anreicherung, sie zeigen ueber
+    # duplicate-of auf das kanonische Original).
+    has_sp = 0  # SharePoint-Connector ist 2026-05-08 entfernt — Feld
+                # bleibt als 0 fuer Kompatibilitaet zum API-Response.
     canonical_filter_for_enrich = (
         "AND NOT EXISTS ("
         "  SELECT 1 FROM ds.agent_source_relations r "
@@ -761,26 +582,7 @@ async def api_pipeline_status(slug: str):
         WHERE s.status='active' AND {AS_F} AND {EXT_AS}
         {canonical_filter_for_enrich}
     """)
-    if sp_table_exists:
-        has_sp = _count(f"""
-            SELECT COUNT(DISTINCT s.id)
-            FROM ds.agent_sources s
-            JOIN agent_sharepoint_docs sp ON sp.FileName = s.filename
-            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
-            {canonical_filter_for_enrich}
-        """)
-        n_enriched = _count(f"""
-            SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
-            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
-            {canonical_filter_for_enrich}
-            AND (
-                EXISTS (SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id)
-                OR EXISTS (SELECT 1 FROM agent_sharepoint_docs sp WHERE sp.FileName = s.filename)
-            )
-        """)
-    else:
-        has_sp = 0
-        n_enriched = _count(f"""
+    n_enriched = _count(f"""
             SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
             WHERE s.status='active' AND {AS_F} AND {EXT_AS}
             {canonical_filter_for_enrich}

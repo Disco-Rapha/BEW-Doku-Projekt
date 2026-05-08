@@ -65,7 +65,6 @@ ENV_BLOCKLIST_PREFIXES = (
     "AZURE_DOC_INTEL_",
     "ANTHROPIC_",
     "OPENAI_",
-    "MSAL_",
 )
 
 

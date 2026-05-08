@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     disco_env: str = "prod"
 
     # ------------------------------------------------------------------
-    # Azure / Foundry / OpenAI / MSAL — wie gehabt
+    # Azure / Foundry / OpenAI
     # ------------------------------------------------------------------
     azure_doc_intel_endpoint: str | None = None
     azure_doc_intel_key: str | None = None
@@ -65,9 +65,6 @@ class Settings(BaseSettings):
     # alter projekt-eigener Flow, der noch settings.azure_openai_deployment
     # liest, bricht zur Laufzeit mit AttributeError — bewusst, damit
     # Disco den Flow auf foundry_flow_model_deployment migriert.
-
-    msal_tenant_id: str | None = None
-    msal_client_id: str | None = None
 
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
@@ -180,11 +177,5 @@ class Settings(BaseSettings):
     def skills_dir(self) -> Path:
         """Skills leben im Code-Repo (zentral, versionierbar)."""
         return REPO_ROOT / "skills"
-
-    @property
-    def token_cache_path(self) -> Path:
-        """MSAL-Token-Cache liegt im Workspace (nicht im Code-Repo)."""
-        return self.workspace_root / ".msal_token_cache.json"
-
 
 settings = Settings()

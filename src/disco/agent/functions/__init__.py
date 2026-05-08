@@ -160,7 +160,6 @@ def _json_fallback(obj: Any) -> Any:
 # ---------------------------------------------------------------------------
 # Eager-Import aller Function-Module, damit deren @register-Dekoratoren laufen
 # ---------------------------------------------------------------------------
-from . import domain  # noqa: E402,F401
 from . import data    # noqa: E402,F401 — sqlite_query, sqlite_write
 from . import fs      # noqa: E402,F401 — fs_list/read/write/mkdir/delete + bytes
 from . import doc_markdown  # noqa: E402,F401 — doc_markdown_read (agent_doc_markdown, alle Formate)

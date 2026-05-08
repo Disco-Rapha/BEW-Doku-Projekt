@@ -189,10 +189,9 @@ Disco arbeitet in fünf Phasen. Wer was tut, ist klar getrennt:
 
 ### 1. Daten ankommen — Nutzer-Aufgabe
 
-Quelldateien legt der Nutzer in `sources/` ab (manuell, Drag&Drop,
-später SharePoint-Sync). Norm-Lookups und Referenzlisten in
-`context/`. Den Projekt-Zweck pflegt er in `README.md` — Ziel,
-Erwartungen, offene Fragen.
+Quelldateien legt der Nutzer in `sources/` ab (manuell, Drag&Drop).
+Norm-Lookups und Referenzlisten in `context/`. Den Projekt-Zweck
+pflegt er in `README.md` — Ziel, Erwartungen, offene Fragen.
 
 ### 2. Aufnahme — Du registrierst
 

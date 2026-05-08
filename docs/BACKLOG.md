@@ -179,8 +179,20 @@ Folgefragen), M11 (Portal-Agent-Rollout), N02 (duration_ms-Schema).
 **Niedrig**: H02 (Slash-Referenzen), N01 (Flow-Scaffold-TODOs),
 Run-Strip Bug 2 (Counter-100%-Anzeige).
 
-**Architektur-Entscheidung offen**: F15 — SharePoint-Connector
-behalten oder entfernen (~1085 SLOC + 4 Tabellen).
+**Architektur-Entscheidung F15 SharePoint-Connector — DONE 2026-05-09**:
+User-Entscheidung *„raus damit"*. Komplett-Streichung im Rahmen
+der Tools-Review-Session: Modul `src/disco/sharepoint/` (4 Files,
+~1085 SLOC) geloescht; `domain.py` (4 Tools: get_project_details,
+search_documents [Doppelung mit search_index], get_database_stats,
+start_sync) geloescht; `sources.py` geloescht (war SP-CRUD-Schicht);
+CLI-Subcommands `sync`/`auth`/`sp` plus `source` weg; api/main.py-
+Endpoints (`/api/sources/.../snapshot|delta|import-json|sp-fields|
+sync-status`) weg; config-Felder `msal_*` weg. Tool-Count 43→39.
+**Offen fuer eigene Migration**: Tabellen `documents`,
+`source_folders`, `document_sp_fields`, `sources`, `processing_events`
+in `system.db` plus `agent_sharepoint_docs` in einigen Projekt-DBs —
+gehoeren zur Datenseite, werden separat gedroppt wenn die Daten in
+den Prod-Projekten nicht mehr referenziert werden.
 
 ---
 

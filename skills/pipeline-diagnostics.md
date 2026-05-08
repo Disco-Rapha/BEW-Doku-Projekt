@@ -141,6 +141,38 @@ WHERE rel_path = (SELECT 'sources/' || rel_path FROM ds.agent_sources WHERE rel_
 
 ## Reparatur-Workflows
 
+### Pipeline-Volldurchlauf (Routing → Extraktion → Suchindex)
+
+**Wenn der Nutzer "die ganze Pipeline laufen lassen" sagt** (oder
+synonyme Formulierungen wie *„Routing, Extraktion, Suchindex"*,
+*„komplett durchlaufen"*, *„alles indizieren"*), führst Du **alle drei
+Schritte selbst aus** — auch den Suchindex-Bau am Ende. Kein
+Zwischen-Stop, kein neues *„soll ich auch noch …?"*.
+
+```text
+# 1. Routing
+flow_run({"flow_name": "extraction_routing_decision"})
+# → polling via flow_status, bis status='done'
+
+# 2. Extraktion
+flow_run({"flow_name": "extraction"})
+# → polling via flow_status, bis status='done'
+
+# 3. Suchindex — JETZT, NICHT VORHER
+build_search_index()
+# → returnt status='deferred' wenn extraction noch läuft. In dem Fall:
+#   flow_status erneut prüfen, dann build_search_index nochmal rufen.
+```
+
+**Häufige Falle:** der `build_search_index`-Race-Schutz bricht mit
+`status='deferred'` ab, wenn `extraction` noch `running` ist. Wenn
+das passiert, **wartest Du** auf `extraction.status == 'done'` und
+rufst `build_search_index` **selbst** noch einmal — der Nutzer
+muss das nicht erneut bestätigen.
+
+Bilanz-Meldung am Ende: alle drei Schritte zusammen, mit Failure-
+Tabelle (siehe „Was Du dem Nutzer zeigst" unten).
+
 ### Eine einzelne Datei durch die ganze Pipeline schicken
 
 ```text

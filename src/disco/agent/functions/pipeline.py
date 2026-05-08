@@ -141,34 +141,21 @@ def _pipeline_file_status(*, rel_path: str) -> dict[str, Any]:
         }
 
         # Schritt 2 — Externe Anreicherung
+        # (SharePoint-Connector ist 2026-05-08 entfernt — nur noch
+        # agent_source_metadata aus Begleit-Excel.)
         meta_count = conn.execute(
             "SELECT COUNT(*) AS c FROM ds.agent_source_metadata WHERE source_id = ?",
             (file_id,),
         ).fetchone()["c"]
-        # SP-Tabelle existiert nur in SP-aktiven Projekten
-        sp_count = 0
-        sp_table_exists = bool(conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type='table' AND name='agent_sharepoint_docs'"
-        ).fetchone()[0])
-        if sp_table_exists:
-            sp_count = conn.execute(
-                "SELECT COUNT(*) AS c FROM agent_sharepoint_docs sp "
-                "JOIN ds.agent_sources s ON s.filename = sp.FileName "
-                "WHERE s.id = ?",
-                (file_id,),
-            ).fetchone()["c"]
-        has_external_source = sp_table_exists or meta_count > 0
-        if not has_external_source:
+        if meta_count == 0:
+            # Ohne Begleit-Excel im Projekt gibt es keinen externen
+            # Anreicherungspfad — Schritt 2 ist 'na'.
             enrich_status = "na"
-        elif meta_count > 0 or sp_count > 0:
-            enrich_status = "done"
         else:
-            enrich_status = "pending"
+            enrich_status = "done"
         result["step_2_enriched"] = {
             "status": enrich_status,
             "metadata_rows": meta_count,
-            "sp_doc_rows": sp_count,
         }
 
         # Schritt 3 — Kanonik
