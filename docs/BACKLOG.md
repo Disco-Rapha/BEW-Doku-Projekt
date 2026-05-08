@@ -6,15 +6,96 @@ werden sollen.
 
 ---
 
-## TOP-Roadmap (Stand 2026-05-07)
+## TOP-Roadmap (Stand 2026-05-08)
 
 Re-Priorisierung nach Phase-2-Aufräumen. Echte „brennen-jetzt"-Items:
 
-1. **★ EXTRACTION-PIPELINE OVERHAUL** — Phase 2 (Office-Formate
+1. **★ Kundendaten-Trennung Software ↔ Repo** (User-Beobachtung
+   2026-05-08, prio HOCH — DSGVO-relevant)
+
+   **Symptom**: User hat an anderem Rechner Claude Code via GitHub
+   auf das Repo gelassen — Claude wusste sofort von den Prod-
+   Projekten („Lagerhalle", „Rea Denox" usw.). Das heisst: irgendwo
+   im Code/Doku des oeffentlich klonbaren Repos stehen
+   Kundendaten-Slugs. Verstoesst gegen die CLAUDE.md-Regel
+   *„Kundendaten niemals in Git"*.
+
+   **Identifizierte Lecks (Stand 2026-05-08, Quick-Scan):**
+
+   | Quelle | Treffer | Beispiel |
+   |---|---:|---|
+   | `docs/BACKLOG.md` | 10+ | Symptom-Beschreibungen ("Symptom 2026-05-07 (lager-halle, Prod):"), Run-IDs, Bug-Fixe pro Projekt |
+   | `docs/architecture-decisions.md` | 2 | „In der Praxis (rea-denox, lager-halle, campus-reuter)" |
+   | `scripts/backfill_pdf_page_offsets.py` | 1 | Beispiel-Aufruf im Docstring: `--project bew-rsd-campus-reuter` |
+   | **Commit-Bodies (Git-History)** | **26 Treffer** | Pipeline-Bug-Fixes, Diagnose-Commits — **liest jeder GitHub-Browser** |
+   | Commit-Subjects | 0 | sauber |
+   | `CLAUDE.md`, `system_prompt.md`, Skills | 0 | sauber |
+
+   **Aktion — Sofort (going forward, vor naechstem Commit):**
+
+   - Doku-Schreib-Konvention: **Pseudonyme** statt echter Slugs
+     verwenden. Vorschlag: `prod-A`, `prod-B`, `prod-C` mit
+     Mapping-Notiz **NUR** im lokalen Workspace
+     (`~/Disco/.repo-pseudonyms.txt`, gitignored), nicht im Repo.
+     Alternative: generische Begriffe wie „ein 1819-Datei-Projekt"
+     statt „lager-halle".
+
+   - **CLAUDE.md ergaenzen**: explizite Regel, dass Slugs aus
+     `~/Disco/projects/` weder in Code noch in Doku noch in
+     Commit-Messages auftauchen duerfen. Mit Pseudonym-Mapping-
+     Verweis.
+
+   - **Pre-Commit-Check** (klein, leicht): `git diff --cached`
+     gegen eine Liste bekannter Prod-Slugs greppen, bei Treffern
+     blockieren mit Hinweis aufs Pseudonym.
+
+   **Aktion — Repo-Cleanup (mittelfristig, eigene Session):**
+
+   - Bestehende Doku-Stellen anonymisieren: BACKLOG.md (10+) und
+     architecture-decisions.md (2) per Suchen/Ersetzen auf
+     Pseudonyme umstellen, scripts/backfill_pdf_page_offsets.py
+     analog. Bestand: noch alle Slugs einzeln abrufbar in dieser
+     Liste, wenn migriert in Pseudonym-Mapping.
+
+   - **Git-History-Rewrite (heikel)**: 26 Commit-Bodies enthalten
+     Slugs. BFG / git-filter-repo kann die History rewriten,
+     aber: alle Klone (auch User auf anderen Rechnern) muessen
+     dann frisch geklont werden, plus Force-Push auf origin.
+     Risiko abwaegen vs Nutzen — wenn Slugs harmlos
+     (Stadtteil-Namen ohne weitere Inhalte) ggf. on-going-forward
+     reicht.
+
+   **Aktion — Konvention dauerhaft:**
+
+   - **Phase-2-/Phase-3-Block 'Pseudonymisierung':** als eigener
+     Aufraeum-Block im Stil der bisherigen Bloecke (A-K), klar
+     abgeschlossen. Inkludiert die Doku-Migration, das
+     Pre-Commit-Hook, den CLAUDE.md-Eintrag.
+
+   - **Pruefung der Vergangenheit**: gibt es noch andere
+     Kundendaten-Spuren, die nicht Slugs sind? z.B.
+     KKS-Codes (Y0SBD32 AA501 etc.), Hersteller-Namen,
+     Personennamen aus Test-Output. Quick-Scan in eigener Session.
+
+   **Risikobewertung:**
+
+   - **DSGVO**: Slugs alleine sind keine personenbezogenen Daten,
+     aber sie verraten welche Kunden-Projekte BEW betreut.
+     Mandantenschutz-Argument.
+   - **Wettbewerbsrelevant**: Liste der bearbeiteten Projekte ist
+     vertrauliche Geschaeftsinformation.
+   - **Technisch riskant**: Git-History-Rewrite ist destruktiv,
+     wenn fehlerhaft.
+
+   **Vorschlag-Reihenfolge**: erst CLAUDE.md-Regel + Pre-Commit-
+   Hook (1h), dann Doku-Anonymisierung in dev-Branch (2h), dann
+   Entscheidung ueber History-Rewrite separat.
+
+2. **★ EXTRACTION-PIPELINE OVERHAUL** — Phase 2 (Office-Formate
    DOCX/PPTX + File-Internal-Metadata) und Phase 3 (Failed-Tracking
    für 🟡-Status) sind die nächsten großen Brocken. Heute Nachmittag
    geplant.
-2. **★ Memory-Architektur: Zwei-Schicht-Modell + Tabellen-Wissen
+3. **★ Memory-Architektur: Zwei-Schicht-Modell + Tabellen-Wissen
    bei Tabellen** — User-Beobachtung 2026-05-07 (lager-halle):
    `DISCO.md` (45 KB) und `NOTES.md` (28 KB) wachsen unkontrolliert,
    werden bei jedem Session-Start komplett gelesen → ~18 k Tokens
@@ -71,20 +152,20 @@ Re-Priorisierung nach Phase-2-Aufräumen. Echte „brennen-jetzt"-Items:
    - Migration der bestehenden DISCO.md/NOTES.md: automatisch
      zerlegen oder manuell vom Nutzer pro Projekt?
 
-3. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
+4. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
    mit User offen. Disco verzettelt sich in `work_*`-Tabellen ohne
    Lifecycle. Konsolidiert aus zwei Themen 2026-05-07.
-4. **★ System-Prompt + Skill + Tool Review-Session** — gemeinsamer
+5. **★ System-Prompt + Skill + Tool Review-Session** — gemeinsamer
    Walkthrough mit User: System-Prompt (782 Zeilen, 41 Sections, viel
    Doppelung) + alle 11 Skills (besonders `report-builder` mit nur
    1× Nutzung) + alle 42 Tools auf Sinn / Doppelung / Unklarheit
    prüfen. Ergebnis: gestraffter Prompt + bewusstere Skill-Liste +
    ggf. weitere Tool-Streichungen. User liest mit, ich liefere
-   Material.
-5. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
+   Material. **Material liegt: `docs/review-session-2026-05-08.md`**.
+6. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
    Server, Counter-Update nach Crash, DI-HighRes max_retries,
    LibreDWG SIGABRT). Eigene Bug-Fixing-Session geplant.
-6. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
+7. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
    echtem User-Pain. Drei Cluster (A/G/H) sind durch Phase 2
    erledigt, F+J teilweise. Rest gezielt abarbeiten.
 
@@ -104,6 +185,62 @@ behalten oder entfernen (~1085 SLOC + 4 Tabellen).
 ---
 
 ## UI / Chat-Erlebnis
+
+### BUG: Disco vorgaukelt Chat-Compaction obwohl er sie nicht ausloesen kann (Prio: hoch)
+
+**User-Beobachtung 2026-05-08, lager-halle:** User schreibt im Chat
+*"Bitte komprimiere jetzt den Chat. Schritt 1: memory_append mit
+chronologischem Eintrag …"*. Disco fuehrt `memory_append` auf
+NOTES.md aus und antwortet: *"✅ Komprimiert: NOTES ergaenzt, DISCO
+war bereits auf Stand"*. **Tatsaechlich wurde der Chat NICHT
+komprimiert** — `last_compaction_at` blieb auf altem Wert,
+`is_compacted=0` fuer 40 Messages, `token_estimate` weiterhin bei
+148k. Erst der gelbe „Komprimieren"-Button oben rechts oder ein
+`/compact`-Slash-Command ruft den echten Backend-Mechanismus
+(`run_compaction_with_handover()`).
+
+**Auswirkung**:
+- User glaubt, der Chat sei komprimiert, sieht aber UI weiterhin auf
+  90 % + → denkt der Sockel-Reduktions-Hebel sei wirkungslos.
+- Token-Limit-Crash droht, weil keine echte Compaction passiert.
+- Disco verbraucht trotzdem Tokens fuer den `memory_append`-Lauf.
+
+**Ursache**: Disco hat keinen Tool-Zugriff auf die Compaction-API.
+Im System-Prompt-Section *Dein Gedaechtnis* + *Wie Du mit dem
+Nutzer arbeitest* fehlt die Regel, dass *"komprimiere den Chat"*
+ein User-UI-Aktion ist, kein Disco-Tool-Aufruf.
+
+**Fix-Vorschlaege:**
+
+1. **System-Prompt-Regel ergaenzen** (kleinste Aenderung): bei
+   User-Wunsch *"komprimiere"* / *"compact"* soll Disco zuerst die
+   Session-Zusammenfassung in NOTES anlegen, **dann** explizit
+   sagen: *"Damit der Chat technisch komprimiert wird, klick bitte
+   den 'Komprimieren'-Button oben rechts (oder schicke `/compact`).
+   Ich kann den Schritt selbst nicht ausloesen."* Kein Vortaeuschen
+   einer Compaction.
+
+2. **UI-Hint im Chat-Render**: wenn Disco-Antwort den String
+   *"Komprimiert"* / *"komprimieren"* enthaelt UND keine Compaction
+   in den letzten 60 sec stattgefunden hat, blendet das Frontend
+   einen kleinen Hint ein: *„Hinweis: Disco hat den Chat nicht
+   technisch komprimiert. Klick hier zum echten /compact"*.
+
+3. **Tool fuer Disco** (gross, eher fuer Skill-Library-Aera): ein
+   `chat_compact()`-Tool, das die Compaction selbst ausloest mit
+   User-Bestaetigung. Bedingt: das Tool muss explizit User-OK
+   einholen, sonst koennte Disco aus Versehen frueh komprimieren
+   und damit Kontext verlieren.
+
+**Empfohlene Reihenfolge**: Fix #1 (System-Prompt-Regel) jetzt im
+Rahmen der TOP-5 Review-Session. Fix #2 als kleines UI-Patch
+danach. Fix #3 nur wenn nach Skill-Library-Aera der Bedarf
+besteht.
+
+**User-Quote 2026-05-08**: *"Trotzdem ist der kontext use bei 198k.
+Ahh ok ich muss im chat noch den cut machen. Ok, ja das ist nicht
+sauber gelöst, aber für mich jetzt erst mal funktional. Bitte als
+BUG ins BL"*.
 
 ### UI-Awareness für Disco (Priorität: mittel)
 
@@ -955,6 +1092,112 @@ sichtbar fuer alle Projekte, schreib-zugreifbar via dedizierte Tools.
 User-Quote (2026-04-25): *"einen public folder, in dem disco flows,
 Reports und exports ablegen kann. Der Ordner kann von allen Projekte
 gesehen und bearbeitet werden"*
+
+---
+
+## Skill-Library mit Daten-Paket — projektuebergreifend (Prioritaet: mittel, strategisch)
+
+**User-Idee 2026-05-08:** Skills sollen vom *Workflow-Playbook*
+(heute Markdown) zum *Workflow + Daten-Paket* werden. Eine Norm wie
+**VGB S 831** lebt nicht nur als „so pruefst Du gegen die Norm"-
+Anleitung, sondern bringt die Norm-Tabellen (DCC-Codes,
+Anforderungen, Klassen) gleich mit. Skills werden so zur
+projektuebergreifenden Wissens-Library — einmal pflegen, in jedem
+Projekt einheitlich nutzen.
+
+**Use-Cases (User-Vision-Doku 2026-05-07 verweist):**
+
+- `vgb-s-831` — Dokumentations-Standard, DCC-Codes + Anforderungen
+- `kks-rds-pp` — KKS-/RDS-PP-Hierarchie fuer Kraftwerks-Klassifikation
+- `din-ibl` — DIN-Informations-Bedarfs-Listen
+- `legal-fidic` — FIDIC-Klauseln + Notification-Pflichten
+- `qm-endkontrolle` — QM-Checklisten
+- `claim-trail` — Klausel-bezogene Korrespondenz-Strukturen
+
+### Architektur-Skizze (zur Diskussion, nicht final)
+
+Skills werden vom Single-File zum Verzeichnis:
+
+```
+skills/vgb-s-831/
+├── SKILL.md              ← Frontmatter + Workflow-Anweisungen
+├── data/
+│   ├── vgb_dcc_codes.csv
+│   ├── vgb_anforderungen.csv
+│   └── vgb_klassen.csv
+└── docs/
+    └── normbezug.md      ← Quellen, Versionen, Aenderungshistorie
+```
+
+Frontmatter erweitert um `provides`-Block:
+
+```yaml
+name: vgb-s-831
+version: 1.2.0
+description: VGB S 831 — Dokumentations-Anforderungen
+provides:
+  tables:
+    - name: context_skill_vgb_s_831_dcc_codes
+      source: data/vgb_dcc_codes.csv
+      schema: { dcc_code: text, beschreibung: text, gewerk: text }
+    - name: context_skill_vgb_s_831_anforderungen
+      source: data/vgb_anforderungen.csv
+```
+
+`load_skill` macht dann mehr als Markdown-Read:
+
+1. Schaut in der Projekt-DB nach `context_skill_<skill>_<table>`.
+2. Wenn fehlt → importiert aus `data/`.
+3. Wenn da, aber Skill-Version niedriger als verfuegbar → fragt User
+   („Update auf 1.2.0?").
+4. Liefert Markdown + Tabellen-Hint (aktueller Tabellen-Stand,
+   Beispielzeilen).
+
+### Verbindung zu bestehenden Themen
+
+- **Memory-Architektur-Reform (TOP-3)** — der „Tabellen-Wissen-bei-
+  Tabellen"-Punkt steckt direkt drin. Wenn jede Tabelle ihre eigene
+  Beschreibung mitbringt (Schema-Comment / `agent_table_docs` /
+  `_doc.md`), ist eine Skill-mitgelieferte Tabelle mit ihrer eigenen
+  Doku natuerlich konsistent. **Memory-Reform ist Voraussetzung.**
+- **Public-Workspace (oben)** — Skill-Library als konkrete
+  Anwendung. Skill-Daten koennen entweder pro Projekt importiert
+  werden (heute-naehe) oder aus `_public/data.db` per ATTACH gelesen
+  (Public-Workspace-Stufe 3).
+- **Vision-Doku** — die fuenf neuen Domain-Bereiche (Legal/Claim/
+  Contract/QM/Termin) sind genau dieses Muster: Domain-Skill mit
+  Klausel- bzw. Norm-Tabelle.
+
+### Risiken / offene Fragen
+
+| # | Frage | Klaerungsweg |
+|---|---|---|
+| 1 | **Lizenz/Copyright** bei VGB S 831 + DIN. Auszuege (DCC-Codes, Klassen) vermutlich vertretbar, **Volltext** der Anforderungen kritisch. Pro Skill abklopfen. | rechtliche Pruefung pro geplantem Skill, **bevor** wir Inhalte committen |
+| 2 | **Daten-Groesse + Repo-Bloat** — viele Skills à 10 MB schwellen das Repo. | Groessen-Limit setzen (z.B. < 5 MB pro Skill); grosse Skills aus `_public/`-Workspace laden statt aus Repo |
+| 3 | **Update-Strategie** — bei Norm-Aenderung von v1.1 → v1.2 in laufenden Projekten. Drei Optionen: manuell, automatisch, Pinning. | mit User entscheiden; **Pinning + User-Frage bei Diff** ist Default-Vorschlag |
+| 4 | **Cross-Skill-Daten-Konflikte** — zwei Skills wollen `context_kks` belegen. | Tabellen-Prefix `context_skill_<skill>_<table>` Pflicht |
+| 5 | **Projekt-Override** — Kunde hat angepasste Norm-Tabelle. | Skill-Tabellen sind read-only nach Import; Projekt darf eigene `context_<table>` daneben pflegen, hat Vorrang in Queries |
+| 6 | **Egress-Policy** (CLAUDE.md) — wenn Skills aus externer Cloud nachgeladen werden, neue Egress-Verbindung. Heute lokal-first. | Default: alles im Repo. Externe Quellen nur mit explizitem User-OK + Egress-Policy-Update. |
+| 7 | **Test-Aufwand** — pro Skill Migrations-Test + Daten-Validierungstest. | lohnt erst ab ~3-5 datentragenden Skills; vorher nur ein Pilot. |
+
+### Vorgehen (vorgeschlagene Reihenfolge)
+
+1. **Memory-Architektur-Reform (TOP-3) zuerst** — denn Tabellen-Doku-
+   Format wird dort entschieden.
+2. **Pilot-Skill `vgb-s-831`** — ein Skill bauen, einbauen, an einem
+   Projekt validieren. Lizenz vorher klaeren.
+3. **`load_skill`-Tool erweitern** um Daten-Import + Versions-Check.
+4. **Standardisierung als Block** (analog Phase-2-Bloecke) erst
+   nach erfolgreichem Pilot.
+
+### Klaerungsbedarf an User (vor finaler Spezifikation)
+
+- Lizenz-Status VGB S 831 + DIN-Normen — eigene Pruefung oder Auszug
+  reicht?
+- Update-Strategie: Pinning per Default oder Auto-Upgrade-Frage?
+- Erwartete Anzahl Skills (3, 10, 30+?) — beeinflusst stark, ob
+  „internes Skill-Verzeichnis" reicht oder Plugin-System noetig.
+- Memory-Reform vs Skill-Library zeitlich getrennt oder zusammen?
 
 ---
 
