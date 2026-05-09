@@ -1402,6 +1402,7 @@ _MIME_BY_EXT = {
     ".json": "application/json; charset=utf-8",
     ".xml": "application/xml; charset=utf-8",
     ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
     ".pdf": "application/pdf",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
@@ -1439,7 +1440,68 @@ async def api_workspace_file(slug: str, path: str):
             f"Datei zu gross fuer Inline-View ({size:,} B). Limit 50 MB.",
             status_code=413,
         )
-    return FileResponse(str(target), media_type=mime, filename=target.name)
+    # content_disposition_type="inline" → Browser darf die Datei direkt
+    # rendern (HTML im iframe, Bilder im <img>, etc.). Default in
+    # Starlette ist "attachment", was iframes leer laesst.
+    return FileResponse(
+        str(target),
+        media_type=mime,
+        filename=target.name,
+        content_disposition_type="inline",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Datei mit dem OS-Default-Programm oeffnen (Finder / Explorer / xdg-open)
+# ---------------------------------------------------------------------------
+#
+# Loest das aus, was ein Doppelklick im Finder/Explorer macht: HTML im
+# Default-Browser, PDF im Default-PDF-Reader, .xlsx in Excel, etc.
+#
+# Sicherheit:
+#   - POST (nie GET) → kein Drive-By per Link.
+#   - _safe_path_in_root() verhindert Path-Traversal aus dem Projekt heraus.
+#   - Wir uebergeben den absoluten Pfad als Argument (kein Shell-Eval),
+#     d. h. Sonderzeichen / Leerzeichen sind unkritisch.
+
+import shutil
+import subprocess
+import sys
+
+
+@app.post("/api/workspace/projects/{slug}/file/open")
+async def api_workspace_file_open(slug: str, path: str):
+    """Oeffnet die Datei mit dem Default-Programm des Betriebssystems."""
+    from fastapi.responses import JSONResponse, PlainTextResponse
+
+    try:
+        root = _resolve_project_root(slug)
+        target = _safe_path_in_root(root, path)
+    except (ValueError, FileNotFoundError) as exc:
+        return PlainTextResponse(str(exc), status_code=404)
+
+    abs_path = str(target)
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", abs_path])
+        elif sys.platform.startswith("win"):
+            # `start` ist ein cmd-Builtin, deshalb shell=True noetig — der
+            # Pfad geht aber sauber als Argument durch (kein User-String
+            # in der Shell).
+            subprocess.Popen(["cmd", "/c", "start", "", abs_path])
+        else:
+            opener = shutil.which("xdg-open") or shutil.which("gio")
+            if not opener:
+                return PlainTextResponse(
+                    "Kein OS-Opener gefunden (weder xdg-open noch gio).",
+                    status_code=501,
+                )
+            subprocess.Popen([opener, abs_path])
+    except Exception as exc:  # noqa: BLE001 — wir wollen die Exception sauber zurueckmelden
+        logger.warning("OS-Open fehlgeschlagen fuer %s: %s", abs_path, exc)
+        return PlainTextResponse(f"Konnte Datei nicht oeffnen: {exc}", status_code=500)
+
+    return JSONResponse({"ok": True, "path": abs_path})
 
 
 # ---------------------------------------------------------------------------

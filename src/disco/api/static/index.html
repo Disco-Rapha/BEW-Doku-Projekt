@@ -865,6 +865,13 @@ a:hover { text-decoration: underline; }
 .viewer-table tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
 .viewer-table td:hover { background: var(--panel2); }
 
+.viewer-html-frame {
+  width: 100%;
+  height: calc(100vh - 110px);
+  border: none;
+  background: #fff;
+  display: block;
+}
 .viewer-pre {
   font-family: var(--mono); font-size: 12px;
   white-space: pre-wrap; word-break: break-word;
@@ -1186,6 +1193,8 @@ a:hover { text-decoration: underline; }
   <aside id="viewer-pane">
     <div id="viewer-header">
       <span id="viewer-title">Viewer</span>
+      <button id="viewer-open-os" class="icon-btn" title="Mit Default-Programm im System oeffnen (Finder/Explorer)"
+              onclick="openCurrentFileInOS()" style="display:none">📂</button>
       <button class="icon-btn" title="Schliessen" onclick="closeViewer()">✕</button>
     </div>
     <div id="viewer-content">
@@ -1909,6 +1918,7 @@ function fileIcon(name) {
   if (['db','sqlite'].includes(e)) return '🗄️';
   if (['png','jpg','jpeg','svg'].includes(e)) return '🖼️';
   if (['json'].includes(e)) return '📋';
+  if (['html','htm'].includes(e)) return '🌐';
   return '📄';
 }
 function humanSize(b) {
@@ -2815,12 +2825,14 @@ async function openFileInViewer(path, name) {
     else if (['json'].includes(ext)) await renderJsonFile(url);
     else if (['xlsx','xlsm','xls'].includes(ext)) await renderExcelFile(url);
     else if (ext === 'pdf') await renderPdfFile(url);
+    else if (['html','htm'].includes(ext)) renderHtmlFile(url);
     else if (['dxf','dwg'].includes(ext)) await renderDxfFile(path, ext);
     else if (['png','jpg','jpeg','gif','svg','webp'].includes(ext)) renderImage(url);
     else await renderTextFile(url);
   } catch (e) {
     setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
   }
+  setViewerOpenOsVisible(true);
 }
 
 function setViewerTitle(name, path) {
@@ -2855,11 +2867,34 @@ function closeViewer() {
     state._dxfViewer = null;
   }
   setViewerTitle('Viewer', '');
+  setViewerOpenOsVisible(false);
   setViewerHtml(`
     <div id="viewer-empty">
       Keine Datei geöffnet.<br>
       Klick im Explorer auf eine Datei oder Tabelle.
     </div>`);
+}
+
+// Sichtbarkeit des "📂 im System oeffnen"-Buttons steuern
+function setViewerOpenOsVisible(visible) {
+  const btn = document.getElementById('viewer-open-os');
+  if (btn) btn.style.display = visible ? '' : 'none';
+}
+
+// Aktuell geoeffnete Datei mit dem OS-Default-Programm aufmachen
+async function openCurrentFileInOS() {
+  const f = state._viewerOpenFile;
+  if (!f || !state.activeProjectSlug) return;
+  const url = `/api/workspace/projects/${encodeURIComponent(state.activeProjectSlug)}/file/open?path=${encodeURIComponent(f.path)}`;
+  try {
+    const r = await fetch(url, { method: 'POST' });
+    if (!r.ok) {
+      const txt = await r.text();
+      alert(`Konnte nicht oeffnen: ${txt}`);
+    }
+  } catch (e) {
+    alert(`Konnte nicht oeffnen: ${e.message}`);
+  }
 }
 
 // ----- Markdown ----------------------------------------------------------
@@ -3188,6 +3223,22 @@ async function renderPdfPage() {
 function pdfPrev() { if (state._pdfPage > 1) { state._pdfPage--; renderPdfPage(); } }
 function pdfNext() { if (state._pdfPage < state._pdfTotal) { state._pdfPage++; renderPdfPage(); } }
 
+// ----- HTML --------------------------------------------------------------
+// HTML-Files werden in einem sandbox-iframe angezeigt. Sandbox blockt
+// Scripts/Forms/Top-Level-Navigation, damit eingebettete HTML uns nicht
+// die Disco-UI uebernimmt. Wer den vollen Render will, klickt auf
+// "📂 Im System oeffnen" und sieht es im richtigen Browser.
+function renderHtmlFile(url) {
+  const toolbar = `
+    <div class="viewer-toolbar">
+      <span>HTML — gerendert (Sandbox: keine Scripts)</span>
+      <span class="spacer"></span>
+      <button onclick="window.open('${url}', '_blank')">↗ in neuem Tab</button>
+    </div>`;
+  const body = `<iframe class="viewer-html-frame" sandbox="allow-same-origin" src="${url}"></iframe>`;
+  setViewerHtml(toolbar + body);
+}
+
 // =========================================================================
 // DB-Tabellen-Liste in Sidebar + Tabellen-Viewer
 // =========================================================================
@@ -3246,6 +3297,7 @@ async function openTableInViewer(table, db) {
   state._viewerOpenFile = null;
   const label = branch === 'datastore' ? 'datastore.db' : 'workspace.db';
   setViewerTitle('▤ ' + table, label);
+  setViewerOpenOsVisible(false);
   ensureViewerOpen();
   state._dbTable = table;
   state._dbBranch = branch;
