@@ -283,6 +283,54 @@ werden soll, naechste Iteration.
 
 ---
 
+**Alternative Spur fuer Office-Formate: Office-Add-In statt Render
+(User-Idee 2026-05-09).**
+
+Statt Excel/Word **in Disco zu rendern** koennten wir Disco **als
+Office-Add-In in Excel/Word reinstecken**. Excel selbst wird zum
+Viewer — Fidelity per Definition perfekt, native UX, keine
+Render-Krueke.
+
+**Architektur:** Manifest + Taskpane (HTML/JS, gleiche Stack-DNA wie
+unsere Web-UI). Office.js-API steuert Zellen, Formate, Sheets, Charts,
+Pivots, conditional Formatting, named Ranges, aktuelle Auswahl.
+Taskpane spricht ueber `localhost:8765` mit dem laufenden Disco-
+FastAPI. Free SDK, laeuft auf Windows + Mac + Office-Web.
+
+**Pro:**
+
+- Perfekte Excel-/Word-Fidelity (es ist Excel/Word)
+- User-Workflow bleibt nativ — keine zweite UI lernen
+- Word + PowerPoint kommen mit demselben Pattern
+- Keine Cloud-Abhaengigkeit (Office.js laeuft im lokalen Excel)
+- BEW-Kunde hat eh Office
+
+**Contra:**
+
+- Distribution-Frage: Sideload trivial fuer Dev, fuer Kunden entweder
+  Sideload-Anleitung pro Rechner / AppSource-Veroeffentlichung / oder
+  zentrales M365-Admin-Deployment im Vattenfall-Tenant
+- UX-Split: Web-UI fuer Doku-Pipeline, Taskpane fuer Office-Arbeit
+- Auth: Taskpane → localhost-Disco. Dev easy, Prod braucht
+  HTTPS-Cert + Origin-Check
+
+**Aufwand:**
+
+- MVP-Sideload (Manifest + Taskpane mit Chat-Iframe + 5
+  Office.js-Befehle): 3–5 Tage
+- Solider Stand (Pivot/Chart/Formel + Auth-Hardening + Selektion-
+  Sync): 1–2 weitere Wochen
+- Distribution: separat verhandelbar mit Kunden-IT
+
+**Empfehlung:** Office-Add-In ist fuer Office-Formate die saubere
+Architektur. Die Render-Spuren (LibreOffice→PDF, xlsx2html) bleiben
+trotzdem sinnvoll als Inline-Preview im Disco-Web-Viewer, damit man
+nicht jedes Mal Excel oeffnen muss, nur um eine Tabelle anzusehen.
+Beides parallel: Inline-Preview fuer „kurz reinschauen", Office-Add-
+In fuer „aktiv mit Disco an einem Bericht arbeiten".
+
+---
+
 ### BUG: Disco vorgaukelt Chat-Compaction obwohl er sie nicht ausloesen kann (Prio: hoch)
 
 **User-Beobachtung 2026-05-08, lager-halle:** User schreibt im Chat
