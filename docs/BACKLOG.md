@@ -198,6 +198,91 @@ den Prod-Projekten nicht mehr referenziert werden.
 
 ## UI / Chat-Erlebnis
 
+### IDEE: Live-WYSIWYG-Editing im Viewer fuer Reports/Tabellen/Text (Vision, prio MITTEL)
+
+**Stand 2026-05-09 — User-Idee, noch zu diskutieren.**
+
+**Kerngedanke:** Wenn Disco an einem HTML-Report, einer Excel-Tabelle
+oder einem Text-/Word-Dokument arbeitet, aktualisiert der Viewer im
+rechten Panel sofort live mit. So entsteht ein iterativer
+Schreib-Loop — *„Disco schreibt → ich sehe sofort was rauskommt → ich
+sage was anders soll → Disco aendert"* — der Viewer wird vom passiven
+Anzeiger zum aktiven Co-Working-Space.
+
+**Use-Case-Beispiel:** Ergebnisbericht fuer den Kunden. Statt
+Build-Run-Reload-Schleife schreibt Disco direkt im Builder, der Viewer
+zeigt den neuen Stand sofort, der Nutzer kommentiert was angepasst
+werden soll, naechste Iteration.
+
+**Was waere noetig:**
+
+- **WebSocket-Push** vom Server an den Viewer, sobald eine relevante
+  Datei geschrieben wird (`memory_write`, `fs_write`, Builder-Run).
+  Heute schon vorhanden fuer Chat — auf Datei-Events erweitern.
+- **Pro Format ein Sub-Workflow:**
+  - **HTML-Reports:** schon heute schoen rendern (Sandbox-iframe).
+    Live-Reload braucht nur: Datei-Watcher + iframe-`location.reload()`.
+    Builder-Pattern (`build_*.py` → `report.html`) passt perfekt rein.
+  - **Excel-Tabellen:** schwieriger. SheetJS rendert read-only,
+    Write-Back muesste ueber Zwischenformat (CSV, SQLite, MD-Tabelle).
+    Pragmatischer Pfad: Disco editiert eine Tabelle in der DB
+    (`work_*` oder `agent_*`), der Viewer rendert die Tabelle live —
+    Excel kommt erst beim Export ueber `build_xlsx_from_tables`.
+    „Live-Excel" ist eigentlich „Live-DB-Tabelle plus on-demand-Export".
+  - **Text-/Markdown-Dateien:** simpel — gleiche Live-Reload-Logik wie
+    HTML, der Markdown-Viewer rendert frisch.
+  - **Word (.docx):** schwierig in der Live-Schleife. Realistisch:
+    Disco schreibt in Markdown, exportiert per python-docx
+    on-demand. Vollwertiges WYSIWYG fuer .docx waere ein eigenes
+    Sub-Projekt (LibreOffice-Headless? OnlyOffice-Embedded?).
+    Erstmal raus aus dem MVP.
+
+**Architektur-Skizze (grob):**
+
+1. Datei-Watcher im FastAPI-Server (`watchdog`-Lib) horcht auf
+   `<projekt>/exports/**/*.html`, `<projekt>/exports/**/*.md`,
+   `<projekt>/data.db`-Aenderungs-Events.
+2. WebSocket-Topic `viewer-update` mit Payload `{path, kind, ts}`.
+3. Frontend abonniert das Topic, prueft ob `state._viewerOpenFile`
+   matched, dann `openFileInViewer(...)` neu aufrufen.
+4. Optional Soft-Reload-Animation, damit der User sieht „da ist gerade
+   was Neues angekommen".
+
+**Offene Fragen fuer die Diskussion:**
+
+- Wie umgehen mit Race-Conditions, wenn der Builder mitten im Schreiben
+  ist und der Watcher schon triggert? (Debounce? Atomic-Rename-Trigger?)
+- Soll Disco bewusst in einen *Edit-Modus* fuer eine Datei wechseln
+  koennen, oder ist jeder `fs_write` ein Trigger? Ersteres ist
+  vorhersagbarer, zweites braucht weniger neue Tools.
+- Token-Frage: jeder Disco-Edit-Zyklus kostet — bei einem Bericht-Bau
+  mit 20 Iterationen schnell 50k Tokens. Lohnt sich nur, wenn die
+  Iteration billiger als ein voller Builder-Run ist (also: kleine
+  gezielte Aenderungen, keine Voll-Rewrites).
+- HTML-Report-Builder-Pattern bevorzugen: kleine Edit-Tools fuer den
+  Builder (`patch_block`, `add_section`) statt Voll-Rewrite, damit
+  Disco gezielt aendern kann.
+
+**Anschluss an bestehende Bausteine:**
+
+- HTML-Viewer mit Sandbox-iframe ist seit 2026-05-09 da.
+- Builder-Pattern (`build_<slug>.py` + Snapshots `report_YYYY-MM-DD_vN.html`)
+  ist im `report-builder`-Skill etabliert.
+- WebSocket-Infrastruktur existiert (`api/main.py`, Chat-Streaming).
+
+**Naechste Schritte (wenn entschieden):**
+
+1. Erstmal nur HTML-Live-Reload bauen (kleinster Aufwand, groesster
+   Wow-Effekt fuer die Demo) — Schaetzung 3–5 h.
+2. Markdown-Live-Reload als Bonus (~2 h, gleiches Pattern).
+3. DB-Tabelle live im Viewer (DB-Tabelle ist schon da, braucht nur
+   den Push-Trigger) — ~3 h.
+4. Excel-Live als „Export on demand" (kein WYSIWYG, aber Klick-zum-
+   Aktualisieren) — ~4 h.
+5. Word/.docx zurueckstellen, eigenes Sub-Projekt.
+
+---
+
 ### BUG: Disco vorgaukelt Chat-Compaction obwohl er sie nicht ausloesen kann (Prio: hoch)
 
 **User-Beobachtung 2026-05-08, lager-halle:** User schreibt im Chat
