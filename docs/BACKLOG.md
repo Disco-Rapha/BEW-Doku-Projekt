@@ -93,79 +93,14 @@ Re-Priorisierung nach Phase-2-Aufräumen. Echte „brennen-jetzt"-Items:
 
 2. **★ EXTRACTION-PIPELINE OVERHAUL** — Phase 2 (Office-Formate
    DOCX/PPTX + File-Internal-Metadata) und Phase 3 (Failed-Tracking
-   für 🟡-Status) sind die nächsten großen Brocken. Heute Nachmittag
-   geplant.
-3. **★ Memory-Architektur: Zwei-Schicht-Modell + Tabellen-Wissen
-   bei Tabellen** — User-Beobachtung 2026-05-07 (lager-halle):
-   `DISCO.md` (45 KB) und `NOTES.md` (28 KB) wachsen unkontrolliert,
-   werden bei jedem Session-Start komplett gelesen → ~18 k Tokens
-   Sockel pro Onboarding. Auch Tabellen-Schema-Wissen liegt heute
-   in DISCO.md statt am Tabellen-Objekt selbst.
-
-   **Konzept-Skizze (Stand 2026-05-07, vor Diskussion):**
-
-   - **Schicht 1 — IMMER laden:** kleine Kern-Datei mit
-     Projekt-Identität, aktivem Thema, kritischen Konventionen.
-     Maxima ~5 KB. Wird bei jedem `memory_read` ohne Argumente
-     geliefert.
-
-   - **Schicht 2 — Kapitel-Index:** Liste aller Kapitel-Titel
-     (z.B. „PDF-Pipeline-Kalibrierung", „Excel-Reporter-Anpassungen",
-     „SOLL/IST gegen VGB S 831"). Disco bekommt nur den Index als
-     Default. Bei thematischer Passung lädt er ein konkretes
-     Kapitel via `memory_read({chapter: "..."})`.
-
-   - **Tabellen-Wissen wandert weg von DISCO.md** — pro Tabelle
-     ein eigenes Beschreibungs-Objekt: was steht drin, wie ist das
-     Schema entstanden, welche Konventionen, welche typischen
-     Joins. Speicherung-Kandidaten: SQL-Comments (CREATE TABLE
-     ... -- Kommentar), oder eine `agent_table_docs`-Tabelle, oder
-     pro Tabelle eine `_doc.md` im Projekt. Diskussion offen.
-
-   - **NOTES.md** als chronologisches Logbuch — pro Eintrag mit
-     Datum + Kapitel-Tag. Kapitel-Tag macht NOTES kompatibel zur
-     Kapitel-Index-Logik aus Schicht 2.
-
-   - **Auto-Archivierung** — Hebel 4 aus der Context-Analyse vom
-     2026-05-07. NICHT separat machen, sondern als Teil dieser
-     Memory-Architektur-Reform: alte Kapitel landen in
-     `.disco/memory-archive/<date>.md` und sind dort wieder per
-     Index/Suche abrufbar.
-
-   - **Skills-State im Handover** — Hebel 5 aus der Context-
-     Analyse: nach Compaction soll Disco wissen, welche Skills
-     im aktuellen Thema aktiv waren. Gehoert konzeptionell zu
-     dieser Memory-Reform.
-
-   **Heute schon teilweise umgesetzt** (2026-05-07): Hebel 1
-   (memory_read max_bytes-Default + section-Filter), Hebel 2
-   (fs_read max_bytes-Default), Hebel 3 (Compaction v3 mit
-   Tool-Output-Truncation). Die Anpassungen sollen mit der
-   Memory-Reform spaeter nochmal verfeinert werden.
-
-   **Zu klaeren in der Diskussion:**
-   - Wo liegt Schicht 1 physisch — DISCO.md (umfunktioniert) oder
-     neue Datei?
-   - Kapitel-Index: separate Datei oder Headings-Scan?
-   - Tabellen-Wissen-Speicherort: SQL-Comment / `agent_table_docs` /
-     `_doc.md`?
-   - Migration der bestehenden DISCO.md/NOTES.md: automatisch
-     zerlegen oder manuell vom Nutzer pro Projekt?
-
-4. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
+   für 🟡-Status) sind die nächsten großen Brocken.
+3. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
    mit User offen. Disco verzettelt sich in `work_*`-Tabellen ohne
    Lifecycle. Konsolidiert aus zwei Themen 2026-05-07.
-5. **★ System-Prompt + Skill + Tool Review-Session** — gemeinsamer
-   Walkthrough mit User: System-Prompt (782 Zeilen, 41 Sections, viel
-   Doppelung) + alle 11 Skills (besonders `report-builder` mit nur
-   1× Nutzung) + alle 42 Tools auf Sinn / Doppelung / Unklarheit
-   prüfen. Ergebnis: gestraffter Prompt + bewusstere Skill-Liste +
-   ggf. weitere Tool-Streichungen. User liest mit, ich liefere
-   Material. **Material liegt: `docs/review-session-2026-05-08.md`**.
-6. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
+4. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
    Server, Counter-Update nach Crash, DI-HighRes max_retries,
    LibreDWG SIGABRT). Eigene Bug-Fixing-Session geplant.
-7. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
+5. **User-Feedback-Cluster aus 24 bad-Reactions** — 13 Cluster aus
    echtem User-Pain. Drei Cluster (A/G/H) sind durch Phase 2
    erledigt, F+J teilweise. Rest gezielt abarbeiten.
 
@@ -177,22 +112,15 @@ injection härten), H06 (DI-Kosten im Chat sichtbar), H11
 Folgefragen), M11 (Portal-Agent-Rollout), N02 (duration_ms-Schema).
 
 **Niedrig**: H02 (Slash-Referenzen), N01 (Flow-Scaffold-TODOs),
-Run-Strip Bug 2 (Counter-100%-Anzeige).
+Run-Strip Bug 2 (Counter-100%-Anzeige), chapter-meta-Whitespace-
+Kosmetik (aus Memory-Reform 2026-05-09).
 
-**Architektur-Entscheidung F15 SharePoint-Connector — DONE 2026-05-09**:
-User-Entscheidung *„raus damit"*. Komplett-Streichung im Rahmen
-der Tools-Review-Session: Modul `src/disco/sharepoint/` (4 Files,
-~1085 SLOC) geloescht; `domain.py` (4 Tools: get_project_details,
-search_documents [Doppelung mit search_index], get_database_stats,
-start_sync) geloescht; `sources.py` geloescht (war SP-CRUD-Schicht);
-CLI-Subcommands `sync`/`auth`/`sp` plus `source` weg; api/main.py-
-Endpoints (`/api/sources/.../snapshot|delta|import-json|sp-fields|
-sync-status`) weg; config-Felder `msal_*` weg. Tool-Count 43→39.
-**Offen fuer eigene Migration**: Tabellen `documents`,
-`source_folders`, `document_sp_fields`, `sources`, `processing_events`
-in `system.db` plus `agent_sharepoint_docs` in einigen Projekt-DBs —
-gehoeren zur Datenseite, werden separat gedroppt wenn die Daten in
-den Prod-Projekten nicht mehr referenziert werden.
+**SharePoint-Connector-Tabellen-Cleanup (offen):** Tabellen
+`documents`, `source_folders`, `document_sp_fields`, `sources`,
+`processing_events` in `system.db` plus `agent_sharepoint_docs` in
+einigen Projekt-DBs — gehoeren zur Datenseite, werden separat
+gedroppt wenn die Daten in den Prod-Projekten nicht mehr referenziert
+werden.
 
 ---
 
@@ -331,61 +259,6 @@ In fuer „aktiv mit Disco an einem Bericht arbeiten".
 
 ---
 
-### BUG: Disco vorgaukelt Chat-Compaction obwohl er sie nicht ausloesen kann (Prio: hoch)
-
-**User-Beobachtung 2026-05-08, lager-halle:** User schreibt im Chat
-*"Bitte komprimiere jetzt den Chat. Schritt 1: memory_append mit
-chronologischem Eintrag …"*. Disco fuehrt `memory_append` auf
-NOTES.md aus und antwortet: *"✅ Komprimiert: NOTES ergaenzt, DISCO
-war bereits auf Stand"*. **Tatsaechlich wurde der Chat NICHT
-komprimiert** — `last_compaction_at` blieb auf altem Wert,
-`is_compacted=0` fuer 40 Messages, `token_estimate` weiterhin bei
-148k. Erst der gelbe „Komprimieren"-Button oben rechts oder ein
-`/compact`-Slash-Command ruft den echten Backend-Mechanismus
-(`run_compaction_with_handover()`).
-
-**Auswirkung**:
-- User glaubt, der Chat sei komprimiert, sieht aber UI weiterhin auf
-  90 % + → denkt der Sockel-Reduktions-Hebel sei wirkungslos.
-- Token-Limit-Crash droht, weil keine echte Compaction passiert.
-- Disco verbraucht trotzdem Tokens fuer den `memory_append`-Lauf.
-
-**Ursache**: Disco hat keinen Tool-Zugriff auf die Compaction-API.
-Im System-Prompt-Section *Dein Gedaechtnis* + *Wie Du mit dem
-Nutzer arbeitest* fehlt die Regel, dass *"komprimiere den Chat"*
-ein User-UI-Aktion ist, kein Disco-Tool-Aufruf.
-
-**Fix-Vorschlaege:**
-
-1. **System-Prompt-Regel ergaenzen** (kleinste Aenderung): bei
-   User-Wunsch *"komprimiere"* / *"compact"* soll Disco zuerst die
-   Session-Zusammenfassung in NOTES anlegen, **dann** explizit
-   sagen: *"Damit der Chat technisch komprimiert wird, klick bitte
-   den 'Komprimieren'-Button oben rechts (oder schicke `/compact`).
-   Ich kann den Schritt selbst nicht ausloesen."* Kein Vortaeuschen
-   einer Compaction.
-
-2. **UI-Hint im Chat-Render**: wenn Disco-Antwort den String
-   *"Komprimiert"* / *"komprimieren"* enthaelt UND keine Compaction
-   in den letzten 60 sec stattgefunden hat, blendet das Frontend
-   einen kleinen Hint ein: *„Hinweis: Disco hat den Chat nicht
-   technisch komprimiert. Klick hier zum echten /compact"*.
-
-3. **Tool fuer Disco** (gross, eher fuer Skill-Library-Aera): ein
-   `chat_compact()`-Tool, das die Compaction selbst ausloest mit
-   User-Bestaetigung. Bedingt: das Tool muss explizit User-OK
-   einholen, sonst koennte Disco aus Versehen frueh komprimieren
-   und damit Kontext verlieren.
-
-**Empfohlene Reihenfolge**: Fix #1 (System-Prompt-Regel) jetzt im
-Rahmen der TOP-5 Review-Session. Fix #2 als kleines UI-Patch
-danach. Fix #3 nur wenn nach Skill-Library-Aera der Bedarf
-besteht.
-
-**User-Quote 2026-05-08**: *"Trotzdem ist der kontext use bei 198k.
-Ahh ok ich muss im chat noch den cut machen. Ok, ja das ist nicht
-sauber gelöst, aber für mich jetzt erst mal funktional. Bitte als
-BUG ins BL"*.
 
 ### UI-Awareness für Disco (Priorität: mittel)
 
@@ -470,27 +343,13 @@ Das Frontend reagiert: Viewer öffnet sich rechts, zeigt Sheet 3-IBL.
 
 ## Report-Format / Analyse-Ergebnisse
 
-### Excel mit openpyxl auf Cowork-Niveau verwenden (DONE Routing-Teil 2026-05-05)
+### Excel mit openpyxl auf Cowork-Niveau — `xlsx_inspect_full` (offen)
 
-Disco hat `run_python` + openpyxl an Bord und kann damit alles, was
-Claude Cowork mit Excel macht — Formatierung lesen, Farben/Fonts/
-Borders setzen, Merged Cells, Formeln, Hyperlinks, Bilder. Die
-Infrastruktur steht.
-
-**Erledigt 2026-05-05:**
-- ✅ Skill `excel-formatter.md` deckt jetzt Editor-Modus UND
-  Custom-Generator-Modus ab (komplexer Report von Grund auf neu bauen).
-- ✅ Trigger-Tabelle im System-Prompt: „schoene Excel", „aufwendig",
-  „komplex", „Charts dazu", „Pivot", „Conditional Formatting",
-  „individuell formatiert" → direkt `excel-formatter`, nicht erst
-  `build_xlsx_from_tables`.
-- ✅ Tool-Description von `build_xlsx_from_tables` listet explizit, was
-  es NICHT kann + verweist auf den richtigen Pfad. Damit sieht der LLM
-  die Grenze schon im Schema.
-
-**Optional, nicht entschieden:** `xlsx_inspect_full` — Read-Tool, das
-Styles/Merges/Formeln strukturiert als JSON liefert, damit Disco fuers
-reine Anschauen nicht jedes Mal 15 Zeilen Python schreiben muss.
+Routing-Pfad ist seit 2026-05-05 in Place (Skill `excel-formatter`,
+Trigger-Tabelle, Tool-Description-Hinweise). **Optional offen:**
+`xlsx_inspect_full` — Read-Tool, das Styles/Merges/Formeln strukturiert
+als JSON liefert, damit Disco fuers reine Anschauen nicht jedes Mal
+15 Zeilen Python schreiben muss.
 
 ---
 
@@ -635,20 +494,6 @@ ganze Wissen in einer Datei sammeln."
 
 ---
 
-## UI / Layout
-
-### ~~PDF-Viewer funktioniert noch nicht (Bug)~~ — gefixt 2026-04-21
-
-Ursache war `pdfjs-dist@4.0.379`: ab 4.x ist pdf.js ESM-only.
-`<script src="…pdf.min.js">` ohne `type="module"` scheitert mit
-SyntaxError, `window.pdfjsLib` bleibt undefined → Viewer zeigt
-"pdf.js nicht geladen".
-
-Fix: auf `pdfjs-dist@3.11.174` gepinnt (letzte UMD-Version), in Dev
-*und* Prod. Browser-Reload (Cmd+Shift+R), dann PDF erneut öffnen.
-
----
-
 ## Document Intelligence
 
 ### IDEE: DCC-Klassifikation per Embedding-Klassifikator (User-Idee 2026-05-09, prio MITTEL)
@@ -789,22 +634,6 @@ Müssen vielleicht vorher für bestimmte Parameter gesetzt werden."
 
 Danach die Lücken gezielt schließen.
 
-### PDF-Extraktion: 3-Tier-Pipeline (DONE 2026-04-22)
-
-**Status:** Umgesetzt. Pipeline `pdf_routing_decision` → `pdf_to_markdown`
-mit Engines `docling-standard` / `azure-di` / `azure-di-hr`. Agent liest
-nur noch ueber `pdf_markdown_read` aus `agent_pdf_markdown`. Altes
-`pdf_extract_text` (pypdf), `extract_pdf_to_markdown` (DI-Tool) und
-VLM-Varianten (granite-mlx / smol-mlx) sind entfernt.
-
-Alter Text gekuerzt — Entscheidungshistorie: Benchmark-Ergebnis zeigte
-docling-standard ausreichend fuer Text + Tabellen, DI-HighRes (OCR-
-HighResolution) unverzichtbar fuer vector-drawing + Plankoepfe.
-VLM-Varianten waren zu langsam fuer Bulk-Runs und liefern keinen
-Qualitaetsvorteil gegenueber docling-standard.
-
----
-
 ## Sicherheit / Projekt-Isolation
 
 ### `run_python` härten gegen Prompt-Injection (Priorität: mittel)
@@ -898,21 +727,6 @@ Ursprung: UAT-Session 2026-04-20, Nutzer-Frage nach Run #15:
 > wäre es super, wenn ein flow seine arbeit wieder aufnehmen kann
 > nachdem disco neu gestartet wird bzw während des flows der
 > computer ausgeschaltet (oder sleep) wurde"
-
-## Docling / MLX
-
-### Hybride Markdown-Pipeline (DONE 2026-04-22)
-
-**Status:** Umgesetzt als `pdf_routing_decision` (PyMuPDF-Heuristik pro
-Seite → Engine pro Dokument, Strategie A: eine Engine je Datei) und
-`pdf_to_markdown` (Engine-Dispatcher `src/disco/pdf/markdown.py`).
-VLM-Varianten entfernt — docling-standard deckt Text + Tabellen,
-azure-di A4-Scans, azure-di-hr Vector-Drawings / Plankoepfe ab.
-
-Ursprung: UAT-Session 2026-04-20 (Granite too slow) → Beschluss
-2026-04-22: VLM komplett raus, festes 3-Tier-Routing.
-
----
 
 ## Architektur
 
@@ -1241,21 +1055,6 @@ Kosmetisch, nicht funktional.
 
 ---
 
-## Pipeline-Vollstaendigkeits-Sicht — DONE 2026-05-04
-
-Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL (siehe unten).
-Phase 1 (View + Sidebar-UI) live seit 2026-05-04, Phase-6-Schaerfung
-(Maßstab pro Schritt + Schema-Bug + Unsupported-Klasse) live seit
-2026-05-05/06.
-
-## Flow-UI im Chat-Fenster — DONE 2026-04-25
-
-Erledigt: Commits 829fd65 + 6200002 + 0e04dc9 + 77f71ea. Run-Strip
-auffaelliger, finished-Runs bleiben mit Status-Badge, Klick auf
-ganze Zeile oeffnet Run, schnelle Runs <3s via recent_finished-API.
-
----
-
 ## Office-Formate in die Extraction-Pipeline (Prioritaet: hoch)
 
 Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL Phase 2 (siehe unten).
@@ -1264,15 +1063,6 @@ DOCX/PPTX brauchen Engines (`python-docx`/`python-pptx`, MIT, lokal,
 
 User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir
 total vergessen :D Die muessen auch noch in die Pipeline."*
-
-## Extraction nur auf kanonische Dateien — DONE 2026-05-05
-
-Erledigt: `extraction_routing_decision/runner.py` filtert seit
-Commit c9b6374 Files mit `duplicate-of`-Relation (from-Seite) aus
-dem Input. Effekt rea-denox: 5790 → 1775 kanonische Routings.
-
-`replaces` und `format-conversion-of` sind im Schema vorgesehen,
-aber noch nicht gefuellt — bleibt als Phase-3 in ★-Konsolidat.
 
 ---
 
@@ -1454,18 +1244,6 @@ provides:
 Beobachtet 2026-04-25 nach den Run-Strip-Updates (Commits 829fd65,
 6200002, 0e04dc9, 77f71ea):
 
-### Bug 1: gleicher Run wird doppelt angezeigt — **GEFIXT 2026-05-05** (Commit 15ee0c2)
-
-Ursache: Field-Inkonsistenz zwischen `/api/workspace/active-runs`
-(recent_finished mit `project_slug`) und `/api/workspace/projects/{slug}/runs/{id}`
-(`project_slug=None`). Der Frontend-Dedup-Key ueber
-`${project_slug}:${id}` matchte daher 'null:25' nicht mit
-'bew-rsd-rea-denox:25' → derselbe Run landete zweimal im finished-Strip.
-
-Behoben mit Backend-Fix (`api_run_status` faellt auf URL-Parameter
-zurueck) + Frontend-Defensiv-Patch (`runStripFetchFinal` traegt Slug
-aus prev nach).
-
 ### Bug 2: Counter springt nicht auf 100% (1720/1721 bleibt)
 
 Beobachtet: Run mit `done · 1 failed`, total=1721 zeigt Counter
@@ -1490,29 +1268,6 @@ Zwei Zeilen Code, keine API-Aenderung.
 User-Quote (2026-04-25): *"Es werden zwei Flows doppelt angezeigt und
 1720 / 1721 das haette auf 1721 / 1721 springen sollen, wenn der flow
 durch ist. Der failed soll ja mitgezaehlt werden."*
-
----
-
-## Cost-Tracking fuer GPT-5.1-Vision-Aufrufe — DONE 2026-05-06
-
-Erledigt:
-- Zentrales `disco/pricing.py` mit Sweden-Central-Data-Zone-Standard-
-  EUR-Listpreisen (2026-05-06 von User gegen Microsoft-Pricing-Seite
-  verifiziert).
-- `disco/docs/image.py` rechnet seit Commit 7f33a8f mit echten
-  Tokens × Tarif.
-- `flows/sdk._extract_usage` extrahiert seit Commit dbbd725 auch
-  `cached_tokens` aus der Foundry-Antwort und reicht sie an
-  `compute_cost_eur` weiter — Cached-Input-Discount greift jetzt.
-- gpt-5.1-Tarife auf User-Verifikation (1.18/0.12/9.41) korrigiert
-  (Commit 84d68fe), gpt-5.4-prod aus Global-Tarif extrapoliert
-  (2.36/0.24/14.10, Commit 25f1c3b).
-
-Bestand-Korrektur: nicht durchgefuehrt (cached_tokens sind nicht
-historisch persistiert). Neue Flow-Runs rechnen ab sofort korrekt.
-
-User-Quote (2026-04-25): *"tracken wir eigentlich schon was uns der
-gpt aufruf mit den bildern kostet im flow?"*
 
 ---
 
@@ -1866,15 +1621,12 @@ selbst keine Uebersicht."*
 - Wie verhalten wir uns bei `--reload`-Worker-Tausch (PID-Wechsel)?
 
 
-## Extraction-Pipeline-UX: Ampelsystem, Auto-Pipeline, Batch-Mode — TEILWEISE DONE 2026-05-04/05/06
+## Extraction-Pipeline-UX: noch offen (Auto-Trigger, Batch, FS-Watcher)
 
-Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL. Erledigt:
-- ✅ Ampelsystem in Sidebar (Phase 1, Commits ab 2026-05-04)
-- ✅ Schaerfung (Maßstab pro Schritt, Schema-Bug, Unsupported-Klasse,
-  Routing-Filter auf Kanonik) — Commits c7287e7 + c9b6374, heutige
-  Phase-2-Commits 4b086f7 + 67d5207 + 9fd053e
-- Offen: Auto-Pipeline-Trigger nach `sources_register` (Disco fragt
-  proaktiv), Batch-API-Engines, FS-Watcher (Phase 3)
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL. Offen:
+- Auto-Pipeline-Trigger nach `sources_register` (Disco fragt proaktiv)
+- Batch-API-Engines
+- FS-Watcher (Phase 3)
 
 User-Quote (2026-04-27): *"Die gesamte extraction pipeline von
 registrierung bis hin zum fertigen suchindex funktioniert
@@ -2540,10 +2292,8 @@ Management"-Eintraegen zusammen.
 
 ### Cluster F — Context-File-Behandlung (3 Reactions, eng verzahnt)
 
-**Quotes:**
+**Quote:**
 - *"Information zu spezifischen Dateien sollten wir gleich an den Dateien speichern. Context files: kurz sagen was das für eine datei ist wo die her kommt und was wir damit machen wollen. Sollte sich zuverlässig gemerkt werden"* (msg 1620)
-- *"Bug: die context dateien wollen wir ja genau so registrieren und einlesen."* (msg 1668) — ✅ **GEFIXT 2026-05-05** (Commit 03eaf9d, sources_register Default-Scope `both`)
-- *"Disco fängt an links zu verwenden, das ist gut und genau da will ich auch hin - nur funktioniert dieser noch nicht."* (msg 1601) — ✅ **GEFIXT 2026-05-04** (Klickbare Links Phase 1, Commit fd99728)
 
 **Verbesserung (offen):**
 1. **File-Notes-Tabelle** `agent_source_notes` (oder Spalten in
@@ -2586,11 +2336,9 @@ um User-erstellte File-Annotations.
 - *"Wir haben irgendwo noch ein PDF Fokus drin. Wenn ich nach Dateien frage möchte ich ja eine Aussage über alle Dateiformate im Projekt haben und nicht nur über PDF"* (msg 2022)
 
 **Verbesserung:**
-1. ✅ **Teilweise erledigt 2026-05-07**: `pdf_classify`-Tool entfernt
-   (Phase 2 Block A, Commit 4b086f7). `agent_pdf_inventory` wird
-   im Pipeline-Status-Endpoint nicht mehr referenziert (Bugfix
-   2026-05-05, Commit 15ee0c2). Cleanup der Tabelle bleibt offen
-   — geht ins ★-Konsolidat Phase 3.
+1. **`agent_pdf_inventory`-Cleanup** noch offen — wird im
+   Pipeline-Status-Endpoint nicht mehr referenziert, Tabelle aber
+   nicht gedroppt. Geht ins ★-Konsolidat Phase 3.
 2. **Skill-Sprache anpassen**: in disco/system_prompt.md /
    Skills, wenn von "Dokumenten" gesprochen wird, soll die
    Antwort alle file_kinds umfassen. Default "Dateien" =
@@ -2784,22 +2532,7 @@ User-Quote (2026-04-30): *"Ich haette das ampelsystem aber gerne
 praktisch auf extraction pipeline step ebene. Eine art process ampel
 fuer jeden prozessschritt."*
 
-### Phase 6 (Pipeline-Status-Schaerfung) — TEILWEISE GEFIXT 2026-05-05
-
-Erledigt am 2026-05-05 (Commits c7287e7 + c9b6374):
-- ✅ **Schema-Bug** in n_canonical-SQL (`r.source_id` →
-  `r.from_source_id`) — Schritt 3 zeigte immer "→ 0 kanonisch", jetzt
-  korrekt (rea-denox: 5790 → 1775).
-- ✅ **Maßstab pro Schritt** statt einheitlich n_registered:
-  Schritt 4 = kanonisch, Schritt 5 = kanonisch − unsupported,
-  Schritt 6 = bereits extrahierte Files. Duplikate fallen aus
-  Pendings raus.
-- ✅ **Unsupported-Klasse** sichtbar: Files mit engine NULL/leer
-  zaehlen als n_unsupported (eigener Bucket), nicht als pending.
-- ✅ **Tooltip-Aufschluesselung** im Frontend: done · pending ·
-  failed · ohne Engine.
-- ✅ **Routing-Flow** filtert Duplikate beim Input
-  (extraction_routing_decision/runner.py).
+### Phase 6 (Pipeline-Status-Schaerfung) — Failed vs Pending offen
 
 Offen (Phase B):
 - ❌ **Failed vs Pending in Schritt 4 + 5.** `work_extraction_routing`
