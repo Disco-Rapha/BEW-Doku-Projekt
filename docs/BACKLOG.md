@@ -651,6 +651,109 @@ Fix: auf `pdfjs-dist@3.11.174` gepinnt (letzte UMD-Version), in Dev
 
 ## Document Intelligence
 
+### IDEE: DCC-Klassifikation per Embedding-Klassifikator (User-Idee 2026-05-09, prio MITTEL)
+
+**Stand:** strategisch, nicht akut. Vorbedingung: Korrekturlieferung
+DCC-Predictions von Sascha/Peter/Roman muss vorliegen — sonst lernt
+der Klassifikator GPT-5-Fehler.
+
+**Kerngedanke:** Statt jedem Dokument einen LLM-Call mit DCC-Referenz-
+liste-CSV im Prompt zu geben, bauen wir ein **gelabeltes Trainings-Set
+und einen k-NN/Centroid-Klassifikator in Embedding-Space**. Pro DCC
+sammeln wir die Embeddings aller bestaetigten Beispiel-Dokumente; bei
+einer neuen Klassifikation berechnen wir das Document-Embedding und
+finden den DCC mit geringstem aggregiertem Abstand.
+
+**Architektur:**
+
+```
+TRAINING (offline, einmalig + bei Updates):
+  Pro gelabeltes Dokument:
+    Markdown laden -> in Sections splitten (~512 Tokens, 128 Overlap)
+    Pro Section: Embedding via Azure text-embedding-3-large (oder -small)
+    Speichern in agent_dcc_training_embeddings
+      (file_id, section_idx, master_dcc, vector_blob, label_quality)
+
+PREDICTION (online, pro Dokument):
+  1. Markdown -> Sections -> Embeddings
+  2. Pro DCC c: aggregate(distances zwischen query_sections und
+                          training_vectors_of_class_c)
+  3. Top-3 DCCs nach Score, plus Margin als Konfidenz
+  4. margin < threshold -> "unsicher" -> LLM-Fallback
+```
+
+**Architektur-Entscheidungen die zu treffen sind:**
+
+- **Centroid (1 Mean-Vektor pro DCC) vs. k-NN (alle Trainings-Vektoren):**
+  k-NN gewinnt wegen Erklaerbarkeit ("die 5 aehnlichsten Trainings-
+  Dokumente haben DCC=X"), Speicher ist mit ~30 MB irrelevant.
+- **Section-basiert vs. Whole-Document:** Section-basiert + Min-
+  Aggregation, weil DCC oft in einem Teil des Dokuments codiert ist
+  (Stempel, Inhaltsverzeichnis, Header).
+- **Embedding-Modell:** `text-embedding-3-small` fuer Pilot (5x billiger
+  als large, fuer strukturierte technische Texte oft ausreichend).
+- **Off-Distribution-Detection:** wenn min-distance > T fuer alle
+  Klassen → Fallback auf LLM. Wichtig: das System soll nicht
+  zwanghaft eine Klasse zurueckgeben, wenn das Dokument einen
+  ungesehenen DCC hat.
+
+**Knackpunkte (ehrlich):**
+
+- **Trainings-Daten-Qualitaet** — die Korrekturlieferung ist die
+  Pflicht-Vorbedingung. Bootstrap mit GPT-5-high-conf-Predictions
+  ist nur fuer P0/P1-Eval verwendbar, niemals als Default.
+- **Class Imbalance** — bei 410 DCCs werden in 1.500 Predictions oft
+  nur ~100 abgedeckt. Die anderen 310 braucht der LLM-Fallback.
+- **Long-Tail** — DCCs mit < 5 Beispielen sind k-NN-instabil; als
+  "nicht trainiert" markieren und Fallback.
+
+**Phasen (5 Tage Gesamtaufwand):**
+
+| Phase | Was | Aufwand |
+|---|---|---|
+| **P0 — Daten-Audit** | Class-Distribution der vorhandenen Predictions; reicht das fuer einen Pilot? | 0,5 Tag |
+| **P1 — Pipeline** | text-embedding-3-* deployen, agent_dcc_training_embeddings, Section-Splitter (`build_search_index`-Logik wiederverwenden), Bootstrap-Flow | 1 Tag |
+| **P2 — Eval** | 5-Fold-Cross-Validation auf den Trainings-Daten; Top-1/Top-3-Accuracy pro DCC; Confusion-Matrix-Light | 0,5 Tag |
+| **P3 — Inference-Flow** | `dcc_prediction_v3_embedding` mit margin-Threshold + LLM-Fallback; schreibt in `agent_dcc_prediction` mit `predictor_version='embed_v1'` | 1 Tag |
+| **P4 — A/B-Test** | 200 Dokumente parallel via v1 (LLM) und v3 (Embedding+Fallback); Diff in Excel-Report | 0,5 Tag |
+| **P5 — Active Learning** | Bei `margin < T` Flag in UI; Sascha entscheidet; Entscheidung fliesst zurueck ins Trainings-Set | 1 Tag |
+
+**Vor- vs. Nach-Korrekturlieferung-Schwenk:**
+
+- **Vor:** P0–P2 mit Bootstrap-Daten (high-conf-GPT-5-Predictions);
+  A/B-Vergleich gegen den heutigen Flow zeigt Setup-Tauglichkeit.
+  **Niemals als Default schalten** — wir lernen sonst GPT-5-Fehler.
+- **Nach:** Bootstrap-Wahrheit durch echte Reviews ersetzen, Re-Train,
+  neue Eval. Wenn Top-1-Accuracy ≥ heutiger LLM-Qualitaet: produktiv
+  schalten als Default, LLM bleibt Fallback.
+
+**Erwartete Effekte:**
+
+| Metrik | Heute (LLM) | Embedding-System |
+|---|---|---|
+| Kosten pro Inferenz | ~1–3 ¢ | ~0,001 ¢ (1000× billiger) |
+| Latenz pro Inferenz | 5–15 s | ~100 ms (50× schneller) |
+| Vollscan rea-denox (1.500 Dok.) | ~30 €, ~3 h | ~5 ¢, ~3 Min |
+| Reproduzierbarkeit | Modell-Drift moeglich | deterministisch |
+| Erklaerbarkeit | "Modell hat entschieden" | "Diese 5 aehnlichsten Trainings-Dokumente sind DCC=X" |
+
+**Anschluss an bestehende Bausteine:**
+
+- Section-Splitter existiert in `src/disco/agent/functions/search.py`
+  (`build_search_index` macht Chunks à 500–800 Tokens) — wiederverwendbar.
+- Azure-OpenAI-Client + Sweden-Central-Setup ist da, fehlt nur die
+  Embedding-Deployment-Konfiguration.
+- `agent_dcc_prediction` als Ziel-Tabelle bleibt — Feld
+  `predictor_version` ergaenzen, damit v1 (LLM) und v3 (Embedding)
+  parallel laufen koennen.
+- SQLite mit BLOB-Spalte fuer Vektoren reicht; numpy-In-Memory-
+  Cosine fuer 5k Vektoren ist Mikrosekunden-schnell.
+
+**Wann starten:** wenn die Korrekturlieferung kommt. Vorher kein Default-
+Schalter, max. P0–P2 als Setup-Pilot.
+
+---
+
 ### DI-Kosten im Chat sichtbar machen (Priorität: hoch — aus UAT 2026-04-20)
 
 Status: Nutzer-Beobachtung — "Bei DI sind keine Kosten sichtbar.
