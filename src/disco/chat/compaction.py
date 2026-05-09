@@ -304,6 +304,20 @@ def run_compaction_with_handover(
     chat_repo.clear_measured_context(project_slug, db_path=db)
     new_estimate = chat_repo.recompute_token_estimate(project_slug, db_path=db)
 
+    # Memory-Reform Phase 3: NOTES-Auto-Archiv. Einträge älter als
+    # 30 Tage wandern bei jeder Compaction nach .disco/notes-archive/.
+    # Idempotent + best-effort — Compaction selbst darf nicht crashen,
+    # wenn das Archivieren schiefgeht.
+    archive_report: dict[str, Any] = {"archived": 0}
+    try:
+        archive_report = archive_old_notes_entries(project_slug)
+    except Exception as exc:
+        logger.warning(
+            "NOTES-Archivierung beim Compaction fehlgeschlagen (%s): %s",
+            project_slug, exc,
+        )
+        archive_report = {"archived": 0, "error": str(exc)}
+
     return {
         "ok": True,
         "skipped": False,
@@ -312,4 +326,123 @@ def run_compaction_with_handover(
         "kept_ids": kept_ids,
         "handover_brief_chars": len(brief),
         "new_token_estimate": new_estimate,
+        "notes_archive": archive_report,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Memory-Reform Phase 3 — NOTES-Auto-Archiv
+# ---------------------------------------------------------------------------
+
+# Schwelle: Einträge älter als N Tage wandern in .disco/notes-archive/.
+NOTES_ARCHIVE_THRESHOLD_DAYS = 30
+
+
+def archive_old_notes_entries(
+    project_slug: str,
+    threshold_days: int = NOTES_ARCHIVE_THRESHOLD_DAYS,
+    *,
+    workspace_root: "Path | None" = None,
+) -> dict[str, Any]:
+    """Verschiebt alte NOTES-H2-Einträge in `.disco/notes-archive/<jahr-monat>.md`.
+
+    NOTES.md wird durch H2-Header `## YYYY-MM-DD HH:MM:SS` strukturiert
+    (siehe `memory_append`). Einträge älter als `threshold_days` werden
+    pro Jahr-Monat zusammengefasst nach
+    `.disco/notes-archive/<jahr-monat>.md` verschoben. Aktuelle NOTES.md
+    behält die jüngeren Einträge.
+
+    Idempotent + atomar (tmp+rename pro Datei). Best-effort: bei
+    File-Fehler wird ein Report mit `error` zurückgegeben statt zu
+    crashen.
+
+    Returns:
+        Report-Dict mit `archived` (Anzahl verschobene Einträge) und
+        `kept` (Anzahl bleibende Einträge in NOTES.md).
+    """
+    from pathlib import Path
+    from datetime import date, datetime, timedelta
+    import re
+
+    # Projekt-Root finden
+    root = workspace_root
+    if root is None:
+        root = Path(settings.workspace_root) / "projects" / project_slug
+    notes_path = root / "NOTES.md"
+    if not notes_path.exists():
+        return {"archived": 0, "kept": 0, "reason": "NOTES.md fehlt"}
+
+    raw = notes_path.read_text(encoding="utf-8")
+    # H2-Timestamp-Header finden: "## YYYY-MM-DD HH:MM:SS"
+    pattern = re.compile(
+        r"^## (\d{4}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}:\d{2})?\s*$",
+        re.MULTILINE,
+    )
+    matches = list(pattern.finditer(raw))
+    if not matches:
+        return {"archived": 0, "kept": 0, "reason": "keine Timestamp-H2-Einträge"}
+
+    cutoff = date.today() - timedelta(days=threshold_days)
+
+    # Header (alles vor dem ersten H2-Timestamp) bleibt erhalten
+    header = raw[: matches[0].start()].rstrip()
+
+    # Einträge: jeder von H2-Start bis zum nächsten H2-Start
+    entries: list[tuple[date, str]] = []
+    for i, m in enumerate(matches):
+        try:
+            entry_date = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
+        block = raw[m.start():end].rstrip() + "\n"
+        entries.append((entry_date, block))
+
+    to_archive = [(d, b) for d, b in entries if d < cutoff]
+    to_keep = [(d, b) for d, b in entries if d >= cutoff]
+
+    if not to_archive:
+        return {"archived": 0, "kept": len(to_keep)}
+
+    # Pro Jahr-Monat eine Archiv-Datei
+    archive_dir = root / ".disco" / "notes-archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    by_month: dict[str, list[str]] = {}
+    for d, block in to_archive:
+        ym = d.strftime("%Y-%m")
+        by_month.setdefault(ym, []).append(block)
+
+    archived_files: list[str] = []
+    for ym, blocks in sorted(by_month.items()):
+        archive_path = archive_dir / f"{ym}.md"
+        # Idempotent: append, wenn die Datei schon existiert (mit Trenner)
+        if archive_path.exists():
+            existing = archive_path.read_text(encoding="utf-8").rstrip()
+            new_content = existing + "\n\n" + "\n".join(blocks)
+        else:
+            new_content = (
+                f"# NOTES-Archiv {ym}\n\n"
+                f"Einträge aus NOTES.md, archiviert per Auto-Archiv "
+                f"(Schwelle: {threshold_days} Tage).\n\n"
+                + "\n".join(blocks)
+            )
+        # Atomar schreiben
+        tmp = archive_path.with_suffix(archive_path.suffix + ".tmp")
+        tmp.write_text(new_content.rstrip() + "\n", encoding="utf-8")
+        tmp.replace(archive_path)
+        archived_files.append(archive_path.name)
+
+    # Neues NOTES.md = Header + zu_behaltende Einträge
+    new_notes = header.rstrip() + "\n\n" + "".join(b for _, b in to_keep)
+    if not new_notes.endswith("\n"):
+        new_notes += "\n"
+    tmp = notes_path.with_suffix(notes_path.suffix + ".tmp")
+    tmp.write_text(new_notes, encoding="utf-8")
+    tmp.replace(notes_path)
+
+    return {
+        "archived": len(to_archive),
+        "kept": len(to_keep),
+        "archive_files": archived_files,
     }
