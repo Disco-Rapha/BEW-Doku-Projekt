@@ -151,3 +151,76 @@ zu bewerten — die Bench-Entscheidung 2026-04-25 ist von einem
   beim ersten Lauf, keine MPS-/Apple-Silicon-spezifischen
   Dependencies.
 - BACKLOG-Eintrag H10 (Setup-Fallstrick mit HF-Cache) wird obsolet.
+
+---
+
+## 2026-05-09 — Memory-Reform: 3-Schichten-Modell mit Marker, Kapitel-Lookup, Schicht-3 in `agent_table_docs`
+
+**Status:** aktiv, deployed dev (`disco-dev-agent v38`) + prod (`disco-prod-agent v50`).
+
+### Kontext
+
+Das alte Memory-System hatte ein einziges, frei wachsendes `DISCO.md`
+pro Projekt — Default-`memory_read` lieferte einen 8-KB-Cap auf den
+Anfang der Datei. In Prod-Projekten mit ~1.800 Dateien war DISCO.md
+bis 56 KB groß (lager-halle), enthielt 40+ chronologische H2-Sektionen
+und mehrfach denselben Header (`## Entscheidungen` 4×, `## SharePoint-Links` 3×).
+Konsequenz: bei jeder Disco-Session wurden 8 KB unsortierter Inhalt
+geladen — viele Tokens, wenig zielgenaues Wissen.
+
+### Entscheidung
+
+**Drei explizite Schichten:**
+
+1. **Schicht 1** in DISCO.md über dem Marker `<!-- DISCO-LAYER-1-END -->`
+   (max 3,5 KB): Identität, Aktueller Fokus, Konventionen, Lookup-Pfade.
+   Wird beim Default-`memory_read` automatisch geladen, plus ein
+   automatisch erzeugter Kapitel-Index der Schicht 2.
+2. **Schicht 2** unter dem Marker: themenbezogene Wissens-Kapitel
+   mit `<!-- chapter-meta: tags/created/status -->`-Block. Wird nur per
+   `memory_read({chapter: "..."})` geladen — exakter, Substring-, Tag-
+   und Body-Match in dieser Reihenfolge. Side-Effect: `last_referenced`
+   und `reference_count` im Meta-Block werden automatisch aktualisiert.
+3. **Schicht 3** in `agent_table_docs` (Tabelle in workspace.db,
+   Migration `008_agent_table_docs.sql`): pro Projekt-Tabelle eine
+   kurze Beschreibung + Schema-Summary + Beispiel-Query + Quell-Files.
+   Tools `table_doc_set` / `table_doc_get`. Tabellen-Wissen lebt
+   **nicht** in DISCO.md.
+
+**Trace-Log** unter `.disco/memory-access.log` (TSV) protokolliert
+jeden `memory_read`-Aufruf mit Modus, Datei, Hit/Miss, Bytes — Basis
+für spätere Aufräum-Entscheidungen.
+
+**NOTES-Auto-Archivierung** in der Compaction: Einträge älter als
+30 Tage wandern nach `.disco/notes-archive/YYYY-MM.md`, idempotent.
+
+### Backward-Compatibility
+
+Projekte ohne Marker fallen automatisch auf den Legacy-8-KB-Cap zurück.
+Kein Migrationszwang. Migration auf das Schichten-Format kann pro
+Projekt einzeln erfolgen (Backup, Schicht-1-Trim, Kapitel mit
+chapter-meta neu strukturieren). Die drei Prod-Projekte
+(rea-denox, campus-reuter, lager-halle) wurden am 2026-05-09
+migriert — DISCO.md schrumpfte von 14 KB / 5,7 KB / 56 KB
+jeweils auf < 35 KB mit ≤ 3,5 KB Schicht 1.
+
+### Konsequenzen
+
+- **Token-Sockel pro Onboarding** ~67 % kleiner (8 KB → ~2,6 KB
+  inkl. README + NOTES-Tail).
+- **Gezielte Folgefragen** holen ~1–1,7 KB statt 8 KB, gemessen auf
+  rea-denox + campus-reuter live.
+- **Tabellen-Wissen ist projektübergreifend einheitlich** durchsuchbar
+  (eine SQL-Tabelle statt verstreuter DISCO.md-Sektionen).
+- **Trace-Log** macht ungenutzte Kapitel sichtbar — Grundlage für
+  spätere Pflege.
+
+### Pointer
+
+- Konzeptdokument im Archiv:
+  `docs/archive/memory-reform-2026-05-09.md`.
+- E2E-Validierung: `tests/e2e/scenarios/03-memory-reform.md`
+  (Disco-Mind-Test T1–T7).
+- Code: `src/disco/agent/functions/memory.py`,
+  `src/disco/agent/functions/table_docs.py`,
+  `src/disco/chat/compaction.py`.
