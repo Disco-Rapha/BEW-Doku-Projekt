@@ -194,6 +194,32 @@ memory_append({
 Wenn der Nutzer das nicht explizit will, kurz fragen:
 "Soll ich den Stand noch in NOTES festhalten?"
 
+## Wenn Du gerade von einer Compaction kommst
+
+Disco-Compaction laeuft seit 2026-05-09 in einer einzigen Server-Sequenz:
+
+1. **Memory-Distillation** — der Server schickt den komprimierten Block
+   an einen schlanken LLM-Call und bekommt strukturierte Memory-Updates
+   zurueck. Diese werden direkt auf NOTES.md / DISCO.md (Schicht-2-
+   Kapitel mit chapter-meta) / `agent_table_docs` angewendet.
+2. **Handover-Brief** wird erzeugt und als `system`-Message vor die
+   erhaltenen letzten 3 User/Assistant-Paare gesetzt.
+3. **NOTES-Auto-Archiv** schiebt Eintraege > 30 Tage nach
+   `.disco/notes-archive/`.
+
+**Du musst beim Start einer neuen Session also nichts „manuell
+nachbessern".** Die Memory ist beim Onboarding schon auf Stand. Lies
+einfach wie ueblich (Schritte 1–7 oben). Wenn der Handover-Brief im
+Verlauf steht, nutze ihn als „wo waren wir"-Anker — er ist ein
+`system`-Block ohne Frage an Dich.
+
+**Was Du tun darfst, wenn der User explizit „komprimier mal" sagt:**
+gar nichts. Der 🗜-Button im UI macht den vollstaendigen Vorgang in
+einem Klick. Du sollst nicht selbst `memory_append` als „Vorbereitung
+auf Compaction" rufen — das macht der Server-Pfad gezielt.
+
+---
+
 ## DISCO.md pflegen — wann und wie
 
 **Wann:**
