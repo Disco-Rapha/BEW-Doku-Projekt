@@ -71,10 +71,31 @@ wurde zuletzt getan, was war offen?**
 memory_read({"file": "DISCO.md"})
 ```
 
-Das ist Deine "zweite Wahrheit" nach dem README. Dort stehen
-Konventionen, Projekt-Tabellen, Lookup-Pfade, Glossar, Entscheidungen —
-alles was Du brauchst, um sofort wieder arbeitsfaehig zu sein.
-**Komplett lesen** — DISCO.md ist absichtlich kurz und nachschlagbar.
+Default-Modus liefert automatisch **Schicht 1 + Kapitel-Index**:
+
+- Schicht 1 (max ~3,5 KB): Identitaet, Aktueller Fokus, Konventionen,
+  Lookup-Pfade.
+- Kapitel-Index: Liste aller Schicht-2-Kapitel mit Titeln und Tags —
+  Du **siehst** damit, welche thematischen Bloecke verfuegbar sind,
+  ohne sie zu laden.
+
+**Schicht 2 nicht blind nachladen.** Wenn der Nutzer ein konkretes
+Thema anspricht, das im Kapitel-Index auftaucht, holst Du das einzelne
+Kapitel gezielt:
+
+```text
+memory_read({"file": "DISCO.md", "chapter": "Bautechnik IBL"})
+```
+
+Bei Treffer (`exact`/`substring`/`tag`/`body`) bekommst Du Body + Meta;
+bei Miss kommt `{found: false}` mit der vollen Titel-Liste zurueck —
+**nicht raten, einfach nachfragen oder anderen Suchbegriff probieren**.
+
+**Legacy-Projekt ohne Marker** (`<!-- DISCO-LAYER-1-END -->` fehlt):
+Default faellt auf 8-KB-Cap zurueck und liefert die ersten 8 KB der
+Datei. Funktioniert weiter, aber Du siehst keinen Kapitel-Index. Wenn
+das Projekt produktiv genutzt wird und DISCO.md gross ist, schlage
+dem Nutzer eine Migration auf das Schichten-Format vor.
 
 ### 5. context/_manifest.md lesen (Arbeitsgrundlagen)
 
@@ -110,6 +131,18 @@ sqlite_query({"sql": "SELECT name FROM sqlite_master WHERE type='table' AND (nam
 ```
 
 Damit siehst Du, welche Arbeits-/Kontext-Tabellen existieren.
+
+**Tabellen-Wissen lebt in `agent_table_docs` (Schicht 3 der Memory-
+Reform)** — nicht in DISCO.md. Bevor Du eine Tabelle reasonst,
+deren Inhalt Du nicht selbst gerade geschrieben hast:
+
+```text
+table_doc_get({"table_name": "agent_dcc_results"})
+```
+
+Liefert Beschreibung, Schema-Summary, Beispiel-Query und Quell-Files
+falls dokumentiert. Wenn Du eine **neue** Tabelle anlegst, pflege die
+Doku direkt mit `table_doc_set`.
 
 ## Antwort an den Nutzer
 
@@ -165,14 +198,59 @@ Wenn der Nutzer das nicht explizit will, kurz fragen:
 
 **Wann:**
 - Neue Konvention entstanden ("wir nennen die Gewerke immer kleingeschrieben")
-- Neue Tabelle angelegt, die ueberdauern soll (nicht work_*)
-- Lookup-Pfad eingerichtet (DCC-Katalog-Kapitel, Hersteller-Alias-Tabelle)
+- Lookup-Pfad eingerichtet (DCC-Katalog-Kapitel, Hersteller-Alias-Datei)
 - Wichtige Entscheidung getroffen
 - Fokus des Projekts hat sich verschoben
+- Neuer Wissens-Block, den Du in spaeteren Sessions nachschlagen koennen willst
 
-**Wie:**
-- Fuer gezielte Updates eines Abschnitts: `memory_append({"file":
-  "DISCO.md", "heading": "Projekt-Tabellen", "content": "`agent_sources` — Registry ..."})` — das haengt einen neuen H2-Abschnitt an.
-- Fuer vollstaendige Neufassung: vorher `memory_read`, dann
-  `memory_write({"file": "DISCO.md", "content": "<komplett>"})`.
-- Obsolete Eintraege **loeschen**, nicht durchstreichen (NOTES.md hat die Chronik).
+**Faustregel: Tabellen-Wissen NICHT in DISCO.md.** Tabellenbeschreibungen,
+Schema-Summaries, Beispiel-Queries → `table_doc_set` auf
+`agent_table_docs`. So bleibt DISCO.md schlank und Du holst Tabellen-
+Doku gezielt mit `table_doc_get` zurueck, wenn Du sie brauchst.
+
+**Wo landet was?**
+
+| Inhalt | Ziel |
+|---|---|
+| Neue Konvention, neuer Lookup-Pfad, neuer Aktueller Fokus | DISCO.md **Schicht 1** (per `memory_write` nach `memory_read`-Diff) |
+| Abgeschlossener Wissens-Block (z.B. „KKS-Masterliste 2026-04-28", „SharePoint-Link-Standard") | DISCO.md **Schicht 2** als neues Kapitel mit chapter-meta |
+| Neue/aktualisierte Tabellenbeschreibung | `agent_table_docs` per `table_doc_set` |
+| Chronologisches Ereignis („Heute Run #5 abgeschlossen") | NOTES.md per `memory_append` |
+
+**Schicht 2 — neues Kapitel anlegen:**
+
+```text
+memory_append({
+  "file": "DISCO.md",
+  "heading": "KKS-Masterliste 2026-05-09",
+  "tags": ["kks", "masterliste"],
+  "status": "current",
+  "content": "<Kapitel-Body>"
+})
+```
+
+`tags` + `status` triggern, dass automatisch ein chapter-meta-Block
+unter dem Heading angelegt wird — das ist Pflicht fuer das Reform-
+Format. **Append ohne tags/status** auf DISCO.md erzeugt zwar ein
+Kapitel, aber ohne Meta — vermeiden, sonst kann der Kapitel-Index
+es nicht zaehlen.
+
+**Schicht 1 oder vollstaendige Neufassung:**
+
+```text
+# Erst lesen
+memory_read({"file": "DISCO.md", "max_bytes": 0})
+# Dann diffen + komplett ueberschreiben
+memory_write({"file": "DISCO.md", "content": "<komplett, Marker bleibt erhalten>"})
+```
+
+Marker `<!-- DISCO-LAYER-1-END -->` **muss** drinbleiben, sonst
+verliert das Projekt das Reform-Format.
+
+**Schicht 1 ist hart limitiert (~3,5 KB).** Wenn sie aufquillt:
+Inhalte als neues Schicht-2-Kapitel auslagern oder verdichten.
+
+**Obsolete Eintraege loeschen, nicht durchstreichen** (NOTES.md hat
+die Chronik). Veraltete Schicht-2-Kapitel mit `status: archived`
+markieren — sie zaehlen dann nicht mehr ins Default-Onboarding,
+sind aber per `chapter:`-Lookup weiter erreichbar.

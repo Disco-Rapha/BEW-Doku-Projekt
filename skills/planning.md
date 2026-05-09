@@ -152,7 +152,7 @@ Audit-Trail liegen.
 - Status-Notizen mit Zahlen/Ergebnissen
 - Blocker und offene Fragen
 
-**Gehört NICHT in den Plan** (sondern in NOTES.md oder `memory.md`):
+**Gehört NICHT in den Plan** (sondern in NOTES.md oder DISCO.md):
 - Langfristige Erkenntnisse über das Projekt („der Kunde bevorzugt X")
 - Faustregeln, die über die aktuelle Aufgabe hinaus gelten
 - Referenz-Daten (Hersteller-Listen etc.)
