@@ -6,24 +6,97 @@ werden sollen.
 
 ---
 
-## TOP-Roadmap (Stand 2026-05-07)
+## TOP-Roadmap (Stand 2026-05-08)
 
 Re-Priorisierung nach Phase-2-Aufräumen. Echte „brennen-jetzt"-Items:
 
-1. **★ EXTRACTION-PIPELINE OVERHAUL** — Phase 2 (Office-Formate
+1. **★ Kundendaten-Trennung Software ↔ Repo** (User-Beobachtung
+   2026-05-08, prio HOCH — DSGVO-relevant)
+
+   **Symptom**: User hat an anderem Rechner Claude Code via GitHub
+   auf das Repo gelassen — Claude wusste sofort von den Prod-
+   Projekten („Lagerhalle", „Rea Denox" usw.). Das heisst: irgendwo
+   im Code/Doku des oeffentlich klonbaren Repos stehen
+   Kundendaten-Slugs. Verstoesst gegen die CLAUDE.md-Regel
+   *„Kundendaten niemals in Git"*.
+
+   **Identifizierte Lecks (Stand 2026-05-08, Quick-Scan):**
+
+   | Quelle | Treffer | Beispiel |
+   |---|---:|---|
+   | `docs/BACKLOG.md` | 10+ | Symptom-Beschreibungen ("Symptom 2026-05-07 (lager-halle, Prod):"), Run-IDs, Bug-Fixe pro Projekt |
+   | `docs/architecture-decisions.md` | 2 | „In der Praxis (rea-denox, lager-halle, campus-reuter)" |
+   | `scripts/backfill_pdf_page_offsets.py` | 1 | Beispiel-Aufruf im Docstring: `--project bew-rsd-campus-reuter` |
+   | **Commit-Bodies (Git-History)** | **26 Treffer** | Pipeline-Bug-Fixes, Diagnose-Commits — **liest jeder GitHub-Browser** |
+   | Commit-Subjects | 0 | sauber |
+   | `CLAUDE.md`, `system_prompt.md`, Skills | 0 | sauber |
+
+   **Aktion — Sofort (going forward, vor naechstem Commit):**
+
+   - Doku-Schreib-Konvention: **Pseudonyme** statt echter Slugs
+     verwenden. Vorschlag: `prod-A`, `prod-B`, `prod-C` mit
+     Mapping-Notiz **NUR** im lokalen Workspace
+     (`~/Disco/.repo-pseudonyms.txt`, gitignored), nicht im Repo.
+     Alternative: generische Begriffe wie „ein 1819-Datei-Projekt"
+     statt „lager-halle".
+
+   - **CLAUDE.md ergaenzen**: explizite Regel, dass Slugs aus
+     `~/Disco/projects/` weder in Code noch in Doku noch in
+     Commit-Messages auftauchen duerfen. Mit Pseudonym-Mapping-
+     Verweis.
+
+   - **Pre-Commit-Check** (klein, leicht): `git diff --cached`
+     gegen eine Liste bekannter Prod-Slugs greppen, bei Treffern
+     blockieren mit Hinweis aufs Pseudonym.
+
+   **Aktion — Repo-Cleanup (mittelfristig, eigene Session):**
+
+   - Bestehende Doku-Stellen anonymisieren: BACKLOG.md (10+) und
+     architecture-decisions.md (2) per Suchen/Ersetzen auf
+     Pseudonyme umstellen, scripts/backfill_pdf_page_offsets.py
+     analog. Bestand: noch alle Slugs einzeln abrufbar in dieser
+     Liste, wenn migriert in Pseudonym-Mapping.
+
+   - **Git-History-Rewrite (heikel)**: 26 Commit-Bodies enthalten
+     Slugs. BFG / git-filter-repo kann die History rewriten,
+     aber: alle Klone (auch User auf anderen Rechnern) muessen
+     dann frisch geklont werden, plus Force-Push auf origin.
+     Risiko abwaegen vs Nutzen — wenn Slugs harmlos
+     (Stadtteil-Namen ohne weitere Inhalte) ggf. on-going-forward
+     reicht.
+
+   **Aktion — Konvention dauerhaft:**
+
+   - **Phase-2-/Phase-3-Block 'Pseudonymisierung':** als eigener
+     Aufraeum-Block im Stil der bisherigen Bloecke (A-K), klar
+     abgeschlossen. Inkludiert die Doku-Migration, das
+     Pre-Commit-Hook, den CLAUDE.md-Eintrag.
+
+   - **Pruefung der Vergangenheit**: gibt es noch andere
+     Kundendaten-Spuren, die nicht Slugs sind? z.B.
+     KKS-Codes (Y0SBD32 AA501 etc.), Hersteller-Namen,
+     Personennamen aus Test-Output. Quick-Scan in eigener Session.
+
+   **Risikobewertung:**
+
+   - **DSGVO**: Slugs alleine sind keine personenbezogenen Daten,
+     aber sie verraten welche Kunden-Projekte BEW betreut.
+     Mandantenschutz-Argument.
+   - **Wettbewerbsrelevant**: Liste der bearbeiteten Projekte ist
+     vertrauliche Geschaeftsinformation.
+   - **Technisch riskant**: Git-History-Rewrite ist destruktiv,
+     wenn fehlerhaft.
+
+   **Vorschlag-Reihenfolge**: erst CLAUDE.md-Regel + Pre-Commit-
+   Hook (1h), dann Doku-Anonymisierung in dev-Branch (2h), dann
+   Entscheidung ueber History-Rewrite separat.
+
+2. **★ EXTRACTION-PIPELINE OVERHAUL** — Phase 2 (Office-Formate
    DOCX/PPTX + File-Internal-Metadata) und Phase 3 (Failed-Tracking
-   für 🟡-Status) sind die nächsten großen Brocken. Heute Nachmittag
-   geplant.
-2. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
+   für 🟡-Status) sind die nächsten großen Brocken.
+3. **★ Data-Lineage + Daten-Architektur Ebene 3** — Konzept-Diskussion
    mit User offen. Disco verzettelt sich in `work_*`-Tabellen ohne
    Lifecycle. Konsolidiert aus zwei Themen 2026-05-07.
-3. **★ System-Prompt + Skill + Tool Review-Session** — gemeinsamer
-   Walkthrough mit User: System-Prompt (782 Zeilen, 41 Sections, viel
-   Doppelung) + alle 11 Skills (besonders `report-builder` mit nur
-   1× Nutzung) + alle 42 Tools auf Sinn / Doppelung / Unklarheit
-   prüfen. Ergebnis: gestraffter Prompt + bewusstere Skill-Liste +
-   ggf. weitere Tool-Streichungen. User liest mit, ich liefere
-   Material.
 4. **Stabilitäts-Bugs aus FTS5-Deadlock** — 4 Bugs (FTS5 blockiert
    Server, Counter-Update nach Crash, DI-HighRes max_retries,
    LibreDWG SIGABRT). Eigene Bug-Fixing-Session geplant.
@@ -39,14 +112,153 @@ injection härten), H06 (DI-Kosten im Chat sichtbar), H11
 Folgefragen), M11 (Portal-Agent-Rollout), N02 (duration_ms-Schema).
 
 **Niedrig**: H02 (Slash-Referenzen), N01 (Flow-Scaffold-TODOs),
-Run-Strip Bug 2 (Counter-100%-Anzeige).
+Run-Strip Bug 2 (Counter-100%-Anzeige), chapter-meta-Whitespace-
+Kosmetik (aus Memory-Reform 2026-05-09).
 
-**Architektur-Entscheidung offen**: F15 — SharePoint-Connector
-behalten oder entfernen (~1085 SLOC + 4 Tabellen).
+**SharePoint-Connector-Tabellen-Cleanup (offen):** Tabellen
+`documents`, `source_folders`, `document_sp_fields`, `sources`,
+`processing_events` in `system.db` plus `agent_sharepoint_docs` in
+einigen Projekt-DBs — gehoeren zur Datenseite, werden separat
+gedroppt wenn die Daten in den Prod-Projekten nicht mehr referenziert
+werden.
 
 ---
 
 ## UI / Chat-Erlebnis
+
+### IDEE: Live-WYSIWYG-Editing im Viewer fuer Reports/Tabellen/Text (Vision, prio MITTEL)
+
+**Stand 2026-05-09 — User-Idee, noch zu diskutieren.**
+
+**Kerngedanke:** Wenn Disco an einem HTML-Report, einer Excel-Tabelle
+oder einem Text-/Word-Dokument arbeitet, aktualisiert der Viewer im
+rechten Panel sofort live mit. So entsteht ein iterativer
+Schreib-Loop — *„Disco schreibt → ich sehe sofort was rauskommt → ich
+sage was anders soll → Disco aendert"* — der Viewer wird vom passiven
+Anzeiger zum aktiven Co-Working-Space.
+
+**Use-Case-Beispiel:** Ergebnisbericht fuer den Kunden. Statt
+Build-Run-Reload-Schleife schreibt Disco direkt im Builder, der Viewer
+zeigt den neuen Stand sofort, der Nutzer kommentiert was angepasst
+werden soll, naechste Iteration.
+
+**Was waere noetig:**
+
+- **WebSocket-Push** vom Server an den Viewer, sobald eine relevante
+  Datei geschrieben wird (`memory_write`, `fs_write`, Builder-Run).
+  Heute schon vorhanden fuer Chat — auf Datei-Events erweitern.
+- **Pro Format ein Sub-Workflow:**
+  - **HTML-Reports:** schon heute schoen rendern (Sandbox-iframe).
+    Live-Reload braucht nur: Datei-Watcher + iframe-`location.reload()`.
+    Builder-Pattern (`build_*.py` → `report.html`) passt perfekt rein.
+  - **Excel-Tabellen:** schwieriger. SheetJS rendert read-only,
+    Write-Back muesste ueber Zwischenformat (CSV, SQLite, MD-Tabelle).
+    Pragmatischer Pfad: Disco editiert eine Tabelle in der DB
+    (`work_*` oder `agent_*`), der Viewer rendert die Tabelle live —
+    Excel kommt erst beim Export ueber `build_xlsx_from_tables`.
+    „Live-Excel" ist eigentlich „Live-DB-Tabelle plus on-demand-Export".
+  - **Text-/Markdown-Dateien:** simpel — gleiche Live-Reload-Logik wie
+    HTML, der Markdown-Viewer rendert frisch.
+  - **Word (.docx):** schwierig in der Live-Schleife. Realistisch:
+    Disco schreibt in Markdown, exportiert per python-docx
+    on-demand. Vollwertiges WYSIWYG fuer .docx waere ein eigenes
+    Sub-Projekt (LibreOffice-Headless? OnlyOffice-Embedded?).
+    Erstmal raus aus dem MVP.
+
+**Architektur-Skizze (grob):**
+
+1. Datei-Watcher im FastAPI-Server (`watchdog`-Lib) horcht auf
+   `<projekt>/exports/**/*.html`, `<projekt>/exports/**/*.md`,
+   `<projekt>/data.db`-Aenderungs-Events.
+2. WebSocket-Topic `viewer-update` mit Payload `{path, kind, ts}`.
+3. Frontend abonniert das Topic, prueft ob `state._viewerOpenFile`
+   matched, dann `openFileInViewer(...)` neu aufrufen.
+4. Optional Soft-Reload-Animation, damit der User sieht „da ist gerade
+   was Neues angekommen".
+
+**Offene Fragen fuer die Diskussion:**
+
+- Wie umgehen mit Race-Conditions, wenn der Builder mitten im Schreiben
+  ist und der Watcher schon triggert? (Debounce? Atomic-Rename-Trigger?)
+- Soll Disco bewusst in einen *Edit-Modus* fuer eine Datei wechseln
+  koennen, oder ist jeder `fs_write` ein Trigger? Ersteres ist
+  vorhersagbarer, zweites braucht weniger neue Tools.
+- Token-Frage: jeder Disco-Edit-Zyklus kostet — bei einem Bericht-Bau
+  mit 20 Iterationen schnell 50k Tokens. Lohnt sich nur, wenn die
+  Iteration billiger als ein voller Builder-Run ist (also: kleine
+  gezielte Aenderungen, keine Voll-Rewrites).
+- HTML-Report-Builder-Pattern bevorzugen: kleine Edit-Tools fuer den
+  Builder (`patch_block`, `add_section`) statt Voll-Rewrite, damit
+  Disco gezielt aendern kann.
+
+**Anschluss an bestehende Bausteine:**
+
+- HTML-Viewer mit Sandbox-iframe ist seit 2026-05-09 da.
+- Builder-Pattern (`build_<slug>.py` + Snapshots `report_YYYY-MM-DD_vN.html`)
+  ist im `report-builder`-Skill etabliert.
+- WebSocket-Infrastruktur existiert (`api/main.py`, Chat-Streaming).
+
+**Naechste Schritte (wenn entschieden):**
+
+1. Erstmal nur HTML-Live-Reload bauen (kleinster Aufwand, groesster
+   Wow-Effekt fuer die Demo) — Schaetzung 3–5 h.
+2. Markdown-Live-Reload als Bonus (~2 h, gleiches Pattern).
+3. DB-Tabelle live im Viewer (DB-Tabelle ist schon da, braucht nur
+   den Push-Trigger) — ~3 h.
+4. Excel-Live als „Export on demand" (kein WYSIWYG, aber Klick-zum-
+   Aktualisieren) — ~4 h.
+5. Word/.docx zurueckstellen, eigenes Sub-Projekt.
+
+---
+
+**Alternative Spur fuer Office-Formate: Office-Add-In statt Render
+(User-Idee 2026-05-09).**
+
+Statt Excel/Word **in Disco zu rendern** koennten wir Disco **als
+Office-Add-In in Excel/Word reinstecken**. Excel selbst wird zum
+Viewer — Fidelity per Definition perfekt, native UX, keine
+Render-Krueke.
+
+**Architektur:** Manifest + Taskpane (HTML/JS, gleiche Stack-DNA wie
+unsere Web-UI). Office.js-API steuert Zellen, Formate, Sheets, Charts,
+Pivots, conditional Formatting, named Ranges, aktuelle Auswahl.
+Taskpane spricht ueber `localhost:8765` mit dem laufenden Disco-
+FastAPI. Free SDK, laeuft auf Windows + Mac + Office-Web.
+
+**Pro:**
+
+- Perfekte Excel-/Word-Fidelity (es ist Excel/Word)
+- User-Workflow bleibt nativ — keine zweite UI lernen
+- Word + PowerPoint kommen mit demselben Pattern
+- Keine Cloud-Abhaengigkeit (Office.js laeuft im lokalen Excel)
+- BEW-Kunde hat eh Office
+
+**Contra:**
+
+- Distribution-Frage: Sideload trivial fuer Dev, fuer Kunden entweder
+  Sideload-Anleitung pro Rechner / AppSource-Veroeffentlichung / oder
+  zentrales M365-Admin-Deployment im Vattenfall-Tenant
+- UX-Split: Web-UI fuer Doku-Pipeline, Taskpane fuer Office-Arbeit
+- Auth: Taskpane → localhost-Disco. Dev easy, Prod braucht
+  HTTPS-Cert + Origin-Check
+
+**Aufwand:**
+
+- MVP-Sideload (Manifest + Taskpane mit Chat-Iframe + 5
+  Office.js-Befehle): 3–5 Tage
+- Solider Stand (Pivot/Chart/Formel + Auth-Hardening + Selektion-
+  Sync): 1–2 weitere Wochen
+- Distribution: separat verhandelbar mit Kunden-IT
+
+**Empfehlung:** Office-Add-In ist fuer Office-Formate die saubere
+Architektur. Die Render-Spuren (LibreOffice→PDF, xlsx2html) bleiben
+trotzdem sinnvoll als Inline-Preview im Disco-Web-Viewer, damit man
+nicht jedes Mal Excel oeffnen muss, nur um eine Tabelle anzusehen.
+Beides parallel: Inline-Preview fuer „kurz reinschauen", Office-Add-
+In fuer „aktiv mit Disco an einem Bericht arbeiten".
+
+---
+
 
 ### UI-Awareness für Disco (Priorität: mittel)
 
@@ -131,27 +343,13 @@ Das Frontend reagiert: Viewer öffnet sich rechts, zeigt Sheet 3-IBL.
 
 ## Report-Format / Analyse-Ergebnisse
 
-### Excel mit openpyxl auf Cowork-Niveau verwenden (DONE Routing-Teil 2026-05-05)
+### Excel mit openpyxl auf Cowork-Niveau — `xlsx_inspect_full` (offen)
 
-Disco hat `run_python` + openpyxl an Bord und kann damit alles, was
-Claude Cowork mit Excel macht — Formatierung lesen, Farben/Fonts/
-Borders setzen, Merged Cells, Formeln, Hyperlinks, Bilder. Die
-Infrastruktur steht.
-
-**Erledigt 2026-05-05:**
-- ✅ Skill `excel-formatter.md` deckt jetzt Editor-Modus UND
-  Custom-Generator-Modus ab (komplexer Report von Grund auf neu bauen).
-- ✅ Trigger-Tabelle im System-Prompt: „schoene Excel", „aufwendig",
-  „komplex", „Charts dazu", „Pivot", „Conditional Formatting",
-  „individuell formatiert" → direkt `excel-formatter`, nicht erst
-  `build_xlsx_from_tables`.
-- ✅ Tool-Description von `build_xlsx_from_tables` listet explizit, was
-  es NICHT kann + verweist auf den richtigen Pfad. Damit sieht der LLM
-  die Grenze schon im Schema.
-
-**Optional, nicht entschieden:** `xlsx_inspect_full` — Read-Tool, das
-Styles/Merges/Formeln strukturiert als JSON liefert, damit Disco fuers
-reine Anschauen nicht jedes Mal 15 Zeilen Python schreiben muss.
+Routing-Pfad ist seit 2026-05-05 in Place (Skill `excel-formatter`,
+Trigger-Tabelle, Tool-Description-Hinweise). **Optional offen:**
+`xlsx_inspect_full` — Read-Tool, das Styles/Merges/Formeln strukturiert
+als JSON liefert, damit Disco fuers reine Anschauen nicht jedes Mal
+15 Zeilen Python schreiben muss.
 
 ---
 
@@ -296,21 +494,110 @@ ganze Wissen in einer Datei sammeln."
 
 ---
 
-## UI / Layout
+## Document Intelligence
 
-### ~~PDF-Viewer funktioniert noch nicht (Bug)~~ — gefixt 2026-04-21
+### IDEE: DCC-Klassifikation per Embedding-Klassifikator (User-Idee 2026-05-09, prio MITTEL)
 
-Ursache war `pdfjs-dist@4.0.379`: ab 4.x ist pdf.js ESM-only.
-`<script src="…pdf.min.js">` ohne `type="module"` scheitert mit
-SyntaxError, `window.pdfjsLib` bleibt undefined → Viewer zeigt
-"pdf.js nicht geladen".
+**Stand:** strategisch, nicht akut. Vorbedingung: Korrekturlieferung
+DCC-Predictions von Sascha/Peter/Roman muss vorliegen — sonst lernt
+der Klassifikator GPT-5-Fehler.
 
-Fix: auf `pdfjs-dist@3.11.174` gepinnt (letzte UMD-Version), in Dev
-*und* Prod. Browser-Reload (Cmd+Shift+R), dann PDF erneut öffnen.
+**Kerngedanke:** Statt jedem Dokument einen LLM-Call mit DCC-Referenz-
+liste-CSV im Prompt zu geben, bauen wir ein **gelabeltes Trainings-Set
+und einen k-NN/Centroid-Klassifikator in Embedding-Space**. Pro DCC
+sammeln wir die Embeddings aller bestaetigten Beispiel-Dokumente; bei
+einer neuen Klassifikation berechnen wir das Document-Embedding und
+finden den DCC mit geringstem aggregiertem Abstand.
+
+**Architektur:**
+
+```
+TRAINING (offline, einmalig + bei Updates):
+  Pro gelabeltes Dokument:
+    Markdown laden -> in Sections splitten (~512 Tokens, 128 Overlap)
+    Pro Section: Embedding via Azure text-embedding-3-large (oder -small)
+    Speichern in agent_dcc_training_embeddings
+      (file_id, section_idx, master_dcc, vector_blob, label_quality)
+
+PREDICTION (online, pro Dokument):
+  1. Markdown -> Sections -> Embeddings
+  2. Pro DCC c: aggregate(distances zwischen query_sections und
+                          training_vectors_of_class_c)
+  3. Top-3 DCCs nach Score, plus Margin als Konfidenz
+  4. margin < threshold -> "unsicher" -> LLM-Fallback
+```
+
+**Architektur-Entscheidungen die zu treffen sind:**
+
+- **Centroid (1 Mean-Vektor pro DCC) vs. k-NN (alle Trainings-Vektoren):**
+  k-NN gewinnt wegen Erklaerbarkeit ("die 5 aehnlichsten Trainings-
+  Dokumente haben DCC=X"), Speicher ist mit ~30 MB irrelevant.
+- **Section-basiert vs. Whole-Document:** Section-basiert + Min-
+  Aggregation, weil DCC oft in einem Teil des Dokuments codiert ist
+  (Stempel, Inhaltsverzeichnis, Header).
+- **Embedding-Modell:** `text-embedding-3-small` fuer Pilot (5x billiger
+  als large, fuer strukturierte technische Texte oft ausreichend).
+- **Off-Distribution-Detection:** wenn min-distance > T fuer alle
+  Klassen → Fallback auf LLM. Wichtig: das System soll nicht
+  zwanghaft eine Klasse zurueckgeben, wenn das Dokument einen
+  ungesehenen DCC hat.
+
+**Knackpunkte (ehrlich):**
+
+- **Trainings-Daten-Qualitaet** — die Korrekturlieferung ist die
+  Pflicht-Vorbedingung. Bootstrap mit GPT-5-high-conf-Predictions
+  ist nur fuer P0/P1-Eval verwendbar, niemals als Default.
+- **Class Imbalance** — bei 410 DCCs werden in 1.500 Predictions oft
+  nur ~100 abgedeckt. Die anderen 310 braucht der LLM-Fallback.
+- **Long-Tail** — DCCs mit < 5 Beispielen sind k-NN-instabil; als
+  "nicht trainiert" markieren und Fallback.
+
+**Phasen (5 Tage Gesamtaufwand):**
+
+| Phase | Was | Aufwand |
+|---|---|---|
+| **P0 — Daten-Audit** | Class-Distribution der vorhandenen Predictions; reicht das fuer einen Pilot? | 0,5 Tag |
+| **P1 — Pipeline** | text-embedding-3-* deployen, agent_dcc_training_embeddings, Section-Splitter (`build_search_index`-Logik wiederverwenden), Bootstrap-Flow | 1 Tag |
+| **P2 — Eval** | 5-Fold-Cross-Validation auf den Trainings-Daten; Top-1/Top-3-Accuracy pro DCC; Confusion-Matrix-Light | 0,5 Tag |
+| **P3 — Inference-Flow** | `dcc_prediction_v3_embedding` mit margin-Threshold + LLM-Fallback; schreibt in `agent_dcc_prediction` mit `predictor_version='embed_v1'` | 1 Tag |
+| **P4 — A/B-Test** | 200 Dokumente parallel via v1 (LLM) und v3 (Embedding+Fallback); Diff in Excel-Report | 0,5 Tag |
+| **P5 — Active Learning** | Bei `margin < T` Flag in UI; Sascha entscheidet; Entscheidung fliesst zurueck ins Trainings-Set | 1 Tag |
+
+**Vor- vs. Nach-Korrekturlieferung-Schwenk:**
+
+- **Vor:** P0–P2 mit Bootstrap-Daten (high-conf-GPT-5-Predictions);
+  A/B-Vergleich gegen den heutigen Flow zeigt Setup-Tauglichkeit.
+  **Niemals als Default schalten** — wir lernen sonst GPT-5-Fehler.
+- **Nach:** Bootstrap-Wahrheit durch echte Reviews ersetzen, Re-Train,
+  neue Eval. Wenn Top-1-Accuracy ≥ heutiger LLM-Qualitaet: produktiv
+  schalten als Default, LLM bleibt Fallback.
+
+**Erwartete Effekte:**
+
+| Metrik | Heute (LLM) | Embedding-System |
+|---|---|---|
+| Kosten pro Inferenz | ~1–3 ¢ | ~0,001 ¢ (1000× billiger) |
+| Latenz pro Inferenz | 5–15 s | ~100 ms (50× schneller) |
+| Vollscan rea-denox (1.500 Dok.) | ~30 €, ~3 h | ~5 ¢, ~3 Min |
+| Reproduzierbarkeit | Modell-Drift moeglich | deterministisch |
+| Erklaerbarkeit | "Modell hat entschieden" | "Diese 5 aehnlichsten Trainings-Dokumente sind DCC=X" |
+
+**Anschluss an bestehende Bausteine:**
+
+- Section-Splitter existiert in `src/disco/agent/functions/search.py`
+  (`build_search_index` macht Chunks à 500–800 Tokens) — wiederverwendbar.
+- Azure-OpenAI-Client + Sweden-Central-Setup ist da, fehlt nur die
+  Embedding-Deployment-Konfiguration.
+- `agent_dcc_prediction` als Ziel-Tabelle bleibt — Feld
+  `predictor_version` ergaenzen, damit v1 (LLM) und v3 (Embedding)
+  parallel laufen koennen.
+- SQLite mit BLOB-Spalte fuer Vektoren reicht; numpy-In-Memory-
+  Cosine fuer 5k Vektoren ist Mikrosekunden-schnell.
+
+**Wann starten:** wenn die Korrekturlieferung kommt. Vorher kein Default-
+Schalter, max. P0–P2 als Setup-Pilot.
 
 ---
-
-## Document Intelligence
 
 ### DI-Kosten im Chat sichtbar machen (Priorität: hoch — aus UAT 2026-04-20)
 
@@ -346,22 +633,6 @@ Müssen vielleicht vorher für bestimmte Parameter gesetzt werden."
 4. UI-Block prüfen — steht die Zahl irgendwo sichtbar?
 
 Danach die Lücken gezielt schließen.
-
-### PDF-Extraktion: 3-Tier-Pipeline (DONE 2026-04-22)
-
-**Status:** Umgesetzt. Pipeline `pdf_routing_decision` → `pdf_to_markdown`
-mit Engines `docling-standard` / `azure-di` / `azure-di-hr`. Agent liest
-nur noch ueber `pdf_markdown_read` aus `agent_pdf_markdown`. Altes
-`pdf_extract_text` (pypdf), `extract_pdf_to_markdown` (DI-Tool) und
-VLM-Varianten (granite-mlx / smol-mlx) sind entfernt.
-
-Alter Text gekuerzt — Entscheidungshistorie: Benchmark-Ergebnis zeigte
-docling-standard ausreichend fuer Text + Tabellen, DI-HighRes (OCR-
-HighResolution) unverzichtbar fuer vector-drawing + Plankoepfe.
-VLM-Varianten waren zu langsam fuer Bulk-Runs und liefern keinen
-Qualitaetsvorteil gegenueber docling-standard.
-
----
 
 ## Sicherheit / Projekt-Isolation
 
@@ -457,22 +728,69 @@ Ursprung: UAT-Session 2026-04-20, Nutzer-Frage nach Run #15:
 > nachdem disco neu gestartet wird bzw während des flows der
 > computer ausgeschaltet (oder sleep) wurde"
 
-## Docling / MLX
+## Architektur
 
-### Hybride Markdown-Pipeline (DONE 2026-04-22)
+### ★ Object-Graph als zweite Disco-DB (User-Idee 2026-04-23, vertieft 2026-05-10, prio HOCH-strategisch)
 
-**Status:** Umgesetzt als `pdf_routing_decision` (PyMuPDF-Heuristik pro
-Seite → Engine pro Dokument, Strategie A: eine Engine je Datei) und
-`pdf_to_markdown` (Engine-Dispatcher `src/disco/pdf/markdown.py`).
-VLM-Varianten entfernt — docling-standard deckt Text + Tabellen,
-azure-di A4-Scans, azure-di-hr Vector-Drawings / Plankoepfe ab.
+**Kerngedanke:** Disco soll künftig nicht nur Dokumente kennen, die
+Objekte beschreiben, sondern **Objekte (Anlagen-Komponenten:
+Pumpen, Ventile, Motoren, Sensoren, Bauwerks-Elemente etc.) und ihre
+technischen Zusammenhänge** als eigene Reasoning-Schicht verfügbar
+haben. Dann wird Cross-Source-Reasoning erst richtig stark — Disco
+kann z. B. „wenn diese Pumpe ausfällt, was hängt downstream dran?"
+oder „welche Datenblätter belegen welchen KKS, mit welcher
+Konfidenz?" deterministisch beantworten.
 
-Ursprung: UAT-Session 2026-04-20 (Granite too slow) → Beschluss
-2026-04-22: VLM komplett raus, festes 3-Tier-Routing.
+**Stand der Vorbereitung:**
+
+- Erstes Konzept aus Memory-Notiz 2026-04-23
+  (`project_objekt_inhalt_modell.md`): dünnes Meta-Schema +
+  symmetrische Dialekt-Schicht für KKS/RDS-PP UND DCC/VGB.
+  Status damals: *„Super Ansatz, wir werden es tun."*
+- Vertiefte Vorbereitungs-MD geschrieben **2026-05-10** mit
+  10 Entscheidungs-Punkten als Diskussions-Tagesordnung,
+  Schema-Vorschlägen, drei durchgespielten Reasoning-Use-Cases,
+  und konkreter Migrations-Reihenfolge der bestehenden
+  `agent_kks_*`-/`agent_component_register`-/
+  `agent_building_element_register`-Tabellen.
+- **Datei (außerhalb des Repos, weil Kunden-Beispiele drin):**
+  `~/Claude/discussion-prep-object-graph.md`.
+
+**Was die MD klärt (für die Diskussion vorbereitet):**
+
+| Punkt | Optionen + Empfehlung |
+|---|---|
+| Objekt-Scope | physisch / +logisch / +bautechnisch / +Räume — Empfehlung: physisch + logisch + bautechnisch |
+| Hierarchie-Quelle | KKS allein / KKS+sekundär / symmetrische Dialekt-Schicht — Empfehlung: KKS-primär, Schema mehrachsen-fähig |
+| Relation-Typen | MVP-Set: parent_of, belongs_to_system, documented_by, feeds, controls, supersedes, mounted_in |
+| Property-Modell | Hybrid: Standard-Felder als Spalten + JSON für domänen-spezifisch + eigene `agent_object_property_evidence` mit Provenienz |
+| Edge-Schema | Generische Edge-Tabelle mit `relation_type`-Spalte |
+| Befüllung | KKS-Master → Excel-Listen → Datenblatt-PDFs → Pläne → Fachunternehmer-Erklärungen → manuelle Pflege |
+| Storage | **Plan A: SQLite-Property-Graph in `datastore.db`** (kein neues Tool, Mandantentrennung intakt). Plan B: LadybugDB als zweite DB pro Projekt — bei > 50k Objekten oder Multi-Hop-Schmerz |
+| Tool-Layer | MVP 8 Tools: `object_show`, `object_neighbors`, `object_path`, `objects_in_system`, `objects_by_type`, `documents_for_object`, `object_lineage`, `object_query` |
+| Use-Cases | Soll/Ist-Vollständigkeit · Impact-Analyse · Identdaten-Konsolidierung über alle Quellen |
+| Industrie-Standards | Pragmatik mit bewusster Standard-Kompatibilität (KKS+RDS-PP+VGB als Hauptachsen, ISO-15926/CFIHOS/DEXPI/IFC als spätere Mapping-Hülle) |
+
+**Vorgeschlagener Diskussions-Ablauf:**
+2,5–3 h ruhige Session, in 6 Blöcken (Walkthrough, Scope+Hierarchie+Edges+
+Properties, Edge-Schema+Befüllung+Storage, Tools+Use-Cases+Standards,
+Migrations-Reihenfolge, Roadmap+Aufwand).
+
+**Wann starten:** strategisch nach BEW-Demo Dienstag 2026-05-12 und
+nach der Korrekturlieferung von Sascha/Peter/Roman (die Korrekturen
+sind die fachliche Wahrheit, auf der wir den Object-Graph initial
+befüllen).
+
+**Pointer:**
+- Vorbereitungs-MD: `~/Claude/discussion-prep-object-graph.md`
+- Memory-Vorgänger-Konzept:
+  `~/.claude/projects/-Users-BEW-Claude-BEW-Doku-Projekt/memory/project_objekt_inhalt_modell.md`
+- Anschluss an: Embedding-DCC-Klassifikator-Idee (siehe Section
+  *Document Intelligence*) — beide brauchen die Korrekturlieferung als
+  fachliche Wahrheit, beide profitieren voneinander (Object-Graph als
+  Filter-Schicht für Embedding-Klassifikator).
 
 ---
-
-## Architektur
 
 ### Tabellen-Katalog pro Projekt-DB (Priorität: mittel) — 2026-04-22
 
@@ -676,6 +994,46 @@ siehe Commit am 2026-05-07).
 
 ## Release / DevOps
 
+### Foundry-Chain-Invalidation bei Code-Update (Prio: hoch — gilt fuer naechsten Pipeline-Code-Change)
+
+**Symptom 2026-05-07 (lager-halle, Prod):** Nach Deploy von
+Compaction-v3 (`e7e5382` — Tool-Output-Truncation in
+`build_responses_api_input`) crashte der naechste User-Turn mit
+Foundry-Fehler `400: No tool output found for function call
+call_<id>`. Alle DB-Eintraege waren sauber gepaart; Ursache war der
+Foundry-Server-State unter `previous_response_id`, der noch das alte
+volle Output-Format erwartete und beim neuen truncated Format aus
+unserem Input nicht matchte.
+
+**Reparatur damals**: per Hand SQL-Update auf `project_chat_state`
+auf Prod **und** Dev — `foundry_response_id`,
+`measured_context_tokens`, `measured_at`, `measured_model`,
+`measured_cached_tokens` auf NULL fuer alle Projekte mit aktiver
+Chain (8 Prod, 12 Dev). Naechster Turn lief Stateless durch, Foundry
+hat frische response_id vergeben, alles sauber.
+
+**Was aufzubauen ist:**
+
+- **Format-Version-Tracker:** im Code von `build_responses_api_input`
+  eine Konstante `INPUT_FORMAT_VERSION` halten. Bei strukturellen
+  Aenderungen am Input-Format (Truncation-Logik, neue Item-Types,
+  geaenderte Reihenfolge) wird die hochgezaehlt.
+- **DB-Spalte `project_chat_state.input_format_version`** — wird beim
+  Schreiben einer `foundry_response_id` mitgespeichert.
+- **Lese-Zeit-Check:** wenn `input_format_version != INPUT_FORMAT_VERSION`,
+  wird `foundry_response_id` ignoriert (Stateless-Modus erzwingen) und
+  beim naechsten erfolgreichen Turn neu gesetzt.
+
+**Alternativ einfacher** (Migration-Hook): jede Migration, die
+`build_responses_api_input` oder die Persistenz-Schicht aendert,
+laesst ein `UPDATE project_chat_state SET foundry_response_id=NULL`
+mitlaufen. Weniger elegant, aber sicher.
+
+**Wichtig**: Nicht in der Naehe der Memory-Architektur-Reform (TOP-2)
+liegen lassen — die wird vermutlich auch Persistenz-Format
+veraendern und triggert sonst denselben Crash. Vor der Memory-Reform
+fertig haben.
+
 ### Dev/Prod — Folgefragen (Priorität: mittel)
 
 Minimal Viable Split laeuft seit 2026-04-20: dev-Branch + zwei
@@ -759,21 +1117,6 @@ Kosmetisch, nicht funktional.
 
 ---
 
-## Pipeline-Vollstaendigkeits-Sicht — DONE 2026-05-04
-
-Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL (siehe unten).
-Phase 1 (View + Sidebar-UI) live seit 2026-05-04, Phase-6-Schaerfung
-(Maßstab pro Schritt + Schema-Bug + Unsupported-Klasse) live seit
-2026-05-05/06.
-
-## Flow-UI im Chat-Fenster — DONE 2026-04-25
-
-Erledigt: Commits 829fd65 + 6200002 + 0e04dc9 + 77f71ea. Run-Strip
-auffaelliger, finished-Runs bleiben mit Status-Badge, Klick auf
-ganze Zeile oeffnet Run, schnelle Runs <3s via recent_finished-API.
-
----
-
 ## Office-Formate in die Extraction-Pipeline (Prioritaet: hoch)
 
 Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL Phase 2 (siehe unten).
@@ -782,15 +1125,6 @@ DOCX/PPTX brauchen Engines (`python-docx`/`python-pptx`, MIT, lokal,
 
 User-Quote (2026-04-25): *"Power Point, und Word Dateien haben wir
 total vergessen :D Die muessen auch noch in die Pipeline."*
-
-## Extraction nur auf kanonische Dateien — DONE 2026-05-05
-
-Erledigt: `extraction_routing_decision/runner.py` filtert seit
-Commit c9b6374 Files mit `duplicate-of`-Relation (from-Seite) aus
-dem Input. Effekt rea-denox: 5790 → 1775 kanonische Routings.
-
-`replaces` und `format-conversion-of` sind im Schema vorgesehen,
-aber noch nicht gefuellt — bleibt als Phase-3 in ★-Konsolidat.
 
 ---
 
@@ -861,22 +1195,116 @@ gesehen und bearbeitet werden"*
 
 ---
 
+## Skill-Library mit Daten-Paket — projektuebergreifend (Prioritaet: mittel, strategisch)
+
+**User-Idee 2026-05-08:** Skills sollen vom *Workflow-Playbook*
+(heute Markdown) zum *Workflow + Daten-Paket* werden. Eine Norm wie
+**VGB S 831** lebt nicht nur als „so pruefst Du gegen die Norm"-
+Anleitung, sondern bringt die Norm-Tabellen (DCC-Codes,
+Anforderungen, Klassen) gleich mit. Skills werden so zur
+projektuebergreifenden Wissens-Library — einmal pflegen, in jedem
+Projekt einheitlich nutzen.
+
+**Use-Cases (User-Vision-Doku 2026-05-07 verweist):**
+
+- `vgb-s-831` — Dokumentations-Standard, DCC-Codes + Anforderungen
+- `kks-rds-pp` — KKS-/RDS-PP-Hierarchie fuer Kraftwerks-Klassifikation
+- `din-ibl` — DIN-Informations-Bedarfs-Listen
+- `legal-fidic` — FIDIC-Klauseln + Notification-Pflichten
+- `qm-endkontrolle` — QM-Checklisten
+- `claim-trail` — Klausel-bezogene Korrespondenz-Strukturen
+
+### Architektur-Skizze (zur Diskussion, nicht final)
+
+Skills werden vom Single-File zum Verzeichnis:
+
+```
+skills/vgb-s-831/
+├── SKILL.md              ← Frontmatter + Workflow-Anweisungen
+├── data/
+│   ├── vgb_dcc_codes.csv
+│   ├── vgb_anforderungen.csv
+│   └── vgb_klassen.csv
+└── docs/
+    └── normbezug.md      ← Quellen, Versionen, Aenderungshistorie
+```
+
+Frontmatter erweitert um `provides`-Block:
+
+```yaml
+name: vgb-s-831
+version: 1.2.0
+description: VGB S 831 — Dokumentations-Anforderungen
+provides:
+  tables:
+    - name: context_skill_vgb_s_831_dcc_codes
+      source: data/vgb_dcc_codes.csv
+      schema: { dcc_code: text, beschreibung: text, gewerk: text }
+    - name: context_skill_vgb_s_831_anforderungen
+      source: data/vgb_anforderungen.csv
+```
+
+`load_skill` macht dann mehr als Markdown-Read:
+
+1. Schaut in der Projekt-DB nach `context_skill_<skill>_<table>`.
+2. Wenn fehlt → importiert aus `data/`.
+3. Wenn da, aber Skill-Version niedriger als verfuegbar → fragt User
+   („Update auf 1.2.0?").
+4. Liefert Markdown + Tabellen-Hint (aktueller Tabellen-Stand,
+   Beispielzeilen).
+
+### Verbindung zu bestehenden Themen
+
+- **Memory-Architektur-Reform (TOP-3)** — der „Tabellen-Wissen-bei-
+  Tabellen"-Punkt steckt direkt drin. Wenn jede Tabelle ihre eigene
+  Beschreibung mitbringt (Schema-Comment / `agent_table_docs` /
+  `_doc.md`), ist eine Skill-mitgelieferte Tabelle mit ihrer eigenen
+  Doku natuerlich konsistent. **Memory-Reform ist Voraussetzung.**
+- **Public-Workspace (oben)** — Skill-Library als konkrete
+  Anwendung. Skill-Daten koennen entweder pro Projekt importiert
+  werden (heute-naehe) oder aus `_public/data.db` per ATTACH gelesen
+  (Public-Workspace-Stufe 3).
+- **Vision-Doku** — die fuenf neuen Domain-Bereiche (Legal/Claim/
+  Contract/QM/Termin) sind genau dieses Muster: Domain-Skill mit
+  Klausel- bzw. Norm-Tabelle.
+
+### Risiken / offene Fragen
+
+| # | Frage | Klaerungsweg |
+|---|---|---|
+| 1 | **Lizenz/Copyright** bei VGB S 831 + DIN. Auszuege (DCC-Codes, Klassen) vermutlich vertretbar, **Volltext** der Anforderungen kritisch. Pro Skill abklopfen. | rechtliche Pruefung pro geplantem Skill, **bevor** wir Inhalte committen |
+| 2 | **Daten-Groesse + Repo-Bloat** — viele Skills à 10 MB schwellen das Repo. | Groessen-Limit setzen (z.B. < 5 MB pro Skill); grosse Skills aus `_public/`-Workspace laden statt aus Repo |
+| 3 | **Update-Strategie** — bei Norm-Aenderung von v1.1 → v1.2 in laufenden Projekten. Drei Optionen: manuell, automatisch, Pinning. | mit User entscheiden; **Pinning + User-Frage bei Diff** ist Default-Vorschlag |
+| 4 | **Cross-Skill-Daten-Konflikte** — zwei Skills wollen `context_kks` belegen. | Tabellen-Prefix `context_skill_<skill>_<table>` Pflicht |
+| 5 | **Projekt-Override** — Kunde hat angepasste Norm-Tabelle. | Skill-Tabellen sind read-only nach Import; Projekt darf eigene `context_<table>` daneben pflegen, hat Vorrang in Queries |
+| 6 | **Egress-Policy** (CLAUDE.md) — wenn Skills aus externer Cloud nachgeladen werden, neue Egress-Verbindung. Heute lokal-first. | Default: alles im Repo. Externe Quellen nur mit explizitem User-OK + Egress-Policy-Update. |
+| 7 | **Test-Aufwand** — pro Skill Migrations-Test + Daten-Validierungstest. | lohnt erst ab ~3-5 datentragenden Skills; vorher nur ein Pilot. |
+
+### Vorgehen (vorgeschlagene Reihenfolge)
+
+1. **Memory-Architektur-Reform (TOP-3) zuerst** — denn Tabellen-Doku-
+   Format wird dort entschieden.
+2. **Pilot-Skill `vgb-s-831`** — ein Skill bauen, einbauen, an einem
+   Projekt validieren. Lizenz vorher klaeren.
+3. **`load_skill`-Tool erweitern** um Daten-Import + Versions-Check.
+4. **Standardisierung als Block** (analog Phase-2-Bloecke) erst
+   nach erfolgreichem Pilot.
+
+### Klaerungsbedarf an User (vor finaler Spezifikation)
+
+- Lizenz-Status VGB S 831 + DIN-Normen — eigene Pruefung oder Auszug
+  reicht?
+- Update-Strategie: Pinning per Default oder Auto-Upgrade-Frage?
+- Erwartete Anzahl Skills (3, 10, 30+?) — beeinflusst stark, ob
+  „internes Skill-Verzeichnis" reicht oder Plugin-System noetig.
+- Memory-Reform vs Skill-Library zeitlich getrennt oder zusammen?
+
+---
+
 ## Run-Strip Bugs (Prioritaet: niedrig)
 
 Beobachtet 2026-04-25 nach den Run-Strip-Updates (Commits 829fd65,
 6200002, 0e04dc9, 77f71ea):
-
-### Bug 1: gleicher Run wird doppelt angezeigt — **GEFIXT 2026-05-05** (Commit 15ee0c2)
-
-Ursache: Field-Inkonsistenz zwischen `/api/workspace/active-runs`
-(recent_finished mit `project_slug`) und `/api/workspace/projects/{slug}/runs/{id}`
-(`project_slug=None`). Der Frontend-Dedup-Key ueber
-`${project_slug}:${id}` matchte daher 'null:25' nicht mit
-'bew-rsd-rea-denox:25' → derselbe Run landete zweimal im finished-Strip.
-
-Behoben mit Backend-Fix (`api_run_status` faellt auf URL-Parameter
-zurueck) + Frontend-Defensiv-Patch (`runStripFetchFinal` traegt Slug
-aus prev nach).
 
 ### Bug 2: Counter springt nicht auf 100% (1720/1721 bleibt)
 
@@ -902,29 +1330,6 @@ Zwei Zeilen Code, keine API-Aenderung.
 User-Quote (2026-04-25): *"Es werden zwei Flows doppelt angezeigt und
 1720 / 1721 das haette auf 1721 / 1721 springen sollen, wenn der flow
 durch ist. Der failed soll ja mitgezaehlt werden."*
-
----
-
-## Cost-Tracking fuer GPT-5.1-Vision-Aufrufe — DONE 2026-05-06
-
-Erledigt:
-- Zentrales `disco/pricing.py` mit Sweden-Central-Data-Zone-Standard-
-  EUR-Listpreisen (2026-05-06 von User gegen Microsoft-Pricing-Seite
-  verifiziert).
-- `disco/docs/image.py` rechnet seit Commit 7f33a8f mit echten
-  Tokens × Tarif.
-- `flows/sdk._extract_usage` extrahiert seit Commit dbbd725 auch
-  `cached_tokens` aus der Foundry-Antwort und reicht sie an
-  `compute_cost_eur` weiter — Cached-Input-Discount greift jetzt.
-- gpt-5.1-Tarife auf User-Verifikation (1.18/0.12/9.41) korrigiert
-  (Commit 84d68fe), gpt-5.4-prod aus Global-Tarif extrapoliert
-  (2.36/0.24/14.10, Commit 25f1c3b).
-
-Bestand-Korrektur: nicht durchgefuehrt (cached_tokens sind nicht
-historisch persistiert). Neue Flow-Runs rechnen ab sofort korrekt.
-
-User-Quote (2026-04-25): *"tracken wir eigentlich schon was uns der
-gpt aufruf mit den bildern kostet im flow?"*
 
 ---
 
@@ -1278,15 +1683,12 @@ selbst keine Uebersicht."*
 - Wie verhalten wir uns bei `--reload`-Worker-Tausch (PID-Wechsel)?
 
 
-## Extraction-Pipeline-UX: Ampelsystem, Auto-Pipeline, Batch-Mode — TEILWEISE DONE 2026-05-04/05/06
+## Extraction-Pipeline-UX: noch offen (Auto-Trigger, Batch, FS-Watcher)
 
-Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL. Erledigt:
-- ✅ Ampelsystem in Sidebar (Phase 1, Commits ab 2026-05-04)
-- ✅ Schaerfung (Maßstab pro Schritt, Schema-Bug, Unsupported-Klasse,
-  Routing-Filter auf Kanonik) — Commits c7287e7 + c9b6374, heutige
-  Phase-2-Commits 4b086f7 + 67d5207 + 9fd053e
-- Offen: Auto-Pipeline-Trigger nach `sources_register` (Disco fragt
-  proaktiv), Batch-API-Engines, FS-Watcher (Phase 3)
+Konsolidiert ins ★-EXTRACTION-PIPELINE-OVERHAUL. Offen:
+- Auto-Pipeline-Trigger nach `sources_register` (Disco fragt proaktiv)
+- Batch-API-Engines
+- FS-Watcher (Phase 3)
 
 User-Quote (2026-04-27): *"Die gesamte extraction pipeline von
 registrierung bis hin zum fertigen suchindex funktioniert
@@ -1952,10 +2354,8 @@ Management"-Eintraegen zusammen.
 
 ### Cluster F — Context-File-Behandlung (3 Reactions, eng verzahnt)
 
-**Quotes:**
+**Quote:**
 - *"Information zu spezifischen Dateien sollten wir gleich an den Dateien speichern. Context files: kurz sagen was das für eine datei ist wo die her kommt und was wir damit machen wollen. Sollte sich zuverlässig gemerkt werden"* (msg 1620)
-- *"Bug: die context dateien wollen wir ja genau so registrieren und einlesen."* (msg 1668) — ✅ **GEFIXT 2026-05-05** (Commit 03eaf9d, sources_register Default-Scope `both`)
-- *"Disco fängt an links zu verwenden, das ist gut und genau da will ich auch hin - nur funktioniert dieser noch nicht."* (msg 1601) — ✅ **GEFIXT 2026-05-04** (Klickbare Links Phase 1, Commit fd99728)
 
 **Verbesserung (offen):**
 1. **File-Notes-Tabelle** `agent_source_notes` (oder Spalten in
@@ -1998,11 +2398,9 @@ um User-erstellte File-Annotations.
 - *"Wir haben irgendwo noch ein PDF Fokus drin. Wenn ich nach Dateien frage möchte ich ja eine Aussage über alle Dateiformate im Projekt haben und nicht nur über PDF"* (msg 2022)
 
 **Verbesserung:**
-1. ✅ **Teilweise erledigt 2026-05-07**: `pdf_classify`-Tool entfernt
-   (Phase 2 Block A, Commit 4b086f7). `agent_pdf_inventory` wird
-   im Pipeline-Status-Endpoint nicht mehr referenziert (Bugfix
-   2026-05-05, Commit 15ee0c2). Cleanup der Tabelle bleibt offen
-   — geht ins ★-Konsolidat Phase 3.
+1. **`agent_pdf_inventory`-Cleanup** noch offen — wird im
+   Pipeline-Status-Endpoint nicht mehr referenziert, Tabelle aber
+   nicht gedroppt. Geht ins ★-Konsolidat Phase 3.
 2. **Skill-Sprache anpassen**: in disco/system_prompt.md /
    Skills, wenn von "Dokumenten" gesprochen wird, soll die
    Antwort alle file_kinds umfassen. Default "Dateien" =
@@ -2196,22 +2594,7 @@ User-Quote (2026-04-30): *"Ich haette das ampelsystem aber gerne
 praktisch auf extraction pipeline step ebene. Eine art process ampel
 fuer jeden prozessschritt."*
 
-### Phase 6 (Pipeline-Status-Schaerfung) — TEILWEISE GEFIXT 2026-05-05
-
-Erledigt am 2026-05-05 (Commits c7287e7 + c9b6374):
-- ✅ **Schema-Bug** in n_canonical-SQL (`r.source_id` →
-  `r.from_source_id`) — Schritt 3 zeigte immer "→ 0 kanonisch", jetzt
-  korrekt (rea-denox: 5790 → 1775).
-- ✅ **Maßstab pro Schritt** statt einheitlich n_registered:
-  Schritt 4 = kanonisch, Schritt 5 = kanonisch − unsupported,
-  Schritt 6 = bereits extrahierte Files. Duplikate fallen aus
-  Pendings raus.
-- ✅ **Unsupported-Klasse** sichtbar: Files mit engine NULL/leer
-  zaehlen als n_unsupported (eigener Bucket), nicht als pending.
-- ✅ **Tooltip-Aufschluesselung** im Frontend: done · pending ·
-  failed · ohne Engine.
-- ✅ **Routing-Flow** filtert Duplikate beim Input
-  (extraction_routing_decision/runner.py).
+### Phase 6 (Pipeline-Status-Schaerfung) — Failed vs Pending offen
 
 Offen (Phase B):
 - ❌ **Failed vs Pending in Schritt 4 + 5.** `work_extraction_routing`

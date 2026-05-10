@@ -865,6 +865,13 @@ a:hover { text-decoration: underline; }
 .viewer-table tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
 .viewer-table td:hover { background: var(--panel2); }
 
+.viewer-html-frame {
+  width: 100%;
+  height: calc(100vh - 110px);
+  border: none;
+  background: #fff;
+  display: block;
+}
 .viewer-pre {
   font-family: var(--mono); font-size: 12px;
   white-space: pre-wrap; word-break: break-word;
@@ -1186,6 +1193,8 @@ a:hover { text-decoration: underline; }
   <aside id="viewer-pane">
     <div id="viewer-header">
       <span id="viewer-title">Viewer</span>
+      <button id="viewer-open-os" class="icon-btn" title="Mit Default-Programm im System oeffnen (Finder/Explorer)"
+              onclick="openCurrentFileInOS()" style="display:none">📂</button>
       <button class="icon-btn" title="Schliessen" onclick="closeViewer()">✕</button>
     </div>
     <div id="viewer-content">
@@ -1574,7 +1583,8 @@ function updateTokenCounter(s) {
   } else if (s.warn_level === 'critical') {
     el.classList.add('critical');
     btn.classList.add('urgent');
-    // Einmalig automatisches Vorschlags-Modal
+    // Einmaliger Hinweis-Toast (kein Modal, kein Tanz). Auto-Compact
+    // greift ohnehin beim naechsten Turn.
     if (!state._criticalWarningShown) {
       state._criticalWarningShown = true;
       setTimeout(() => openCompactModal(true), 400);
@@ -1591,44 +1601,55 @@ function _fmtTokens(n) {
   return Math.round(n/1000) + 'k';
 }
 
-// ----- Compact-Modal -----------------------------------------------------
+// ----- Compaction (1-Klick-Pfad) ----------------------------------------
+//
+// Mit der Memory-Reform 2026-05-09 macht ein Klick auf den 🗜-Button
+// den kompletten Vorgang in einem Aufruf:
+//   1. POST /chat/compact triggert run_compaction_with_handover
+//      — Memory-Distillation (NOTES + DISCO + agent_table_docs) +
+//        Handover-Brief + Cutoff + NOTES-Auto-Archiv.
+//   2. Frontend zeigt vorher eine cute Opening-Message, danach eine
+//      Closing-Message mit dem Memory-Report.
+// Kein Modal, kein Prompt-Tanz, kein zweiter Klick.
+
+const COMPACTION_OPENING_MESSAGES = [
+  "Mache mir kurz Notizen…",
+  "Ich muss mich mal sortieren, bin gleich wieder da.",
+  "Muss mal eben Doku machen, bevor ich alles vergesse.",
+  "Gleich geht's weiter, Moment…",
+  "Schnell festhalten, bevor's mir entgleitet…",
+  "Kopf aufraeumen, einen Augenblick…",
+  "Memo an mich selbst — bin gleich zurueck.",
+  "Ich destilliere kurz, dann arbeiten wir weiter.",
+  "Notizblock raus, eben festhalten…",
+  "Lass mich kurz sortieren, was wichtig war.",
+];
+
+const COMPACTION_CLOSING_MESSAGES = [
+  "Ok, sortiert.",
+  "Notizen gemacht — weiter geht's.",
+  "Bin wieder da.",
+  "Gedaechtnis aktualisiert.",
+  "So, das ist festgehalten.",
+];
+
+function _pickCompactionMessage(pool) {
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// openCompactModal bleibt nur als Auto-Hinweis-Toast bei kritischem Stand
+// — das eigentliche Komprimieren passiert direkt ueber den Button.
 function openCompactModal(auto) {
-  // Doppelung vermeiden
-  if (document.getElementById('compact-modal')) return;
-  const s = state.chatState || {};
-  const pct = Math.round((s.percent || 0) * 100);
-  const tok = _fmtTokens(s.token_estimate || 0);
-  const budget = _fmtTokens(s.token_budget || 180000);
-
-  const autoHint = auto
-    ? `<p class="err"><b>Kritischer Fuellstand erreicht (${pct} %).</b>
-        Disco sollte bald komprimieren, sonst drohen Token-Limit-Fehler.</p>`
-    : '';
-
-  const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
-  backdrop.id = 'compact-modal';
-  backdrop.innerHTML = `
-    <div class="modal" onclick="event.stopPropagation()">
-      <h3>Chat komprimieren</h3>
-      ${autoHint}
-      <p>Aktueller Fuellstand: <b>${tok} / ${budget}</b> (${pct} %).</p>
-      <p>Beim Komprimieren wird Disco gebeten, die wichtigsten Erkenntnisse
-         aus dem bisherigen Verlauf in die Memory-Dateien
-         (<code>NOTES.md</code> / <code>DISCO.md</code>) zu schreiben.
-         Anschliessend wird der sichtbare Verlauf eingeklappt — der Agent
-         arbeitet mit frischem Kontext weiter und liest die Memory-Dateien
-         in der naechsten Session neu ein.</p>
-      <p class="muted">Der Verlauf bleibt in der Projekt-DB erhalten
-         (<code>is_compacted = 1</code>), nur der Agent-Kontext wird
-         geleert.</p>
-      <div class="modal-actions">
-        <button onclick="closeCompactModal()">Abbrechen</button>
-        <button class="btn-primary" onclick="runCompaction()">Disco mit Kompression beauftragen</button>
-      </div>
-    </div>`;
-  backdrop.onclick = closeCompactModal;
-  document.body.appendChild(backdrop);
+  // Bei Auto-Aufruf (90 %): kurzer Hinweis ohne Modal-Tanz. Wenn der
+  // User weitertippt, greift Auto-Compact eh beim naechsten Turn.
+  if (auto) {
+    setSystemMessage('🗜 Kontext fast voll — beim naechsten Turn '
+      + 'komprimiert Disco automatisch. Du kannst auch jetzt manuell '
+      + 'auf <b>🗜 Komprimieren</b> klicken.');
+    return;
+  }
+  // Bei manuellem Klick: direkt loslegen.
+  runCompaction();
 }
 
 function closeCompactModal() {
@@ -1636,54 +1657,50 @@ function closeCompactModal() {
   if (el) el.remove();
 }
 
-function runCompaction() {
-  // Strategie: Disco bekommt via Chat-Prompt den Auftrag. ER schreibt
-  // Memory-Bank-Updates (memory_write) und ruft am Ende chat_compact_finish
-  // auf. Alternativ: direkter POST /chat/compact (harter Cut ohne Memory-
-  // Update — falls der Nutzer weiss, dass er nichts braucht).
-  closeCompactModal();
-  const prompt = 'Bitte komprimiere jetzt den Chat. '
-    + 'Schritt 1: memory_append(file="NOTES.md", content=...) mit einem '
-    + 'knappen chronologischen Eintrag — was wurde in dieser Session getan, '
-    + 'welche Entscheidungen sind gefallen, was sind die naechsten Schritte. '
-    + 'Schritt 2: Wenn neue Konventionen, Tabellen, Lookup-Pfade oder '
-    + 'Entscheidungen destilliert werden sollen, pflege DISCO.md gezielt '
-    + '(memory_read -> memory_write oder memory_append mit heading). '
-    + 'Keine neuen progress.md / activeContext.md im Projekt-Root anlegen — '
-    + 'das Memory-Modell ist README.md + NOTES.md + DISCO.md, sonst nichts. '
-    + 'Danach nur einen kurzen Bestaetigungstext in den Chat schreiben — '
-    + 'der Frontend-Code erledigt das technische Zuruecksetzen anschliessend.';
-  const input = document.getElementById('chat-input');
-  input.value = prompt;
-  // Hinweis fuer den Nutzer
-  setSystemMessage('Kompressions-Auftrag ist ins Eingabefeld eingesetzt. '
-    + 'Pruefe den Text und druecke Enter (oder klicke Senden) um '
-    + 'Disco zu beauftragen. Nach Disco\'s Bestaetigung den Verlauf '
-    + 'via <button onclick="hardCompact()" style="font-size:11px;padding:2px 8px;">⏹ Harter Cut</button> einklappen.');
-  input.focus();
-}
-
-// Harter Cut OHNE Memory-Update (nur wenn der Nutzer wirklich will)
-async function hardCompact() {
+async function runCompaction() {
   if (!state.activeProjectSlug) return;
-  if (!confirm('Wirklich alle aktuellen Messages als komprimiert markieren? '
-    + 'Der Verlauf bleibt in der DB, verschwindet aber aus dem Agent-Kontext. '
-    + 'Dieser Schritt ist nicht automatisch an eine Memory-Update geknuepft '
-    + '— nur durchfuehren wenn Disco bereits alles Wichtige in die Memory-Bank '
-    + 'geschrieben hat.')) return;
+  const btn = document.getElementById('btn-compact');
+  if (btn && btn.disabled) return;  // Schon laeuft
+  if (btn) btn.disabled = true;
+
+  // Cute Opening-Message sofort anzeigen — der Server-Call kann
+  // 5-15s dauern (zwei LLM-Calls fuer Distillation + Handover).
+  setSystemMessage('🗜 ' + escHtml(_pickCompactionMessage(COMPACTION_OPENING_MESSAGES)));
+
   try {
     const r = await fetch(
       `/api/projects/${encodeURIComponent(state.activeProjectSlug)}/chat/compact`,
       {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})}
     );
     const d = await r.json();
-    if (d.error) { alert('Fehler: ' + d.error); return; }
-    setSystemMessage(`Verlauf komprimiert: ${d.marked_compacted} Messages eingeklappt. Neuer Token-Fill ≈ ${_fmtTokens(d.new_token_estimate || 0)}.`);
+    if (d.error) {
+      setSystemMessage('Fehler bei Kompression: ' + escHtml(d.error));
+      return;
+    }
+    if (d.skipped) {
+      setSystemMessage('Komprimieren uebersprungen: ' + escHtml(d.reason || 'kein Grund angegeben'));
+      return;
+    }
+
+    // Closing-Message mit Memory-Report.
+    const closing = _pickCompactionMessage(COMPACTION_CLOSING_MESSAGES);
+    const md = d.memory_distillation || {};
+    const parts = [];
+    if (md.notes_appended) parts.push('NOTES ergaenzt');
+    if (md.disco_chapters_added) parts.push(md.disco_chapters_added + ' DISCO-Kapitel');
+    if (md.table_docs_set) parts.push(md.table_docs_set + ' Tabellen-Doku');
+    const memoryNote = parts.length
+      ? ' (' + parts.join(', ') + ')'
+      : '';
+    setSystemMessage('✅ ' + escHtml(closing) + memoryNote
+      + ` · ${d.marked_compacted} Messages eingeklappt · neuer Fuellstand ≈ ${_fmtTokens(d.new_token_estimate || 0)}`);
     // State + Messages neu laden
     await loadChatState(state.activeProjectSlug);
     await loadMessages(state.activeProjectSlug);
   } catch (e) {
-    alert('Kompression fehlgeschlagen: ' + e.message);
+    setSystemMessage('Fehler bei Kompression: ' + escHtml(e.message));
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1909,6 +1926,7 @@ function fileIcon(name) {
   if (['db','sqlite'].includes(e)) return '🗄️';
   if (['png','jpg','jpeg','svg'].includes(e)) return '🖼️';
   if (['json'].includes(e)) return '📋';
+  if (['html','htm'].includes(e)) return '🌐';
   return '📄';
 }
 function humanSize(b) {
@@ -2815,12 +2833,14 @@ async function openFileInViewer(path, name) {
     else if (['json'].includes(ext)) await renderJsonFile(url);
     else if (['xlsx','xlsm','xls'].includes(ext)) await renderExcelFile(url);
     else if (ext === 'pdf') await renderPdfFile(url);
+    else if (['html','htm'].includes(ext)) renderHtmlFile(url);
     else if (['dxf','dwg'].includes(ext)) await renderDxfFile(path, ext);
     else if (['png','jpg','jpeg','gif','svg','webp'].includes(ext)) renderImage(url);
     else await renderTextFile(url);
   } catch (e) {
     setViewerHtml(`<div class="viewer-body err">Fehler: ${escHtml(e.message)}</div>`);
   }
+  setViewerOpenOsVisible(true);
 }
 
 function setViewerTitle(name, path) {
@@ -2855,11 +2875,34 @@ function closeViewer() {
     state._dxfViewer = null;
   }
   setViewerTitle('Viewer', '');
+  setViewerOpenOsVisible(false);
   setViewerHtml(`
     <div id="viewer-empty">
       Keine Datei geöffnet.<br>
       Klick im Explorer auf eine Datei oder Tabelle.
     </div>`);
+}
+
+// Sichtbarkeit des "📂 im System oeffnen"-Buttons steuern
+function setViewerOpenOsVisible(visible) {
+  const btn = document.getElementById('viewer-open-os');
+  if (btn) btn.style.display = visible ? '' : 'none';
+}
+
+// Aktuell geoeffnete Datei mit dem OS-Default-Programm aufmachen
+async function openCurrentFileInOS() {
+  const f = state._viewerOpenFile;
+  if (!f || !state.activeProjectSlug) return;
+  const url = `/api/workspace/projects/${encodeURIComponent(state.activeProjectSlug)}/file/open?path=${encodeURIComponent(f.path)}`;
+  try {
+    const r = await fetch(url, { method: 'POST' });
+    if (!r.ok) {
+      const txt = await r.text();
+      alert(`Konnte nicht oeffnen: ${txt}`);
+    }
+  } catch (e) {
+    alert(`Konnte nicht oeffnen: ${e.message}`);
+  }
 }
 
 // ----- Markdown ----------------------------------------------------------
@@ -3188,6 +3231,22 @@ async function renderPdfPage() {
 function pdfPrev() { if (state._pdfPage > 1) { state._pdfPage--; renderPdfPage(); } }
 function pdfNext() { if (state._pdfPage < state._pdfTotal) { state._pdfPage++; renderPdfPage(); } }
 
+// ----- HTML --------------------------------------------------------------
+// HTML-Files werden in einem sandbox-iframe angezeigt. Sandbox blockt
+// Scripts/Forms/Top-Level-Navigation, damit eingebettete HTML uns nicht
+// die Disco-UI uebernimmt. Wer den vollen Render will, klickt auf
+// "📂 Im System oeffnen" und sieht es im richtigen Browser.
+function renderHtmlFile(url) {
+  const toolbar = `
+    <div class="viewer-toolbar">
+      <span>HTML — gerendert (Sandbox: keine Scripts)</span>
+      <span class="spacer"></span>
+      <button onclick="window.open('${url}', '_blank')">↗ in neuem Tab</button>
+    </div>`;
+  const body = `<iframe class="viewer-html-frame" sandbox="allow-same-origin" src="${url}"></iframe>`;
+  setViewerHtml(toolbar + body);
+}
+
 // =========================================================================
 // DB-Tabellen-Liste in Sidebar + Tabellen-Viewer
 // =========================================================================
@@ -3246,6 +3305,7 @@ async function openTableInViewer(table, db) {
   state._viewerOpenFile = null;
   const label = branch === 'datastore' ? 'datastore.db' : 'workspace.db';
   setViewerTitle('▤ ' + table, label);
+  setViewerOpenOsVisible(false);
   ensureViewerOpen();
   state._dbTable = table;
   state._dbBranch = branch;
@@ -3471,7 +3531,7 @@ function onPipelineStepClick(slug, step) {
     lines.push(`→ ${step.n_pending} Files warten. Im Chat formulieren:`);
     const promptByStep = {
       1: 'Bitte sources_register laufen lassen, neue Dateien aufnehmen.',
-      2: 'Bitte Begleit-Excel-Match oder SharePoint-Import durchfuehren.',
+      2: 'Bitte Begleit-Excel-Match durchfuehren.',
       3: 'Bitte sources_detect_duplicates laufen lassen.',
       4: 'Bitte den Flow extraction_routing_decision starten.',
       5: 'Bitte den Flow extraction starten.',

@@ -99,6 +99,46 @@ AUTO_COMPACT_THRESHOLD_PERCENT = 0.70
 AUTO_COMPACT_TRIGGER_TOKENS = int(CHAT_TOKEN_BUDGET * AUTO_COMPACT_THRESHOLD_PERCENT)
 
 
+# ---------------------------------------------------------------------------
+# Compaction-Status-Messages (Cute-Voice)
+# ---------------------------------------------------------------------------
+# Beim Auto-Compact und beim manuellen Komprimieren-Klick zeigen wir
+# eine zufaellige, leicht vermenschlichende Status-Message statt einer
+# technischen Token-Anzeige. Macht den Vorgang spuerbar als „Disco
+# nimmt sich kurz Zeit" und nicht als „System haengt".
+#
+# Wird beim Start der Compaction angezeigt (vor Memory-Distillation).
+COMPACTION_OPENING_MESSAGES = (
+    "Mache mir kurz Notizen…",
+    "Ich muss mich mal sortieren, bin gleich wieder da.",
+    "Muss mal eben Doku machen, bevor ich alles vergesse.",
+    "Gleich geht's weiter, Moment…",
+    "Schnell festhalten, bevor's mir entgleitet…",
+    "Kopf aufraeumen, einen Augenblick…",
+    "Memo an mich selbst — bin gleich zurueck.",
+    "Ich destilliere kurz, dann arbeiten wir weiter.",
+    "Notizblock raus, eben festhalten…",
+    "Lass mich kurz sortieren, was wichtig war.",
+)
+
+# Wird gezeigt, wenn die Compaction fertig ist und der Verlauf wieder
+# frei ist.
+COMPACTION_CLOSING_MESSAGES = (
+    "Ok, sortiert. Wo waren wir?",
+    "Notizen gemacht — weiter geht's.",
+    "Bin wieder da.",
+    "Gedaechtnis aktualisiert. ↩",
+    "So, das ist festgehalten. Weiter.",
+)
+
+
+def _pick_compaction_message(pool: tuple[str, ...]) -> str:
+    """Zufaellige Auswahl aus dem Pool — vermeidet Wiederholungen
+    innerhalb einer Session ueber `_recent_compaction_messages`."""
+    import random
+    return random.choice(pool)
+
+
 def _effective_context_tokens(state: dict[str, Any] | None) -> int:
     """Liefert den effektiven Kontext-Fuellstand fuer Pre-Check und UI.
 
@@ -611,12 +651,7 @@ class AgentService:
             )
             yield SystemNoticeEvent(
                 kind="auto_compact",
-                message=(
-                    f"Kontext bei {_pre_turn_tokens:,} Tokens "
-                    f"({100 * _pre_turn_tokens / CHAT_TOKEN_BUDGET:.0f} % "
-                    f"vom Budget). Chat wird automatisch komprimiert "
-                    "(Handover-Brief wird erzeugt) …"
-                ),
+                message=_pick_compaction_message(COMPACTION_OPENING_MESSAGES),
             )
             try:
                 from ..chat.compaction import run_compaction_with_handover
@@ -627,13 +662,23 @@ class AgentService:
                         result.get("reason"),
                     )
                 else:
+                    md = result.get("memory_distillation") or {}
                     logger.info(
                         "Auto-Compact fertig: marked=%d kept=%d "
-                        "new_estimate=%d brief_chars=%d",
+                        "new_estimate=%d brief_chars=%d "
+                        "memory_notes=%s memory_chapters=%d memory_tables=%d",
                         result.get("marked_compacted", 0),
                         len(result.get("kept_ids") or []),
                         result.get("new_token_estimate", 0),
                         result.get("handover_brief_chars", 0),
+                        md.get("notes_appended"),
+                        md.get("disco_chapters_added", 0),
+                        md.get("table_docs_set", 0),
+                    )
+                    # Closing-Message — kurz und freundlich.
+                    yield SystemNoticeEvent(
+                        kind="auto_compact",
+                        message=_pick_compaction_message(COMPACTION_CLOSING_MESSAGES),
                     )
                 # State neu laden — foundry_response_id ist jetzt None,
                 # measured_context_tokens geloescht, token_estimate neu

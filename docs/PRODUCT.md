@@ -1,5 +1,8 @@
 # Disco — Produktvision und Stand
 
+**Stand:** 2026-05-09. Lebendes Dokument — wird bei
+Architektur-Entscheidungen und Vision-Gesprächen fortgeschrieben.
+
 ## Was ist Disco?
 
 Disco ist ein agentisches Desktop-System für die Verarbeitung technischer
@@ -89,7 +92,10 @@ Datenbank. Er kann:
   Bulk-Operationen)
 - Professionelle Excel-Reports generieren (Multi-Sheet, Formatierung,
   Status-Farben, Hyperlinks)
-- Erkenntnisse festhalten (NOTES, Memory)
+- Erkenntnisse strukturiert ablegen — chronologisch in `NOTES.md`
+  (Auto-Archivierung > 30 Tage), destilliert in `DISCO.md`
+  (3-Schichten-Modell mit Marker + chapter-meta-Kapiteln + Trace-Log),
+  Tabellen-Wissen in `agent_table_docs` per `table_doc_set`/`table_doc_get`
 
 Disco **kündigt an, was er tut, führt es aus, und meldet das Ergebnis.**
 Keine Halluzination — das Tool-Ergebnis ist die Wahrheit.
@@ -110,7 +116,7 @@ Für Heavy-Lifting-Aufgaben über Tausende Dokumente:
 ### Stack
 
 - **Lokal:** Python 3.11+, SQLite, FastAPI, Vanilla-JS
-- **Cloud:** Azure OpenAI (GPT-5, Sweden Central), Foundry Agent Service
+- **Cloud:** Azure OpenAI (GPT-5.x in Sweden Central, Deployment-Name in `.env`), Foundry Agent Service
 - **Kein Framework-Overhead:** Kein React, kein npm, kein Docker
 
 ### Workspace-Trennung
@@ -128,20 +134,29 @@ LLM-Inferenz). Code-Repo enthält keine Daten.
 - **Portal-Agent** ("disco-prod-agent" / "disco-dev-agent") im Foundry-Portal: System-Prompt,
   Tool-Schemas, Modell — zentral verwaltet, versioniert, per Portal
   editierbar
-- **Runtime:** Azure OpenAI Responses API via agent_reference.
-  Streaming über WebSocket. 28 Custom Functions + Code Interpreter.
+- **Runtime:** Azure OpenAI Responses API via `agent_reference`.
+  Streaming über WebSocket. **41 Custom Functions + Code Interpreter**
+  (Stand 2026-05-09).
 - **Custom Functions** laufen lokal (im FastAPI-Server-Prozess oder
   als Subprocess bei run_python)
 
 ### Skills (Playbooks)
 
 Kuratierte Markdown-Anleitungen für wiederkehrende Aufgaben. Der Agent
-lädt sie bei Bedarf (lazy-loading, spart Tokens). Aktuell:
-- `project-onboarding` — Session-Start-Routine
-- `sources-onboarding` — Quellen registrieren
-- `context-onboarding` — Kontext-Dateien sichten
-- `excel-reporter` — Excel-Reports bauen
+lädt sie bei Bedarf (lazy-loading, spart Tokens). Aktuell 12 Skills:
+
+- `project-onboarding` — Session-Start-Routine inkl. 3-Schichten-Memory
+- `sources-onboarding` — Quellen registrieren + Metadaten + Duplikate
+- `context-onboarding` — Kontext-Dateien sichten + Manifest pflegen
+- `excel-reporter` — Multi-Sheet-Excel via `build_xlsx_from_tables`
+- `excel-formatter` — openpyxl-Detail-Spec
 - `python-executor` — Skripte schreiben + ausführen + debuggen
+- `flow-builder` — Massenverarbeitung gemeinsam aufbauen
+- `flow-supervisor` — laufende Flows überwachen
+- `pipeline-diagnostics` — Routing-/Extraktionsprobleme analysieren
+- `report-builder` — HTML-Reports mit klickbaren Quellen
+- `sdk-reference` — Azure-SDK-Snippets (DI + OpenAI)
+- `planning` — mehrstufige Pläne in `.disco/plans/`
 
 ### Web-UI
 
@@ -154,7 +169,7 @@ Drei-Panel-Layout:
 
 ---
 
-## Aktueller Stand (April 2026)
+## Aktueller Stand (Mai 2026)
 
 ### Was funktioniert
 
@@ -164,22 +179,30 @@ Drei-Panel-Layout:
 - ✅ Duplikate automatisch erkennen
 - ✅ Excel/CSV-Daten in die Datenbank importieren
 - ✅ Professionelle Multi-Sheet-Excel-Reports generieren
-- ✅ PDF-Text extrahieren
+- ✅ PDF-/Excel-/DWG-/Bild-Text extrahieren (Multi-Format-Routing)
 - ✅ Kontext-Dateien sichten und katalogisieren
 - ✅ Python-Skripte lokal schreiben, ausführen, debuggen
 - ✅ Freier SQL-Zugriff (read + write im Namespace)
 - ✅ Multi-Thread-Chat mit Session-Persistenz
-- ✅ Onboarding-Routine (README + NOTES + Memory + Context-Manifest)
-- ✅ Web-UI mit Chat + Explorer + Viewer
-- ✅ DSGVO: alles in Azure Sweden Central (EU)
+- ✅ Onboarding-Routine mit 3-Schichten-Memory (Schicht 1 + Kapitel-
+  Index, on-demand-Kapitel, Tabellen-Doku, Trace-Log)
+- ✅ Web-UI mit Chat + Explorer + Viewer (PDF, Excel, CSV, JSON,
+  Markdown, **HTML mit Sandbox-iframe**, DXF, Bilder) plus
+  📂-Open-in-OS-Button
+- ✅ Massenverarbeitung über Flows (Subprocess, Resume, Cost-Cap,
+  pausierbar)
+- ✅ Volltext-Suche (`build_search_index` + `search_index`)
+- ✅ DSGVO: alles in Azure Sweden Central (EU), Network-Egress-Policy
+  in `docs/network-egress-policy.md`
 
-### Was noch kommt
+### Was noch kommt (taktisch)
 
-- ⏳ **Pipelines** — Bulk-LLM-Aufgaben über Tausende Dokumente
-- ⏳ **Hybrid-Search** — Embeddings + FTS5 über Sources + Context
+- ⏳ **Hybrid-Search** ausbauen — Embeddings + FTS5-Vorhandenes
+  zusammenführen
 - ⏳ **Frontend-Polish** — Editor in Tabellen, Settings-Pane, Drag&Drop
-- ⏳ **Weitere Skills** — dokument-klassifikator, sql-analyst, soll-ist-abgleich
-- ⏳ **SharePoint-Live-Sync** (Phase 1 Infrastruktur steht, Integration in Disco-Workflow noch offen)
+- ⏳ **Weitere Skills** — dokument-klassifikator, sql-analyst,
+  soll-ist-abgleich
+- ⏳ **Stable-Release v1.0** — nach Aufräumen Audit-Findings + Tests
 
 ---
 
@@ -203,6 +226,103 @@ Drei-Panel-Layout:
 5. **Anti-Halluzination ist eine System-Eigenschaft, nicht nur ein Prompt-Hint.**
    Tool-Result = Wahrheit. "Fertig" erst nach erfolgreichem Tool-Call. Abort-
    Handling für offene Function-Calls.
+
+---
+
+---
+
+## Strategische Vision — vom Dokumentenmanagement zum Projektbüro-Agent
+
+**Status:** strategisch, nicht akut — Anker für künftige Vision-
+Gespräche, nicht aktive Roadmap.
+
+### Kern-These
+
+Disco ist heute ein starkes **Dokumentenmanagement-Tool** für
+technische Großprojekte. Die zugrundeliegende Architektur (Pipeline,
+Skills, Flows, Search, Multi-Format-Routing, Excel-/HTML-Reports) ist
+aber **bewusst generalistisch** angelegt. Damit hat Disco das Potenzial,
+sich zu einem **vollwertigen Projektbüro-Agent** zu entwickeln — ein
+KI-Tool, das die ganze Bandbreite an Projektbüro-Aufgaben systematisch
+unterstützt.
+
+### Themenfelder (heute live + Vision)
+
+Heute live: **Dokumentenmanagement** — Quellen registrieren,
+kanonisieren, extrahieren, indizieren, suchen, Reports bauen.
+
+Geplant / als Vision:
+
+1. **Legal / Contract Management** — Verträge mit Generalunternehmern
+   strukturiert verwalten, Klauseln nachschlagen, Fristen tracken.
+2. **Claim Management** — Nachforderungen und Mängelansprüche mit
+   Beleg-Trail. Verknüpfung zwischen Vertragsklausel, Korrespondenz,
+   Kostenfolge.
+3. **Contract Communication** — bei FIDIC-Verträgen mit GUs läuft
+   Kommunikation hochstrukturiert nach klausel-bezogenen Notification-
+   Pflichten ab. Disco kann hier als Klausel-bewusster Schreib- und
+   Recherche-Assistent fungieren.
+4. **Qualitätsmanagement** — z. B. mechanische Endkontrollen bei BEW.
+   Pflicht-Berichte, Checklisten, Konsistenz-Prüfung gegen Normen
+   (VGB S 831 etc.).
+5. **Terminplanung** — Schedule-Management, Verzugs-Analyse,
+   Critical-Path-Verständnis.
+6. **Weitere Projektbüro-Themen** — Risiko-Management, Reporting an
+   Auftraggeber, Variation-Orders, Subcontractor-Koordination.
+
+### Vision in einem Satz
+
+> Disco ist das KI-gestützte Projektbüro für technische Großprojekte:
+> es hält die Daten parat, verbindet die Themen, treibt die Prozesse,
+> und hebt damit die Qualität der Projekt-Steuerung deutlich.
+
+### Was technisch passt / was fehlt
+
+**Passt schon heute:** Pipeline-Architektur ist projektagnostisch
+(Registrierung → Anreicherung → Kanonik → Routing → Extraction →
+Suchindex). Skills sind themen-spezifisch erweiterbar ohne Kern-
+Eingriff. SQL-Tabellen + Lookup-Excels passen für Vertragsklausel-
+Kataloge, Norm-Matrizen, QM-Vorgabe-Listen. Multi-Format-Routing
+deckt PDF/Excel/DWG/Bild/HTML ab; DOCX/PPTX in Phase 2b.
+Cost-Tracking ist in Place.
+
+**Was für die Vision noch fehlt:**
+
+- **Frist-Tracking / Date-Reasoning** — bei FIDIC-Notifications und
+  Claim-Fristen ist „28 days from becoming aware" Pflicht. Disco
+  müsste Datums-aware werden, Fristen aus Klauseln ableiten und
+  proaktiv erinnern.
+- **Cross-Document-Linkage explizit modellieren** — heute haben wir
+  `agent_source_relations` für Duplikate/Replaces. Für Claim-Trail
+  bräuchten wir reichere Relations: „antwortet auf", „bezieht sich auf
+  Klausel", „belegt Cause für".
+- **Workflow-Engine für Genehmigungs-Prozesse** — wer hat was wann
+  unterschrieben, was steht aus.
+- **E-Mail-/Kommunikations-Integration** — Outlook/MS365-Anbindung für
+  Korrespondenz-Tracking. Heute alles File-basiert.
+- **Domain-Skills pro Themenfeld** — Legal/QM/Terminplanung jeweils
+  ein eigenes Skill-Set mit Trigger-Phrasen, Workflow-Templates,
+  Pflicht-Checks.
+
+### Empfehlung für die Reifung
+
+- **Generalistisch bleiben hat Wert.** Disco wird in jedem Projekt
+  nützlich. Aber jede neue Domäne erhöht System-Prompt-/Skill-/Tool-
+  Komplexität. Saubere Skill-Trennung ist Pflicht.
+- **Eine Domäne nach der anderen reifen lassen** — nicht alle 5
+  parallel. Vorschlag-Reihenfolge: Legal/Contract zuerst (klare
+  Strukturen, FIDIC-Standard hilft), dann QM, dann Termin.
+  Claim-Management baut auf Legal auf.
+- **Pipeline + Search + Reports bleiben generisch** — sind das
+  Fundament. Domänen-spezifische Logik kommt rein über Skills +
+  themen-spezifische Tools, nicht durch Eingriff in den Kern.
+- **Kunden-Datenschutz wird kritischer** mit Legal-Inhalten. DSGVO,
+  Anwaltsgeheimnis, Mandantentrennung — heute über Workspace-
+  Isolation gelöst, müsste für Vertragsdaten ggf. nochmal verschärft
+  werden (z. B. Foundry-Region-Pinning auf EU + Audit-Logs).
+
+Konkret: Nach Stable-Release v1.0 wäre der natürliche Punkt, mit der
+ersten Domain-Erweiterung (Vorschlag: Legal/FIDIC) zu starten.
 
 ---
 

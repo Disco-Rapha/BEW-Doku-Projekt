@@ -33,7 +33,7 @@ Erst wenn das Ziel klar ist (in README.md festgehalten), geht's weiter.
 ### 1. Ist-Stand erfassen
 
 ```text
-fs_read({"path": "README.md"})
+memory_read({"file": "README.md"})
 fs_list({"path": "context", "recursive": false})
 fs_read({"path": "context/_manifest.md"})
 ```

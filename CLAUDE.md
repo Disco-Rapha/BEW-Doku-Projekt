@@ -155,14 +155,18 @@ werden:
 ### 5. Disco arbeitet
 
 Der Agent (Foundry-Portal-Agent — `disco-prod-agent` in Prod,
-`disco-dev-agent` in Dev, Modell GPT-5.1 in Sweden Central) hat
+`disco-dev-agent` in Dev, GPT-5.x in Sweden Central, Deployment-Name
+über `FOUNDRY_MODEL_DEPLOYMENT` in `.env` konfigurierbar) hat
 **echten Schreibzugriff** auf das Projekt:
 - Dateien lesen, schreiben, verschieben
 - DB-Tabellen anlegen, auswerten, joinen
 - **Python-Skripte schreiben und lokal ausführen** (für große Dateien
   und Bulk-Ops — genau wie Claude Code seinen Bash-Tool nutzt)
 - Excel-Reports mit professioneller Formatierung generieren
-- Erkenntnisse in NOTES und Memory festhalten
+- Erkenntnisse strukturiert ablegen — chronologisch in `NOTES.md`,
+  destilliert in `DISCO.md` (3-Schichten-Modell, siehe
+  `docs/architecture-decisions.md` 2026-05-09), Tabellen-Wissen in
+  `agent_table_docs` (per `table_doc_set` / `table_doc_get`)
 
 Arbeitsweise: **proaktiv, transparent, selbstkritisch.** Disco kündigt
 an was er tut, führt es aus, und meldet das Ergebnis — mit echtem
@@ -181,53 +185,86 @@ LLM-Klassifikationen ab.
 - Disco **startet + überwacht** den Full-Run (auch über 10 Stunden)
 - Disco **reagiert** bei Anomalien (Pause, Nachjustieren, Resume)
 
-Framework-Bausteine: `src/bew/flows/sdk.py` (FlowRun/FlowDB für
+Framework-Bausteine: `src/disco/flows/sdk.py` (FlowRun/FlowDB für
 Autoren), `runner_host.py` (Subprocess-Lifecycle), `service.py`
 (CLI-/Agent-API), Migration `004_agent_flows.sql`.
 
-Siehe `src/bew/flows/README.md` für das Entwickler-Howto.
+Siehe `src/disco/flows/README.md` für das Entwickler-Howto.
 
 ---
 
-## Was bereits gebaut ist (Stand 2026-04-17)
+## Was bereits gebaut ist (Stand 2026-05-09)
 
 ### Infrastruktur
-- [x] **Workspace-Trennung**: Code-Repo (GitHub) ↔ Daten-Workspace (`~/Disco/`)
-- [x] **Foundry-Agent**: Portal-Agent mit agent_reference
-      (Prod: `disco-prod-agent`, Dev: `disco-dev-agent`), tunebarer
-      System-Prompt, versioniert, Rollback möglich
-- [x] **Projekt-Sandbox**: fs_*/sqlite_*-Tools arbeiten nur innerhalb des
+- [x] **Workspace-Trennung**: Code-Repo (GitHub) ↔ Daten-Workspace
+      (`~/Disco/` Prod, `~/Disco-dev/` Dev)
+- [x] **Foundry-Agent**: Portal-Agent mit `agent_reference`
+      (Prod: `disco-prod-agent` v50, Dev: `disco-dev-agent` v38),
+      tunebarer System-Prompt, versioniert, Rollback möglich
+- [x] **Projekt-Sandbox**: alle Tools arbeiten nur innerhalb des
       aktiven Projekts (contextvars-basiert, echte Mandantentrennung)
-- [x] **Projekt-DB pro Projekt**: `data.db` mit Template-Migrationen
-      (agent_sources, agent_source_metadata, agent_source_relations,
-      agent_source_scans, agent_script_runs)
-- [x] **CLI**: `disco project init/list/show`, `disco agent chat --project`,
-      `disco agent setup/threads` (`bew` als Alias)
+- [x] **DB-Split pro Projekt**: `datastore.db` (Ebene 1+2 read-only) +
+      `workspace.db` (Ebene 3 read/write) mit Template-Migrationen
+      (siehe `migrations/project/datastore/` und
+      `migrations/project/workspace/`)
+- [x] **CLI**: `disco project/agent/db/flow ...` (`bew` als Alias)
 - [x] **Web-UI**: 3-Panel-Layout (Sidebar + Chat + Viewer), Chat mit
-      Markdown/Code/Tabellen-Rendering, Explorer-Tree, DB-Tabellen-Browser,
-      Viewer für MD/CSV/JSON/Excel/PDF
+      Markdown/Code/Tabellen-Rendering, Explorer-Tree, DB-Tabellen-
+      Browser, Viewer für MD/CSV/JSON/Excel/PDF/HTML mit
+      Sandbox-iframe + 📂-Open-in-OS-Button (2026-05-09)
+- [x] **Memory-Reform 3-Schichten-Modell** (2026-05-09): Schicht 1
+      (Marker, max 3,5 KB) + Schicht 2 (chapter-meta-Kapitel) +
+      Schicht 3 (`agent_table_docs`); Trace-Log + NOTES-Auto-
+      Archivierung. Drei Prod-Projekte migriert. Details in
+      `docs/architecture-decisions.md`.
 
-### Agent-Tools (28 Custom Functions + Code Interpreter)
-- [x] **Dateisystem**: fs_list/read/write/mkdir/delete, fs_read_bytes/write_bytes
-- [x] **Datenbank**: sqlite_query (READ-ONLY), sqlite_write (work_*/agent_*/context_* Namespace)
-- [x] **Import**: xlsx_inspect, import_xlsx_to_table, import_csv_to_table
-- [x] **Export**: build_xlsx_from_tables (Multi-Sheet, Header-Style, AutoFilter, Status-Farben)
-- [x] **Sources-Registry**: sources_register (Hash-basierte Delta-Detection),
-      sources_attach_metadata (Begleit-Excel, Option-C-Matching),
-      sources_detect_duplicates (sha256-Gruppen → duplicate-of-Relations)
-- [x] **PDF**: pdf_classify (PyMuPDF-Diagnose), pdf_markdown_read (liest `agent_pdf_markdown`, gefuellt vom Flow `pdf_to_markdown` mit Engines docling-standard / azure-di / azure-di-hr)
-- [x] **Lokale Python-Ausführung**: run_python (file-basiert + inline, Audit-Trail,
-      Env-Filtering, Timeout). Disco schreibt Skripte, führt sie lokal aus, debuggt.
-- [x] **Skills**: list_skills/load_skill (lazy-loaded Playbooks)
-- [x] **Projekt-Gedächtnis**: project_notes_read/append
-- [x] **Domain**: list_projects, get_project_details, search_documents, etc.
+### Agent-Tools (41 Custom Functions + Code Interpreter)
+- [x] **Dateisystem**: `fs_list`, `fs_read`, `fs_write`, `fs_mkdir`,
+      `fs_delete`, `fs_read_bytes`, `fs_write_bytes`
+- [x] **Datenbank**: `sqlite_query` (READ-ONLY),
+      `sqlite_write` (Namespace `work_*` / `agent_*` / `context_*`)
+- [x] **Import**: `xlsx_inspect`, `import_xlsx_to_table`,
+      `import_csv_to_table`
+- [x] **Export**: `build_xlsx_from_tables` (Multi-Sheet, Header-Style,
+      AutoFilter, Status-Farben)
+- [x] **Sources-Registry**: `sources_register` (Hash-basierte
+      Delta-Detection, default scope `both`),
+      `sources_attach_metadata`, `sources_detect_duplicates`
+- [x] **Pipeline**: `pipeline_file_status` (Routing/Markdown-Stand
+      pro Datei)
+- [x] **Dokument-Markdown**: `doc_markdown_read` (liest
+      `agent_doc_markdown` für PDF/Excel/DWG/Bilder)
+- [x] **Volltext-Suche**: `build_search_index`, `search_index`
+      (FTS5 + Embeddings)
+- [x] **Lokale Python-Ausführung**: `run_python` (file-basiert + inline,
+      Audit-Trail, Env-Filtering, Timeout)
+- [x] **Skills**: `list_skills`, `load_skill` (lazy-loaded Playbooks,
+      live von Disk)
+- [x] **Memory**: `memory_read` (Modi: default / chapter / headings_only /
+      tail / max_bytes), `memory_write`, `memory_append` (mit `tags` +
+      `status` für chapter-meta auf DISCO.md)
+- [x] **Tabellen-Doku** (Schicht 3): `table_doc_set`, `table_doc_get`
+- [x] **Pläne**: `plan_list`, `plan_read`, `plan_write`,
+      `plan_append_note`
+- [x] **Flows**: `flow_list`, `flow_show`, `flow_create`, `flow_run`,
+      `flow_runs`, `flow_status`, `flow_items`, `flow_cancel`,
+      `flow_logs`
 
 ### Skills (kuratierte Playbooks)
-- [x] `project-onboarding` — Session-Start-Routine (README + NOTES + memory + context)
-- [x] `sources-onboarding` — Quellen registrieren + Metadaten + Duplikate
+- [x] `project-onboarding` — Session-Start-Routine inkl. Schicht-1+Index-
+      Read und gezielter `chapter`-Lookups
+- [x] `sources-onboarding` — Quellen registrieren + Metadaten +
+      Duplikate
 - [x] `context-onboarding` — Kontext-Dateien sichten + Manifest pflegen
-- [x] `excel-reporter` — Multi-Sheet-Excel via build_xlsx_from_tables
+- [x] `excel-reporter` — Multi-Sheet-Excel via `build_xlsx_from_tables`
+- [x] `excel-formatter` — Detail-Spec für openpyxl-Formatierung
 - [x] `python-executor` — Skripte schreiben, ausführen, debuggen
+- [x] `flow-builder` — Massenverarbeitung gemeinsam aufbauen
+- [x] `flow-supervisor` — laufende Flows überwachen
+- [x] `pipeline-diagnostics` — Routing-/Extraktionsprobleme analysieren
+- [x] `report-builder` — HTML-Reports mit klickbaren Quellen
+- [x] `sdk-reference` — Azure-SDK-Snippets (DI + OpenAI)
+- [x] `planning` — mehrstufige Pläne in `.disco/plans/`
 
 ### Erkenntnisse aus der Entwicklung
 
@@ -265,7 +302,7 @@ Siehe `src/bew/flows/README.md` für das Entwickler-Howto.
 
 - Python 3.11+, `uv` als Paketmanager
 - **SQLite** — system.db (zentral) + data.db (pro Projekt)
-- **FastAPI + WebSocket** für Web-UI (`src/bew/api/`)
+- **FastAPI + WebSocket** für Web-UI (`src/disco/api/`)
 - **Azure OpenAI Responses API** (via Foundry-Projekt-Endpoint + API-Key)
 - **Foundry Agent Service** — Portal-Agent mit agent_reference
 - **openpyxl** — Excel lesen/schreiben
@@ -279,17 +316,17 @@ Siehe `src/bew/flows/README.md` für das Entwickler-Howto.
 
 | Pfad | Zweck |
 |------|-------|
-| `src/bew/cli.py` | CLI: `disco project/agent/db` (+ `bew` als Alias) |
-| `src/bew/db.py` | SQLite-Verbindung + Migrations-Runner (system.db) |
-| `src/bew/config.py` | Settings: DISCO_WORKSPACE, Foundry, Azure |
-| `src/bew/workspace.py` | Projekt-Lifecycle: init, list, show, seed_sample |
-| `src/bew/agent/core.py` | AgentService: Foundry Responses API + Tool-Loop |
-| `src/bew/agent/context.py` | Projekt-Sandbox via contextvars |
-| `src/bew/agent/system_prompt.md` | Discos Persönlichkeit + Regeln |
-| `src/bew/agent/functions/` | 28 Custom Functions (data, fs, imports, executor, sources, skills, ...) |
-| `src/bew/chat/repo.py` | Thread- + Message-Persistenz |
-| `src/bew/api/main.py` | FastAPI: REST + WebSocket + Workspace-API |
-| `src/bew/api/static/index.html` | Web-UI (Vanilla-JS, 3-Panel) |
+| `src/disco/cli.py` | CLI: `disco project/agent/db` (+ `bew` als Alias) |
+| `src/disco/db.py` | SQLite-Verbindung + Migrations-Runner (system.db) |
+| `src/disco/config.py` | Settings: DISCO_WORKSPACE, Foundry, Azure |
+| `src/disco/workspace.py` | Projekt-Lifecycle: init, list, show, seed_sample |
+| `src/disco/agent/core.py` | AgentService: Foundry Responses API + Tool-Loop |
+| `src/disco/agent/context.py` | Projekt-Sandbox via contextvars |
+| `src/disco/agent/system_prompt.md` | Discos Persönlichkeit + Regeln |
+| `src/disco/agent/functions/` | 28 Custom Functions (data, fs, imports, executor, sources, skills, ...) |
+| `src/disco/chat/repo.py` | Thread- + Message-Persistenz |
+| `src/disco/api/main.py` | FastAPI: REST + WebSocket + Workspace-API |
+| `src/disco/api/static/index.html` | Web-UI (Vanilla-JS, 3-Panel) |
 | `skills/` | Kuratierte Playbooks (Markdown) |
 | `migrations/` | System-DB-Migrationen (001–005) |
 | `migrations/project/` | Projekt-DB-Template-Migrationen (001–003) |

@@ -141,6 +141,38 @@ WHERE rel_path = (SELECT 'sources/' || rel_path FROM ds.agent_sources WHERE rel_
 
 ## Reparatur-Workflows
 
+### Pipeline-Volldurchlauf (Routing → Extraktion → Suchindex)
+
+**Wenn der Nutzer "die ganze Pipeline laufen lassen" sagt** (oder
+synonyme Formulierungen wie *„Routing, Extraktion, Suchindex"*,
+*„komplett durchlaufen"*, *„alles indizieren"*), führst Du **alle drei
+Schritte selbst aus** — auch den Suchindex-Bau am Ende. Kein
+Zwischen-Stop, kein neues *„soll ich auch noch …?"*.
+
+```text
+# 1. Routing
+flow_run({"flow_name": "extraction_routing_decision"})
+# → polling via flow_status, bis status='done'
+
+# 2. Extraktion
+flow_run({"flow_name": "extraction"})
+# → polling via flow_status, bis status='done'
+
+# 3. Suchindex — JETZT, NICHT VORHER
+build_search_index()
+# → returnt status='deferred' wenn extraction noch läuft. In dem Fall:
+#   flow_status erneut prüfen, dann build_search_index nochmal rufen.
+```
+
+**Häufige Falle:** der `build_search_index`-Race-Schutz bricht mit
+`status='deferred'` ab, wenn `extraction` noch `running` ist. Wenn
+das passiert, **wartest Du** auf `extraction.status == 'done'` und
+rufst `build_search_index` **selbst** noch einmal — der Nutzer
+muss das nicht erneut bestätigen.
+
+Bilanz-Meldung am Ende: alle drei Schritte zusammen, mit Failure-
+Tabelle (siehe „Was Du dem Nutzer zeigst" unten).
+
 ### Eine einzelne Datei durch die ganze Pipeline schicken
 
 ```text
@@ -200,6 +232,48 @@ flow_run({"flow_name": "extraction_routing_decision",
 # Wenn neue Engine: extraction-Eintrag auch droppen
 sqlite_write("DELETE FROM ds.agent_doc_markdown WHERE file_id = ?")
 flow_run({"flow_name": "extraction", "config": {"only_file_ids": [<id>]}})
+```
+
+### Suchindex-Drift erkennen + nachindizieren
+
+**Wann auftreten:** Der Indexer (`build_search_index`) wurde gerufen,
+**bevor** der `extraction`-Flow alle Items abgearbeitet hatte. Files,
+die spaeter extrahiert wurden, fehlen dann im Index. Frueher (vor
+2026-05-07) ein stiller Fehler — heute bricht der Indexer mit Warnung
+ab, wenn ein extraction-Run laeuft.
+
+**Drift erkennen** (Pipeline-Status-Endpoint reicht):
+
+```text
+# Pipeline-Ampel abfragen — Schritt 6 zeigt n_pending = Drift
+GET /api/projects/<slug>/pipeline-status
+
+# Konkrete Files vergleichen:
+SELECT d.rel_path
+FROM ds.agent_doc_markdown d
+WHERE d.error IS NULL AND d.char_count > 0
+  AND d.rel_path NOT IN (
+    SELECT sd.rel_path FROM ds.agent_search_docs sd
+    WHERE sd.error IS NULL
+  )
+```
+
+**Reparatur** — einfach erneut indizieren:
+
+```text
+# Erst sicherstellen, dass keine extraction laeuft
+flow_runs({"flow_name": "extraction", "limit": 1})
+
+# Dann komplett-Indizierung anstossen
+build_search_index()
+
+# Wenn es schnell gehen soll: nur die Drift-Files
+build_search_index({"paths": ["sources/<konkrete_datei.pdf>", ...]})
+```
+
+Indexer ist idempotent: bestehende Files mit unveraendertem Hash +
+gleicher `indexer_version` werden uebersprungen, nur die fehlenden /
+geaenderten landen neu im Index.
 ```
 
 ## Was Du dem Nutzer zeigst
