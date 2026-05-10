@@ -1569,13 +1569,23 @@ function updateTokenCounter(s) {
   if (!s) {
     el.textContent = '– / 180k · 0 %';
     el.className = '';
+    el.title = '';
     btn.classList.remove('urgent');
     return;
   }
   const tok = s.token_estimate || 0;
   const budget = s.token_budget || 180000;
   const pct = Math.round((s.percent || 0) * 100);
-  el.textContent = `${_fmtTokens(tok)} / ${_fmtTokens(budget)} · ${pct} %`;
+  // ~-Praefix bei Estimate-Source, damit der User weiss: Wert ist eine
+  // Schaetzung (z.B. nach Compaction, vor naechstem Turn) und wird
+  // beim naechsten Turn durch den Azure-Ground-Truth ersetzt.
+  const isEstimate = s.token_estimate_source === 'estimate';
+  const prefix = isEstimate ? '~' : '';
+  el.textContent = `${prefix}${_fmtTokens(tok)} / ${_fmtTokens(budget)} · ${pct} %`;
+  el.title = isEstimate
+    ? 'Geschaetzter Fuellstand. Wird beim naechsten Turn durch den '
+      + 'Azure-Ground-Truth aktualisiert.'
+    : 'Azure-Ground-Truth aus dem letzten Turn.';
   el.className = '';
   btn.classList.remove('urgent');
   if (s.warn_level === 'warn') {

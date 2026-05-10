@@ -237,18 +237,54 @@ def clear_measured_context(project_slug: str, db_path=None) -> None:
 def recompute_token_estimate(project_slug: str, db_path=None) -> int:
     """Rechnet token_estimate neu aus den aktiven Messages.
 
-    Wird typisch direkt nach Kompression gerufen — dann sollte der Wert
-    nahe Null sein (nur noch System-Prompts + Triad).
+    Wird typisch direkt nach Kompression gerufen.
+
+    Beruecksichtigt seit 2026-05-10 die Tool-Output-Truncation aus
+    `build_responses_api_input`: alle aktiven tool-Messages **ausser
+    der juengsten** werden bei `tool_results_json > 5000 chars` als
+    `_TOOL_OUTPUT_TRUNCATED_TOKENS` (~700 Tokens) statt mit ihrem
+    Brutto-`token_count` gezaehlt — denn genau so werden sie beim
+    naechsten Turn an Foundry gesendet. Ohne diese Korrektur wuerde
+    der Estimate nach Compaction bei einer einzigen 76k-Tool-Message
+    drastisch zu hoch ausschlagen (siehe rea-denox 2026-05-10).
     """
     conn = connect(db_path or settings.db_path)
     try:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(token_count), 0) AS s "
+        # ID der jueengsten aktiven tool-Message — die behaelt ihren
+        # vollen token_count, weil Disco sie frisch braucht.
+        last_tool_row = conn.execute(
+            "SELECT MAX(id) AS last_id FROM chat_messages "
+            "WHERE project_slug = ? AND is_compacted = 0 AND role = 'tool'",
+            (project_slug,),
+        ).fetchone()
+        last_tool_id = (
+            int(last_tool_row["last_id"])
+            if last_tool_row and last_tool_row["last_id"] is not None
+            else None
+        )
+
+        rows = conn.execute(
+            "SELECT id, role, "
+            "       COALESCE(token_count, 0) AS tc, "
+            "       COALESCE(LENGTH(tool_results_json), 0) AS tool_chars "
             "FROM chat_messages "
             "WHERE project_slug = ? AND is_compacted = 0",
             (project_slug,),
-        ).fetchone()
-        total = int(row["s"]) if row else 0
+        ).fetchall()
+
+        total = 0
+        for row in rows:
+            tc = int(row["tc"])
+            if (
+                row["role"] == "tool"
+                and row["id"] != last_tool_id
+                and int(row["tool_chars"]) > _TOOL_OUTPUT_TRUNCATE_BYTES
+            ):
+                # Wird beim Senden truncated → realistischer Beitrag
+                total += _TOOL_OUTPUT_TRUNCATED_TOKENS
+            else:
+                total += tc
+
         conn.execute(
             "UPDATE project_chat_state "
             "SET token_estimate = ?, updated_at = datetime('now') "
@@ -352,6 +388,14 @@ _TOOL_OUTPUT_TRUNCATE_BYTES = 5000
 # ohne dass die ganzen z.B. 200 KB DISCO.md im Verlauf bleiben.
 _TOOL_OUTPUT_HEAD_BYTES = 1500
 _TOOL_OUTPUT_TAIL_BYTES = 500
+
+# Geschaetzte Token-Groesse einer truncateten Tool-Message:
+# 1500 (Head) + 500 (Tail) + ~150 (Header-Zeile) = 2150 chars,
+# bei ~3 chars/token fuer dichte JSON-Tabellen ~ 700 Tokens. Wird in
+# recompute_token_estimate() statt des Brutto-token_count verwendet,
+# weil build_responses_api_input() jeden Tool-Output ausser der
+# allerletzten Tool-Message genau so an Foundry sendet.
+_TOOL_OUTPUT_TRUNCATED_TOKENS = 700
 
 
 def _truncate_old_tool_output(output_str: str, *, tool_name: str = "") -> str:
