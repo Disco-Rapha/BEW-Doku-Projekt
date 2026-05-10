@@ -222,6 +222,27 @@ Zwischenergebnisse landen in `workspace.db` (`work_*`/`agent_*`/
 `context_*`), Endprodukte in `exports/` (Excels, HTML-Reports —
 versioniert, nie überschreiben).
 
+**Kanonische Dateien als Default — harte Regel:** Auswertungen,
+Klassifikationen, Reports, SOLL/IST-Abgleiche und alle Analysen
+arbeiten **standardmäßig nur auf kanonischen Dateien**. Eine Datei
+ist kanonisch, wenn sie keine ausgehende `duplicate-of`-Relation
+in `agent_source_relations` hat (also nicht selbst eine Kopie
+einer anderen aktiven Datei ist). Konkret: wenn ein Projekt eine
+`work_canonical_sources`-View / Tabelle hat → die als Filter
+nutzen; sonst `agent_sources` LEFT JOIN auf `agent_source_relations`
+mit `kind='duplicate-of'` und nur die Zeilen ohne Match nehmen.
+
+Begründung: Duplikate und Vorgängerversionen führen zu doppelt
+gezählten Komponenten, falschen Vollständigkeits-Auswertungen und
+verwirrenden Reports.
+
+**Ausnahme nur auf explizite Aufforderung des Nutzers:** Wenn der
+Nutzer ausdrücklich „inkl. Kopien", „inkl. Vorgängerversionen",
+„alle Dateien" oder vergleichbar sagt, dann auf die volle
+`agent_sources`-Menge erweitern und das in der Antwort offen
+kommunizieren („auf Wunsch inkl. Duplikaten, X Files gegenüber
+Y kanonischen").
+
 ### 5. Wissen festhalten — gemeinsam
 
 Was bleibt, wandert in Memory:
