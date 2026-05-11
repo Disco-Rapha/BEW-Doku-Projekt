@@ -524,10 +524,15 @@ a:hover { text-decoration: underline; }
 /* Markdown-Rendering im Chat */
 .bubble p { margin: 0 0 8px 0; }
 .bubble p:last-child { margin-bottom: 0; }
+/* Headlines im Discoverse-Style: Mono-Schrift (System-Mono ~= IBM Plex Mono
+   ohne Google-Fonts-Egress). Body bleibt Sans. Klare visuelle Trennung
+   zwischen technischer Headline und lesbarem Fliesstext. */
 .bubble h1, .bubble h2, .bubble h3, .bubble h4 {
-  margin: 12px 0 6px 0;
+  margin: 14px 0 6px 0;
   color: var(--text-bright);
-  font-weight: 600;
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: -0.3px;
 }
 .bubble h1 { font-size: 18px; }
 .bubble h2 { font-size: 16px; }
@@ -557,28 +562,38 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
   width: auto; max-width: 100%;
 }
+/* Minimal-Table-Style: nur horizontale Row-Trenner (subtil), Header etwas
+   heller abgesetzt. Keine vertikalen Gitter, kein Zebra. */
 .bubble th, .bubble td {
-  border: 1px solid var(--border);
-  padding: 4px 8px; text-align: left;
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
 }
-.bubble th { background: var(--panel); font-weight: 600; }
-.bubble tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.bubble th {
+  background: rgba(255,255,255,0.06);  /* Header etwas heller als Body-Rows */
+  font-weight: 600;
+}
+.bubble tr:last-child td { border-bottom: none; }  /* keine Trennlinie nach letzter Row */
 .bubble blockquote {
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--accent);  /* Brand-Akzent — Zitate als Hinweis-Signal */
   margin: 8px 0; padding: 4px 12px;
   color: var(--text-dim);
 }
 .bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
-.bubble a { color: var(--accent); }
+.bubble a { color: var(--accent); text-underline-offset: 3px; }
+.bubble a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
 .user .bubble code,
 .user .bubble pre { background: rgba(255,255,255,0.15); }
 
-/* Tool-Call-Block — kompakt + aufklappbar */
+/* Tool-Call-Block — kompakt + aufklappbar.
+   Bewusst zurueckhaltend: schwarzer BG (nicht Brand-Lila) + neutraler grauer
+   Akzent-Strich, damit Tool-Calls die Disco-Antwort nicht ueberlagern.
+   Code-Interpreter/File-Search behalten ihre eigenen Akzent-Farben unten. */
 .tool-call {
   font-family: var(--mono); font-size: 11px;
-  background: var(--panel2);
+  background: #0a0a0a;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--yellow);
+  border-left: 3px solid var(--text-dim);
   border-radius: 4px;
   margin: 4px 0;
 }
@@ -593,7 +608,7 @@ a:hover { text-decoration: underline; }
   transition: transform 0.15s;
 }
 .tool-call[open] summary::before { transform: rotate(90deg); }
-.tool-call .tool-name { color: var(--yellow); font-weight: 600; }
+.tool-call .tool-name { color: var(--text); font-weight: 600; }
 .tool-call .tool-status { color: var(--green); font-size: 10px; margin-left: auto; }
 .tool-call .tool-status.pending { color: var(--yellow); }
 .tool-call .tool-body { padding: 0 10px 8px 10px; display: flex; flex-direction: column; gap: 4px; }
