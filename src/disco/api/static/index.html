@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<title>Disco</title>
+<title>Disco — Discoverse</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 
 <!-- Markdown + Code-Highlight + XSS-Sanitizer (CDN, kein Build) -->
@@ -33,15 +33,19 @@
 
 <style>
 :root {
-  --bg:        #1a1a1a;
-  --panel:    #232323;
-  --panel2:   #2c2c2c;
-  --border:   #3a3a3a;
-  --text:     #e0e0e0;
-  --text-dim: #888;
+  /* Discoverse-Branding (Mai 2026): dunkles, neutrales Grundgeruest mit
+     Discoverse-Akzenten. Hintergruende bleiben bewusst neutral dunkel
+     (kein flaechiges Lila), damit Akzentfarben markant wirken. Status-Farben
+     (green/yellow/red) bleiben semantisch fuer Flows/Klassifikation/Cell-Color. */
+  --bg:        #0b0720;  /* navy-900 — Hauptflaeche, fast schwarz mit Lila-Hauch */
+  --panel:    #0e0a26;  /* zwischen navy-800 und navy-900 — Sidebar dunkler, mit klarem Lila-Stich */
+  --panel2:   #221a52;  /* navy-700 — Hover/active, eine Stufe heller */
+  --border:   #221a52;  /* navy-700 — Trenner */
+  --text:     #e5e5e5;
+  --text-dim: #a3a3a3;
   --text-bright: #ffffff;
-  --accent:   #5b9aff;
-  --accent2:  #2563eb;
+  --accent:   #ffb400;  /* gold-500 — Brand-Akzent fuer Text/Borders/Links/Highlights */
+  --accent2:  #5639a8;  /* indigo-700 — Akzent-Hintergrund nur fuer User-Bubble + Active-Sidebar-Items (punktuell, nicht flaechig) */
   --green:    #4ade80;
   --yellow:   #facc15;
   --red:      #ef4444;
@@ -68,8 +72,11 @@ button, input, select, textarea {
 }
 button { cursor: pointer; }
 button:hover { background: var(--panel); }
-.btn-primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
-.btn-primary:hover { background: var(--accent); }
+/* Primary-Button im Discoverse-Brand-Style: Gold-Hintergrund, dunkler Text.
+   Wird vom "Senden"-Button und allen weiteren Primary-CTAs (Anlegen, Speichern,
+   Flow-starten) genutzt — bewusst konsistent fuer hohe Wiedererkennung. */
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #171717; font-weight: 600; }
+.btn-primary:hover { background: #e89f00; border-color: #e89f00; }  /* gold-600 — Hover leicht abgedunkelt, kein Color-Jump */
 .btn-stop { background: var(--red); border-color: var(--red); color: #fff; font-size: 12px; padding: 4px 12px; }
 .btn-stop:hover { background: #dc2626; }
 a { color: var(--accent); text-decoration: none; }
@@ -99,6 +106,37 @@ a:hover { text-decoration: underline; }
   display: flex; flex-direction: column;
   overflow-y: auto;  /* eine gemeinsame Scroll-Achse fuer alle Sections */
 }
+
+/* ============= Brand-Header (Sidebar oben) =============
+   Discoverse-Wordmark B1 — Logo + "Discoverse" kompakt.
+   Logo-PNG ist die Original-Brand-Datei (weiße Variante mit Alpha-Channel).
+   Auf dunklem Sidebar-BG erscheint sie direkt weiß; bei Bedarf kann ueber
+   CSS-Filter Gold/Indigo eingefaerbt werden (siehe Discoverse-DS-v3). */
+.brand-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.brand-logo {
+  width: 36px; height: 36px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: block;
+}
+.brand-name {
+  /* Inter-Bold-Look — System-Sans auf macOS (SF Pro Display) sieht praktisch
+     identisch zu Inter Bold aus, ohne Google-Fonts-Egress. */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--text-bright);
+  letter-spacing: -0.4px;
+  line-height: 1;
+}
+
 .sb-section {
   border-bottom: 1px solid var(--border);
   padding: 8px 10px;
@@ -473,7 +511,11 @@ a:hover { text-decoration: underline; }
   line-height: 1.55;
   word-wrap: break-word;
 }
-.msg.user .bubble { background: var(--accent2); color: #fff; }
+/* Disco-Antworten ohne Bubble-Hintergrund — fliessen direkt im Chat-BG.
+   Horizontales Padding bleibt subtil fuer Lesbarkeit, vertikales kompakter. */
+.msg.agent .bubble { background: transparent; padding: 4px 2px; }
+/* User-Prompt im Brand-Style: dunkelgrauer Hintergrund mit Gold-Outline. */
+.msg.user .bubble { background: var(--panel2); color: var(--text); border: 1px solid var(--accent); }
 .msg.system .bubble {
   background: transparent; color: var(--text-dim);
   font-size: 11px; font-style: italic; padding: 4px 0;
@@ -1064,6 +1106,12 @@ a:hover { text-decoration: underline; }
 
   <!-- ============ Sidebar (links) ============ -->
   <aside id="sidebar">
+
+    <!-- Discoverse-Brand-Header (Wordmark B1, kompakt ohne Tagline) -->
+    <div class="brand-header" title="Discoverse">
+      <img class="brand-logo" src="/static/lib/discoverse-logo.png" alt="Discoverse">
+      <span class="brand-name">Discoverse</span>
+    </div>
 
     <div class="sb-section">
       <div class="sb-toolbar">
