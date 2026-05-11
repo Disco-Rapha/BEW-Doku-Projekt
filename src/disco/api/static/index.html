@@ -1241,7 +1241,12 @@ const LS_KEY_PROJECT   = 'disco.active.project';
 // =========================================================================
 function initMarkdown() {
   state.md = window.markdownit({
-    html: false,
+    // html: true → Roh-HTML aus dem Markdown wird durchgereicht. Azure
+    // Document Intelligence produziert IMMER <table>-HTML statt
+    // GitHub-Pipe-Tables, und <figure>/<figcaption> fuer Bilder.
+    // Ohne html: true wuerden Disco-Extrakte ohne Tabellen rendern.
+    // Sicherheit: DOMPurify-Sanitize unten begrenzt Tags + Attrs strikt.
+    html: true,
     linkify: true,
     typographer: false,
     breaks: true,
@@ -1282,8 +1287,9 @@ function renderMarkdown(text) {
   const html = state.md.render(text);
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ['p','br','strong','em','code','pre','ul','ol','li','a','h1','h2','h3','h4','h5','h6',
-                   'blockquote','hr','table','thead','tbody','tr','th','td','span','del','sub','sup','img'],
-    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt'],
+                   'blockquote','hr','table','thead','tbody','tr','th','td','caption','span','del','sub','sup','img',
+                   'figure','figcaption','section','article'],
+    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt','colspan','rowspan'],
     // Erlaube zusaetzlich disco-file:// und disco-table:// als URI-Schemas.
     // DOMPurify-Default whitelistet nur http/https/mailto/tel/data:image/etc.
     ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp|xxx|disco-file|disco-table):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
