@@ -41,9 +41,29 @@ from typing import Any
 from . import register
 from .data import _connect as db_connect
 from .fs import _data_root
+from ..context import get_current_project_slug
 
 
 logger = logging.getLogger(__name__)
+
+
+def _guard_env_for_run_python() -> dict[str, str]:
+    """ENV-Variablen fuer den _run_with_guard-Wrapper, run_python-Variante.
+
+    Whitelist ist BEWUSST leer (= nur Loopback) — run_python soll keine
+    externen Calls machen. DI/Foundry erreicht Disco nur ueber dedizierte
+    Server-Tools, nicht ueber run_python-Subprocesses (die haben auch
+    keine API-Keys, siehe ENV_BLOCKLIST oben).
+    """
+    from disco.config import settings
+
+    project_slug = get_current_project_slug() or ""
+    return {
+        "DISCO_EGRESS_WHITELIST": "",  # leer = nur Loopback
+        "DISCO_EGRESS_SOURCE": "run_python",
+        "DISCO_EGRESS_SYSTEM_DB": str(settings.db_path),
+        "DISCO_EGRESS_PROJECT_SLUG": project_slug,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +291,15 @@ def _run_python(
         script_abs = tmp_script
 
     # --- Subprocess ausfuehren ---
+    # Wir starten das User-Script NICHT direkt, sondern ueber den
+    # _run_with_guard-Wrapper. Der aktiviert den Network-Egress-Guard
+    # (siehe disco.agent._network_guard) und fuehrt dann das Script
+    # transparent aus. So ist auch beliebiger Python-Code aus run_python
+    # auf die Whitelist begrenzt — fuer run_python NUR Loopback.
     python = _python_executable()
-    cmd = [python, str(script_abs)] + cli_args
+    cmd = [python, "-m", "disco.agent._run_with_guard", str(script_abs)] + cli_args
     env = _filtered_env()
+    env.update(_guard_env_for_run_python())
 
     t_start = time.monotonic()
     exit_code: int | None = None

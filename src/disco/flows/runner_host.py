@@ -74,6 +74,60 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Network-Egress-Guard Setup fuer Flow-Subprocesses
+# ---------------------------------------------------------------------------
+
+
+def _install_egress_guard(run_id: int, project_root: Path) -> None:
+    """Aktiviert den Network-Guard fuer diesen Flow-Subprocess.
+
+    Whitelist: Azure DI + Azure Foundry, Loopback. Sonst nichts.
+    Hostnames werden via fnmatch-Pattern gematcht; spezifische Endpoint-
+    Hosts kommen aus ENV (AZURE_DOC_INTEL_ENDPOINT, FOUNDRY_PROJECT_ENDPOINT).
+    Plus generische Patterns als Sicherheitsnetz (z.B. wenn die Endpoint-
+    URL nicht parsebar ist).
+    """
+    from urllib.parse import urlparse
+    from disco.agent._network_guard import install_guard
+    from disco.config import settings
+
+    # Spezifische Endpoint-Hostnames aus ENV
+    extras: list[str] = []
+    for env_key in ("AZURE_DOC_INTEL_ENDPOINT", "FOUNDRY_PROJECT_ENDPOINT", "AZURE_OPENAI_ENDPOINT"):
+        url = os.environ.get(env_key)
+        if not url:
+            continue
+        try:
+            host = urlparse(url).hostname
+            if host:
+                extras.append(host)
+        except Exception:
+            pass
+
+    # Plus generische Azure-Patterns (Belt + Suspenders)
+    whitelist = [
+        *extras,
+        "*.cognitiveservices.azure.com",   # DI
+        "*.openai.azure.com",              # Foundry / Azure OpenAI
+        "*.services.ai.azure.com",         # neuere Foundry-Endpoints
+    ]
+
+    # project_slug aus agent_flow_runs ableiten via project_root: Konvention
+    # ist <workspace>/projects/<slug>, also der letzte Teil.
+    try:
+        project_slug = project_root.name
+    except Exception:
+        project_slug = None
+
+    install_guard(
+        whitelist=whitelist,
+        source="flow-runner",
+        system_db_path=str(settings.db_path),
+        project_slug=project_slug,
+    )
+
+
+# ---------------------------------------------------------------------------
 # DB-Helfer (eigene Verbindung, unabhaengig vom SDK)
 # ---------------------------------------------------------------------------
 
@@ -234,6 +288,13 @@ def main(argv: list[str] | None = None) -> int:
         f"(pid={os.getpid()}, cwd={project_root})",
         file=sys.stderr,
     )
+
+    # -------------------------------------------------------------------
+    # 3b) Network-Egress-Guard aktivieren
+    #     Flow-Runner duerfen Azure DI + Azure Foundry, sonst nichts.
+    #     Verstoesse landen in agent_egress_violations (system.db).
+    # -------------------------------------------------------------------
+    _install_egress_guard(run_id, project_root)
 
     # -------------------------------------------------------------------
     # 4) User-Runner ausfuehren — mit konsistentem Status-Handling
