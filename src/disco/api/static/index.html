@@ -63,20 +63,55 @@ html, body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 13px;
 }
-button, input, select, textarea {
+input, select, textarea {
   font: inherit; color: inherit;
   background: var(--panel2);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 4px 8px;
 }
-button { cursor: pointer; }
-button:hover { background: var(--panel); }
+/* Default-Button = Secondary-Style (Gold-Outline, schwarzer BG, Gold-Text).
+   Fuer Action-CTAs (Stats, Komprimieren, Context-Trigger etc.). */
+button {
+  font: inherit;
+  background: #000;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+button:hover {
+  background: rgba(255, 180, 0, 0.12);
+  color: var(--accent);
+}
+/* Selects (Reasoning, Project-Picker etc.) optisch konsistent zum Button. */
+select {
+  background: #000;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+/* Icon-Buttons (+/−, Refresh, X, Toggle-Pfeile, Attach) — outline-los,
+   nur Symbol in Gold. Hover: dezente Hintergrund-Schimmern. */
+button.icon-btn,
+button.btn-attach,
+button.panel-toggle {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  padding: 4px 8px;
+}
+button.icon-btn:hover,
+button.btn-attach:hover,
+button.panel-toggle:hover {
+  background: rgba(255, 180, 0, 0.12);
+  color: var(--accent);
+}
 /* Primary-Button im Discoverse-Brand-Style: Gold-Hintergrund, dunkler Text.
-   Wird vom "Senden"-Button und allen weiteren Primary-CTAs (Anlegen, Speichern,
-   Flow-starten) genutzt — bewusst konsistent fuer hohe Wiedererkennung. */
+   Nur fuer "Senden" — alle anderen CTAs nutzen den Secondary-Style. */
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #171717; font-weight: 600; }
-.btn-primary:hover { background: #e89f00; border-color: #e89f00; }  /* gold-600 — Hover leicht abgedunkelt, kein Color-Jump */
+.btn-primary:hover { background: #e89f00; border-color: #e89f00; color: #171717; }
 .btn-stop { background: var(--red); border-color: var(--red); color: #fff; font-size: 12px; padding: 4px 12px; }
 .btn-stop:hover { background: #dc2626; }
 a { color: var(--accent); text-decoration: none; }
@@ -239,6 +274,60 @@ a:hover { text-decoration: underline; }
 }
 .icon-btn:hover { color: var(--text-bright); background: var(--panel2); }
 
+/* Panel-Toggle-Buttons (Sidebar/Viewer ein/aus) — Doppel-Pfeil, identischer
+   Style, dreht sich je nach Panel-Zustand. Default-Symbol ist «; auf der
+   rechten Seite per CSS rotate(180deg) zu », gleiche Logik fuer collapsed.
+   Erbt Default-Button-Style (gold-outline, schwarzer BG). */
+.panel-toggle {
+  width: 28px; height: 28px;
+  padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1;
+  transition: transform 0.2s ease, background 0.15s ease;
+  flex-shrink: 0;
+}
+/* Default-Richtung: linker Pfeil zeigt nach links (Sidebar offen → einklappen),
+   rechter Pfeil zeigt nach rechts (Viewer offen → einklappen). */
+.panel-toggle-right { transform: rotate(180deg); }
+/* Wenn das Panel collapsed ist, dreht sich der Pfeil — zeigt "öffne mich". */
+#app.sidebar-collapsed .panel-toggle-left { transform: rotate(180deg); }
+#app.viewer-collapsed .panel-toggle-right { transform: rotate(0deg); }
+
+/* Project-Picker im Chat-Header — gross, mittig, klickbar. Erbt Button-
+   Default-Style (gold-outline, schwarzer BG, gold-Text); zusaetzlich
+   groesserer Font + Chevron-Dropdown-Pfeil. */
+.project-picker {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  padding: 6px 22px 6px 14px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--accent) 50%),
+                    linear-gradient(135deg, var(--accent) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 50%, calc(100% - 7px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  min-width: 200px;
+  text-align: center;
+  letter-spacing: 0.2px;
+}
+.project-picker:hover { background-color: rgba(255, 180, 0, 0.12); }
+.project-picker:focus { outline: none; }
+.project-picker option { background: var(--panel); color: var(--text); }
+
+/* Context-Counter — kein eigenes Element mehr, sondern ein klickbarer
+   Button im chat-actions-Bereich, der die Komprimieren-Funktion oeffnet. */
+.context-trigger {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.context-trigger.warn { border-color: var(--yellow); color: var(--yellow); }
+.context-trigger.critical { border-color: var(--red); color: var(--red); }
+
 /* ============= Chat (Mitte) ============= */
 #chat-pane {
   display: flex; flex-direction: column;
@@ -254,15 +343,10 @@ a:hover { text-decoration: underline; }
   flex: 1; font-weight: 600; color: var(--text-bright);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-#chat-project-tag {
-  font-size: 11px; color: var(--text-dim);
-  padding: 2px 6px; background: var(--panel2);
-  border: 1px solid var(--border); border-radius: 3px;
-}
 #chat-token-counter {
   font-family: var(--mono); font-size: 11px;
   padding: 2px 8px; border-radius: 3px;
-  background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text-dim);
   color: var(--text-dim);
   white-space: nowrap;
   cursor: help;
@@ -283,17 +367,8 @@ a:hover { text-decoration: underline; }
   0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.0); }
   50%      { box-shadow: 0 0 0 4px rgba(239,68,68,0.25); }
 }
-#btn-compact {
-  font-size: 11px; padding: 3px 10px;
-  background: var(--panel2); border: 1px solid var(--border);
-}
-#btn-compact:hover {
-  background: var(--accent2); border-color: var(--accent2); color: #fff;
-}
-#btn-compact.urgent {
-  background: var(--yellow); border-color: var(--yellow); color: #000;
-}
-#btn-compact.urgent:hover { background: #eab308; border-color: #eab308; }
+/* (btn-compact entfernt — der Counter selbst ist jetzt der Komprimieren-
+   Trigger; die alte "urgent"-Animation lebt in .context-trigger.critical) */
 
 /* ============= Run-Streifen (aktive + beendete Flow-Runs) ============= */
 #run-strip {
@@ -578,7 +653,30 @@ a:hover { text-decoration: underline; }
   border-left: 3px solid var(--accent);  /* Brand-Akzent — Zitate als Hinweis-Signal */
   margin: 8px 0; padding: 4px 12px;
   color: var(--text-dim);
+  position: relative;  /* fuer den Copy-Button (absolute Position) */
 }
+/* Code-Blocks brauchen position:relative damit der absolute Copy-Button greift. */
+.bubble pre { position: relative; }
+
+/* Copy-Button in Blockquotes UND Code-Blocks — zeigt sich beim Hover,
+   kopiert den Box-Inhalt in die Zwischenablage. */
+.box-copy-btn {
+  position: absolute;
+  top: 4px; right: 4px;
+  font-size: 11px;
+  padding: 1px 6px;
+  line-height: 1.4;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.bubble blockquote:hover .box-copy-btn,
+.bubble pre:hover .box-copy-btn { opacity: 0.8; }
+.box-copy-btn:hover { opacity: 1 !important; color: var(--accent); border-color: var(--accent); }
 .bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 .bubble a { color: var(--accent); text-underline-offset: 3px; }
 .bubble a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
@@ -650,11 +748,15 @@ a:hover { text-decoration: underline; }
   outline-offset: -6px;
 }
 #chat-input {
-  width: 100%; min-height: 40px; max-height: 200px;
-  resize: vertical;
+  width: 100%;
+  min-height: 40px; max-height: 220px;  /* ca. 10 Zeilen, danach scrollt es */
+  resize: none;                         /* Auto-Resize via JS uebernimmt die Hoehe */
+  overflow-y: auto;
   background: var(--panel2);
   font-family: inherit; font-size: 13px;
   padding: 8px 10px;
+  line-height: 1.4;
+  box-sizing: border-box;
 }
 #chat-input:focus { outline: 1px solid var(--accent); }
 .attachments-strip {
@@ -709,17 +811,12 @@ a:hover { text-decoration: underline; }
   border-radius: 3px;
 }
 .attach-chip-remove:hover { color: #fff; background: rgba(255,255,255,0.1); }
+/* Attach-Button erbt Default-Secondary-Style; nur Groesse/Font abweichend. */
 .btn-attach {
-  background: var(--panel2);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
   padding: 4px 10px;
   font-size: 16px;
   line-height: 1;
-  border-radius: 4px;
-  cursor: pointer;
 }
-.btn-attach:hover { color: var(--accent); border-color: var(--accent); }
 /* Anhang-Bubbles in der Chat-History */
 .msg-attachments {
   display: flex; flex-wrap: wrap; gap: 6px;
@@ -789,22 +886,12 @@ a:hover { text-decoration: underline; }
 .chat-actions-right {
   display: flex; align-items: center; gap: 8px;
 }
-.chat-model-label {
-  display: flex; align-items: center; gap: 4px;
-  font-size: 11px; color: var(--text-dim);
-  cursor: help;
-}
-.chat-model-label select {
-  background: var(--panel2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 2px 6px;
+/* Reasoning-Select erbt Default-Secondary-Style, nur kompaktere Groesse. */
+#reasoning-select {
   font-size: 11px;
-  font-family: inherit;
+  padding: 4px 8px;
   cursor: pointer;
 }
-.chat-model-label select:hover { border-color: var(--accent); }
 
 /* ============= Viewer (rechts) ============= */
 #viewer-pane {
@@ -1128,15 +1215,6 @@ a:hover { text-decoration: underline; }
       <span class="brand-name">Discoverse</span>
     </div>
 
-    <div class="sb-section">
-      <div class="sb-toolbar">
-        <select id="project-select" onchange="onProjectChange()"></select>
-        <button class="icon-btn" title="Neues Projekt anlegen" onclick="createProject()">+</button>
-        <button class="icon-btn" title="Aktuelles Projekt archivieren" onclick="archiveCurrentProject()">🗄</button>
-        <button class="icon-btn" title="Sidebar einklappen" onclick="toggleSidebar()">«</button>
-      </div>
-    </div>
-
     <details class="sb-section collapsible" id="explorer-section" data-sb-key="explorer" open>
       <summary><span class="sb-title">Explorer</span></summary>
       <div class="sb-body">
@@ -1188,10 +1266,11 @@ a:hover { text-decoration: underline; }
 
     <div class="sb-section">
       <div class="sb-title">Einstellungen</div>
-      <div class="muted" style="font-size:11px">
+      <div class="muted" style="font-size:11px; margin-bottom: 8px;">
         Workspace: <code id="settings-workspace">~/Disco</code><br>
         Model: <code id="settings-model">gpt-5</code>
       </div>
+      <button id="btn-stats" style="font-size: 11px; padding: 3px 10px;" title="Agent-Stats: Tool-Usage, Fehler, Feedback" onclick="openStatsModal()">📊 Stats</button>
     </div>
 
   </aside>
@@ -1203,15 +1282,14 @@ a:hover { text-decoration: underline; }
   <main id="chat-pane">
 
     <div id="chat-header">
-      <button class="icon-btn" title="Sidebar ein-/ausblenden" onclick="toggleSidebar()">☰</button>
+      <button class="panel-toggle panel-toggle-left" title="Sidebar ein-/ausblenden" onclick="toggleSidebar()">«</button>
       <span id="env-badge" class="env-badge" title="Umgebung dieses Disco-Servers"></span>
-      <span id="chat-title">Disco</span>
-      <span id="chat-project-tag">(kein Projekt)</span>
       <span class="spacer" style="flex:1"></span>
-      <span id="chat-token-counter" title="Aktueller Chat-Fuellstand. Warnung bei 70 %, kritisch bei 90 %.">0 / 180k · 0 %</span>
-      <button id="btn-compact" title="Chat komprimieren — wichtige Erkenntnisse in NOTES.md / DISCO.md schreiben, dann Verlauf einklappen" onclick="openCompactModal()">🗜 Komprimieren</button>
-      <button id="btn-stats" title="Agent-Stats: Tool-Usage, Fehler, Feedback" onclick="openStatsModal()">📊 Stats</button>
-      <button class="icon-btn" title="Viewer ein-/ausblenden" onclick="toggleViewer()">▭</button>
+      <select id="project-select" class="project-picker" onchange="onProjectChange()" title="Projekt wechseln"></select>
+      <button class="icon-btn" id="btn-project-add" title="Neues Projekt anlegen" onclick="createProject()">+</button>
+      <button class="icon-btn" id="btn-project-remove" title="Aktuelles Projekt archivieren" onclick="archiveCurrentProject()">−</button>
+      <span class="spacer" style="flex:1"></span>
+      <button class="panel-toggle panel-toggle-right" title="Viewer ein-/ausblenden" onclick="toggleViewer()">«</button>
     </div>
 
     <!-- Run-Streifen: zeigt aktive Flow-Runs projekt-uebergreifend. JS fuellt dynamisch. -->
@@ -1230,18 +1308,16 @@ a:hover { text-decoration: underline; }
       <div class="chat-actions">
         <span id="chat-status" class="muted">Bereit</span>
         <span class="chat-actions-right">
-          <button id="btn-attach" class="btn-attach" title="Datei anhaengen (Bilder, Text-Files)" onclick="document.getElementById('attachment-file-input').click()">+</button>
-          <label class="chat-model-label" title="Reasoning-Effort fuer Disco (gpt-5.4-Stufen). Hoeher = tieferes Nachdenken, langsamer + teurer. Aenderung pusht eine neue Agent-Version ins Foundry-Portal (~3s).">
-            Reasoning:
-            <select id="reasoning-select" onchange="onReasoningChange()" disabled>
-              <option value="none">none</option>
-              <option value="low">low</option>
-              <option value="medium" selected>medium</option>
-              <option value="high">high</option>
-              <option value="xhigh">xhigh</option>
-            </select>
-          </label>
+          <select id="reasoning-select" onchange="onReasoningChange()" title="Reasoning-Effort fuer Disco (gpt-5.4-Stufen). Hoeher = tieferes Nachdenken, langsamer + teurer." disabled>
+            <option value="none">Reasoning: none</option>
+            <option value="low">Reasoning: low</option>
+            <option value="medium" selected>Reasoning: medium</option>
+            <option value="high">Reasoning: high</option>
+            <option value="xhigh">Reasoning: xhigh</option>
+          </select>
+          <button id="chat-token-counter" class="context-trigger" title="Chat-Fuellstand. Klick: Komprimieren (Erkenntnisse sichern + Verlauf einklappen)." onclick="openCompactModal()">Context: 0 %</button>
           <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
+          <button id="btn-attach" class="btn-attach" title="Datei anhaengen (Bilder, Text-Files)" onclick="document.getElementById('attachment-file-input').click()">+</button>
           <button id="btn-send" class="btn-primary" onclick="sendMessage()">Senden ▶</button>
         </span>
       </div>
@@ -1429,6 +1505,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   initMarkdown();
   initSplitters();
   initChatInput();
+  initBoxCopyObserver();
   initSidebarSections();
   initReasoningSelect();
 
@@ -1572,8 +1649,6 @@ async function archiveCurrentProject() {
     if (state.projects.length > 0) {
       await switchProject(state.projects[0].slug);
     } else {
-      document.getElementById('chat-title').textContent = 'Disco';
-      document.getElementById('chat-project-tag').textContent = '(kein Projekt)';
       document.getElementById('chat-messages').innerHTML = '';
       setSystemMessage('Kein Projekt vorhanden. Mit <b>+</b> oben ein neues anlegen.');
     }
@@ -1585,12 +1660,9 @@ async function archiveCurrentProject() {
 async function switchProject(slug) {
   state.activeProjectSlug = slug;
   localStorage.setItem(LS_KEY_PROJECT, slug);
+  // Project-Picker (<select>) zeigt jetzt zentral oben das aktive Projekt
+  // — die alten chat-title / chat-project-tag-Elemente sind weg.
   document.getElementById('project-select').value = slug;
-
-  // Projektname im Chat-Header
-  const proj = state.projects.find(p => p.slug === slug);
-  document.getElementById('chat-title').textContent = proj ? proj.name : 'Disco';
-  document.getElementById('chat-project-tag').textContent = slug ? slug : '(kein Projekt)';
 
   // Chat schliessen, warning-state zuruecksetzen
   if (state.ws) { try { state.ws.close(); } catch(e) {} state.ws = null; }
@@ -1633,37 +1705,27 @@ async function loadChatState(slug) {
 
 function updateTokenCounter(s) {
   const el = document.getElementById('chat-token-counter');
-  const btn = document.getElementById('btn-compact');
   if (!el) return;
+  // Der Counter ist gleichzeitig der "Komprimieren"-Trigger — Klick
+  // oeffnet das Compact-Modal. Style-Klassen warn/critical sitzen auf
+  // dem Counter-Button selbst.
+  el.classList.remove('warn', 'critical');
   if (!s) {
-    el.textContent = '– / 180k · 0 %';
-    el.className = '';
+    el.textContent = 'Context: – %';
     el.title = '';
-    btn.classList.remove('urgent');
     return;
   }
-  const tok = s.token_estimate || 0;
-  const budget = s.token_budget || 180000;
   const pct = Math.round((s.percent || 0) * 100);
-  // ~-Praefix bei Estimate-Source, damit der User weiss: Wert ist eine
-  // Schaetzung (z.B. nach Compaction, vor naechstem Turn) und wird
-  // beim naechsten Turn durch den Azure-Ground-Truth ersetzt.
   const isEstimate = s.token_estimate_source === 'estimate';
   const prefix = isEstimate ? '~' : '';
-  el.textContent = `${prefix}${_fmtTokens(tok)} / ${_fmtTokens(budget)} · ${pct} %`;
+  el.textContent = `Context: ${prefix}${pct} %`;
   el.title = isEstimate
-    ? 'Geschaetzter Fuellstand. Wird beim naechsten Turn durch den '
-      + 'Azure-Ground-Truth aktualisiert.'
-    : 'Azure-Ground-Truth aus dem letzten Turn.';
-  el.className = '';
-  btn.classList.remove('urgent');
+    ? 'Geschaetzter Fuellstand. Klick: Komprimieren.'
+    : 'Azure-Ground-Truth aus dem letzten Turn. Klick: Komprimieren.';
   if (s.warn_level === 'warn') {
     el.classList.add('warn');
   } else if (s.warn_level === 'critical') {
     el.classList.add('critical');
-    btn.classList.add('urgent');
-    // Einmaliger Hinweis-Toast (kein Modal, kein Tanz). Auto-Compact
-    // greift ohnehin beim naechsten Turn.
     if (!state._criticalWarningShown) {
       state._criticalWarningShown = true;
       setTimeout(() => openCompactModal(true), 400);
@@ -1716,29 +1778,79 @@ function _pickCompactionMessage(pool) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// openCompactModal bleibt nur als Auto-Hinweis-Toast bei kritischem Stand
-// — das eigentliche Komprimieren passiert direkt ueber den Button.
+// Modal mit Erklaerung dessen, was Komprimieren tut, plus Action-Button.
+// auto=true: nur einmaliger System-Message-Hinweis bei kritischer Fuellung,
+// kein Modal-Tanz (Auto-Compact greift eh beim naechsten Turn).
 function openCompactModal(auto) {
-  // Bei Auto-Aufruf (90 %): kurzer Hinweis ohne Modal-Tanz. Wenn der
-  // User weitertippt, greift Auto-Compact eh beim naechsten Turn.
   if (auto) {
     setSystemMessage('🗜 Kontext fast voll — beim naechsten Turn '
       + 'komprimiert Disco automatisch. Du kannst auch jetzt manuell '
-      + 'auf <b>🗜 Komprimieren</b> klicken.');
+      + 'auf <b>Context: …%</b> klicken und komprimieren.');
     return;
   }
-  // Bei manuellem Klick: direkt loslegen.
-  runCompaction();
+  // Wenn schon offen: nicht doppelt aufbauen.
+  if (document.getElementById('compact-modal-backdrop')) return;
+
+  // Aktuelle %-Anzeige aus dem Counter holen (fuer den Hinweis im Modal)
+  const counterEl = document.getElementById('chat-token-counter');
+  const counterText = counterEl ? counterEl.textContent : 'Context: – %';
+
+  const backdrop = document.createElement('div');
+  backdrop.id = 'compact-modal-backdrop';
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-labelledby="cmpt-title" style="max-width: 540px;">
+      <h3 id="cmpt-title">🗜 Chat komprimieren</h3>
+      <p><b>${counterText}</b></p>
+      <p>Disco speichert die wichtigsten Erkenntnisse aus dem bisherigen
+         Verlauf <b>persistent</b> ab und klappt den Chat-Verlauf danach ein.
+         Du verlierst dabei nichts an Wissen — Disco merkt sich was zaehlt.</p>
+      <p class="muted">Konkret passiert:</p>
+      <ul class="muted" style="margin: 4px 0 8px 18px; padding: 0;">
+        <li>Disco destilliert wichtige Erkenntnisse in <code>NOTES.md</code>
+            und <code>DISCO.md</code> (Memory-Reform-Modell).</li>
+        <li>Tabellen-Doku wird in <code>agent_table_docs</code> gespeichert.</li>
+        <li>Ein Handover-Brief landet als naechste System-Message, sodass
+            Disco nach der Kompression nahtlos weiterarbeiten kann.</li>
+        <li>Der bisherige Chat-Verlauf bleibt in der DB sichtbar, wird aber
+            nicht mehr an Foundry gesendet → der Kontext-Fuellstand sinkt.</li>
+      </ul>
+      <p class="muted">Dauert je nach Verlaufslaenge 5–15 Sekunden
+         (zwei LLM-Calls). Danach ist Disco wieder fit fuer langen
+         Reasoning.</p>
+      <div class="modal-actions">
+        <button id="cmpt-cancel" class="icon-btn">Abbrechen</button>
+        <button id="cmpt-go" class="btn-primary">🗜 Jetzt komprimieren</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+
+  const close = () => backdrop.remove();
+  backdrop.querySelector('#cmpt-cancel').addEventListener('click', close);
+  backdrop.querySelector('#cmpt-go').addEventListener('click', () => {
+    close();
+    runCompaction();
+  });
+  // Click auf Backdrop (ausserhalb der Karte) schliesst auch.
+  backdrop.addEventListener('click', (ev) => {
+    if (ev.target === backdrop) close();
+  });
+  // ESC schliesst.
+  const onKey = (ev) => {
+    if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
+  };
+  document.addEventListener('keydown', onKey);
 }
 
 function closeCompactModal() {
-  const el = document.getElementById('compact-modal');
+  const el = document.getElementById('compact-modal-backdrop');
   if (el) el.remove();
 }
 
 async function runCompaction() {
   if (!state.activeProjectSlug) return;
-  const btn = document.getElementById('btn-compact');
+  // Counter-Button ist gleichzeitig der Komprimieren-Trigger.
+  const btn = document.getElementById('chat-token-counter');
   if (btn && btn.disabled) return;  // Schon laeuft
   if (btn) btn.disabled = true;
 
@@ -2110,11 +2222,107 @@ let currentBubble = null;
 let currentText = '';
 let typingEl = null;
 
+// Clipboard-Helper mit zwei Fallbacks:
+//   1. navigator.clipboard.writeText (moderne API, braucht secure context +
+//      bei iframes 'clipboard-write'-Allow-Flag)
+//   2. document.execCommand('copy') via temporaeres Textarea — funktioniert
+//      auch in restriktiveren iframe-Sandboxes (z.B. Preview-Umgebungen).
+function _copyToClipboard(text) {
+  // Pfad 1: moderne Clipboard-API
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text)
+      .then(() => true)
+      .catch(() => _copyToClipboardFallback(text));
+  }
+  // Pfad 2: Fallback direkt
+  return Promise.resolve(_copyToClipboardFallback(text));
+}
+
+function _copyToClipboardFallback(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    // Versteckt aber selektierbar
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Copy-Buttons fuer "Boxen" in Disco-Antworten:
+//   - Blockquotes (Markdown > text)
+//   - Code-Blocks (```...```)
+// Wird per MutationObserver an neue Boxes angeklippt — funktioniert auch
+// waehrend des Streamings.
+function attachBoxCopyButtons(rootEl) {
+  if (!rootEl) return;
+  // blockquote UND pre — beide bekommen denselben Copy-Button
+  rootEl.querySelectorAll('.bubble blockquote:not([data-copy-attached]), .bubble pre:not([data-copy-attached])').forEach(box => {
+    box.dataset.copyAttached = '1';
+    const btn = document.createElement('button');
+    btn.className = 'box-copy-btn';
+    btn.type = 'button';
+    btn.title = 'Inhalt in die Zwischenablage kopieren';
+    btn.textContent = '📋';
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      // Bei <pre><code> den Code-Text greifen (innerText preserved Newlines);
+      // bei blockquote alle Kind-Nodes ausser dem Button selbst sammeln.
+      let text;
+      if (box.tagName === 'PRE') {
+        const codeEl = box.querySelector('code') || box;
+        text = codeEl.innerText || codeEl.textContent || '';
+      } else {
+        text = Array.from(box.childNodes)
+          .filter(n => n !== btn)
+          .map(n => (n.textContent || ''))
+          .join('').trim();
+      }
+      _copyToClipboard(text).then((ok) => {
+        btn.textContent = ok ? '✓' : '✗';
+        setTimeout(() => { btn.textContent = '📋'; }, 1200);
+      });
+    });
+    box.appendChild(btn);
+  });
+}
+
+function initBoxCopyObserver() {
+  const msgs = document.getElementById('chat-messages');
+  if (!msgs) return;
+  const obs = new MutationObserver(() => attachBoxCopyButtons(msgs));
+  obs.observe(msgs, { childList: true, subtree: true });
+  attachBoxCopyButtons(msgs);  // Initial-Scan
+}
+
 function initChatInput() {
   const input = document.getElementById('chat-input');
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
+
+  // Auto-Resize: Hoehe waechst mit dem Inhalt bis max-height aus dem CSS.
+  // Wenn der Inhalt darueber hinaus geht, scrollt das Textarea intern.
+  const autoResize = () => {
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+  };
+  input.addEventListener('input', autoResize);
+  // Initial sicherstellen + nach sendMessage (Reset auf min-height)
+  autoResize();
+  // Globaler Hook, damit sendMessage() nach Clear auf Min-Hoehe zurueckkann
+  window._chatInputAutoResize = autoResize;
 
   // Globaler Click-Handler fuer disco-file:// und disco-table://-Links
   // (event delegation ueber #chat-messages — funktioniert auch fuer
@@ -2357,7 +2565,8 @@ function sendMessage() {
     })),
   };
   input.value = '';
-  input.style.height = '';
+  // Textarea-Hoehe auf min-height zurueck (auto-resize-Helper aus initChatInput)
+  if (window._chatInputAutoResize) window._chatInputAutoResize();
   appendMessage('user', text, undefined, ready);
   clearAttachments();
   typingEl = appendTyping();
@@ -3495,6 +3704,22 @@ function initSplitters() {
 function setupSplitter(id, cssVar, lsKey, side) {
   const el = document.getElementById(id);
   let dragging = false; let startX = 0; let startW = 0;
+
+  // Iframes (Viewer-HTML-Sandbox) abschalten waehrend des Drags — sonst
+  // stehlen sie das mouseup-Event und der Splitter haengt an der Maus.
+  const disableIframePointer = () => {
+    document.querySelectorAll('iframe').forEach(f => {
+      f.dataset.prevPointer = f.style.pointerEvents || '';
+      f.style.pointerEvents = 'none';
+    });
+  };
+  const restoreIframePointer = () => {
+    document.querySelectorAll('iframe').forEach(f => {
+      f.style.pointerEvents = f.dataset.prevPointer || '';
+      delete f.dataset.prevPointer;
+    });
+  };
+
   el.addEventListener('mousedown', (e) => {
     e.preventDefault();
     dragging = true;
@@ -3502,6 +3727,7 @@ function setupSplitter(id, cssVar, lsKey, side) {
     startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
+    disableIframePointer();
   });
   document.addEventListener('mousemove', (e) => {
     if (!dragging) return;
@@ -3517,8 +3743,19 @@ function setupSplitter(id, cssVar, lsKey, side) {
       dragging = false;
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
+      restoreIframePointer();
       const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
       localStorage.setItem(lsKey, String(w));
+    }
+  });
+  // Falls die Maus das Fenster verlaesst (z.B. ueberlappendes OS-Element),
+  // den Drag auch sauber abschliessen — sonst bleibt restoreIframePointer aus.
+  window.addEventListener('mouseleave', () => {
+    if (dragging) {
+      dragging = false;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      restoreIframePointer();
     }
   });
 }
