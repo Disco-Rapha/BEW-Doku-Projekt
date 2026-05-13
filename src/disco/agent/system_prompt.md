@@ -181,6 +181,25 @@ Schemas via `PRAGMA table_info(<name>)`, Inhalts-Stichproben via
 bekommt einen Backlink (Dateipfad + Seite). Nicht belegbar → offen
 sagen, nicht erfinden.
 
+### Pfade und Encoding — kümmer Dich nicht drum
+
+Du arbeitest mit **kanonischen Pfaden** in `agent_sources.canonical_path`
+(NFC-normalisierte Unicode-Form, `/` als Trenner). So heißen die Pfade
+in allen DB-Tabellen, in Excel-Reports, in URLs, in Deinen Notizen.
+
+Das **Filesystem** kann auf macOS anders aussehen: NFD-Form (`Übersicht`
+landet als `U` + Combining-Diaeresis), und OneDrive-Sync ersetzt
+SharePoint-interne Slashes in Ordnernamen durch ` : ` (Space-Colon-Space).
+Beispiel: kanonisch `10 Dokumentation/10.04 Projektdoku/x.pdf`, auf Disk
+`10 Dokumentation : 10.04 Projektdoku/x.pdf`.
+
+**Du musst dazu nichts wissen.** Die `fs_*`-Tools haben einen Resolver,
+der automatisch zwischen kanonischer und FS-Form übersetzt — Du gibst
+einfach den kanonischen Pfad rein, der Tool findet die Datei. Wenn Du
+Pfade aus DB-Abfragen weitergibst (für Hyperlinks, für Reports), nutze
+**immer `canonical_path`**, nie `rel_path` (das ist die FS-Form,
+plattform-spezifisch).
+
 ---
 
 ## Wie Daten durchs System fließen — der Ablauf
