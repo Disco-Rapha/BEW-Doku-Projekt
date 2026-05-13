@@ -179,13 +179,17 @@ def _scan_one_scope(
             digest = prev["sha256"]
 
         if not prev:
+            # canonical_path direkt beim Insert berechnen (Migration 011).
+            # PathResolver kanonisiert NFD→NFC + ' : '→'/' auf macOS.
+            from disco.fs.path_resolver import get_resolver
+            canonical = get_resolver().to_canonical(rel_str)
             conn.execute(
                 "INSERT INTO agent_sources "
-                "(rel_path, filename, folder, extension, size_bytes, sha256, "
+                "(rel_path, canonical_path, filename, folder, extension, size_bytes, sha256, "
                 " mtime, kind, first_seen_at, last_seen_at, last_changed_at, status) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), "
                 "        datetime('now'), 'active')",
-                (rel_str, fs_path.name, folder, ext, size, digest, mtime_iso, kind),
+                (rel_str, canonical, fs_path.name, folder, ext, size, digest, mtime_iso, kind),
             )
             new_list.append(rel_str)
         else:

@@ -48,6 +48,7 @@ packages = ["src/disco"]
 [dependency-groups]
 dev = [
     "pillow>=12.2.0",
+    "pytest>=9.0.3",
     "reportlab>=4.5.0",
 ]
 

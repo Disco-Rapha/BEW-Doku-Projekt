@@ -518,7 +518,14 @@ def _data_root() -> Path:
 
 
 def _resolve_under_data(path: str) -> Path:
-    """Resolved `path` gegen data_dir; wirft ValueError bei Traversal."""
+    """Resolved `path` gegen data_dir; wirft ValueError bei Traversal.
+
+    Mit Unicode-/Pfad-Resolver-Fallback: wenn der direkte Pfad nicht existiert
+    und der Pfad relativ ist, wird der PathResolver gefragt ob er eine
+    FS-Variante findet (NFC→NFD auf macOS, ' : '-Substitution etc.). Damit
+    kann Disco mit kanonischen Pfaden arbeiten, auch wenn das Filesystem
+    eine andere Repraesentation speichert (Mac-NFD-Quirk).
+    """
     root = _data_root()
     p = Path(path)
     candidate = p if p.is_absolute() else (root / p)
@@ -527,6 +534,59 @@ def _resolve_under_data(path: str) -> Path:
         raise ValueError(
             f"Pfad ausserhalb von data/ nicht erlaubt: {path!r}"
         )
+
+    # Unicode-/Encoding-Fallback fuer Lese-/Stat-Operationen:
+    # Wenn der direkte Pfad nicht existiert, ist er evtl. in der falschen
+    # Encoding-Form (Disco gibt canonical NFC, FS speichert NFD auf macOS)
+    # oder hat einen OneDrive-Folder-Slash-Quirk. Strategie:
+    # 1. Schau in agent_sources nach, ob canonical_path → rel_path mapping
+    #    da ist (die Wahrheit aus dem Source-Scan).
+    # 2. Falls (1) nicht hilft (kein DB-Eintrag, neuer Pfad): PathResolver
+    #    versucht NFC/NFD-Varianten.
+    # Bei Schreib-Operationen ist beides harmlos: existiert der Pfad nicht,
+    # findet auch der Fallback nichts und gibt den Original-Pfad zurueck.
+    if not resolved.exists() and not p.is_absolute():
+        # 1. DB-basierter Mapping-Lookup (agent_sources.canonical_path → rel_path)
+        #    agent_sources.canonical_path ist OHNE 'sources/'- oder
+        #    'context/'-Prefix gespeichert (analog rel_path). Wenn der
+        #    User-Pfad einen solchen Prefix hat, abziehen vor dem Lookup.
+        #    Bei Match: project-relativen FS-Pfad zusammenbauen.
+        scope_prefix = ""
+        relative_part = path
+        for prefix in ("sources/", "context/"):
+            if path.startswith(prefix):
+                scope_prefix = prefix
+                relative_part = path[len(prefix):]
+                break
+        try:
+            from .data import _connect as db_connect
+            conn = db_connect()
+            try:
+                cols = [c[1] for c in conn.execute("PRAGMA table_info(agent_sources)").fetchall()]
+                if "canonical_path" in cols and relative_part:
+                    row = conn.execute(
+                        "SELECT rel_path FROM agent_sources "
+                        "WHERE canonical_path = ? AND status = 'active' LIMIT 1",
+                        (relative_part,),
+                    ).fetchone()
+                    if row and row[0]:
+                        # rel_path ist die FS-actual Form (NFD + ' : ' auf macOS)
+                        mapped = (root / scope_prefix / row[0]).resolve(strict=False)
+                        if mapped.exists() and _is_under(mapped, root):
+                            return mapped
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        # 2. PathResolver-Fallback (NFC/NFD-Permutation)
+        from disco.fs.path_resolver import get_resolver
+        resolver_path = get_resolver().to_fs_resolved(path, root)
+        if resolver_path.exists():
+            resolved = resolver_path.resolve(strict=False)
+            if not _is_under(resolved, root):
+                raise ValueError(
+                    f"Pfad ausserhalb von data/ nicht erlaubt: {path!r}"
+                )
     return resolved
 
 
