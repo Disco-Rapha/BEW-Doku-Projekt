@@ -141,13 +141,19 @@ def _fs_list(
         except OSError:
             continue
 
+        # rel_path = FS-actual (mit Mac-Quirks); canonical_path = NFC + '/'
+        # — Disco soll mit canonical arbeiten, rel_path bleibt fuer
+        # Backward-Compat im Output.
+        from disco.fs.path_resolver import get_resolver
+        fs_rel = str(p.relative_to(root))
         entries.append(
             {
-                "name": p.name,
+                "name": get_resolver().to_canonical(p.name),
                 "type": "dir" if p.is_dir() else "file",
                 "size": stat.st_size if p.is_file() else None,
                 "modified": _fmt_mtime(stat.st_mtime),
-                "rel_path": str(p.relative_to(root)),
+                "rel_path": fs_rel,                                # FS-Form (Backward-Compat)
+                "canonical_path": get_resolver().to_canonical(fs_rel),  # NFC + '/' — bevorzugen
             }
         )
 

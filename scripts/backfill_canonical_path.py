@@ -97,6 +97,7 @@ def apply_backfill(
         "canonical_written": 0,
         "auto_deleted": 0,
         "manual_required": 0,
+        "doc_markdown_canonical_written": 0,
     }
 
     # 1. Zuerst canonical_path setzen fuer ALLE Zeilen
@@ -118,6 +119,20 @@ def apply_backfill(
                     stats["auto_deleted"] += 1
         else:
             stats["manual_required"] += 1
+
+    # 3. agent_doc_markdown.canonical_path mitfuellen, wenn Spalte da
+    cols = [c["name"] for c in conn.execute("PRAGMA table_info(agent_doc_markdown)").fetchall()]
+    if "canonical_path" in cols:
+        from disco.fs.path_resolver import get_resolver
+        resolver = get_resolver()
+        for r in conn.execute("SELECT file_id, rel_path FROM agent_doc_markdown").fetchall():
+            if r["rel_path"]:
+                canonical = resolver.to_canonical(r["rel_path"])
+                conn.execute(
+                    "UPDATE agent_doc_markdown SET canonical_path = ? WHERE file_id = ?",
+                    (canonical, r["file_id"]),
+                )
+                stats["doc_markdown_canonical_written"] += 1
 
     conn.commit()
     return stats
