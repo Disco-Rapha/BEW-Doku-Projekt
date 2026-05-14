@@ -17,7 +17,7 @@ from . import file_kind_from_path
 
 logger = logging.getLogger(__name__)
 
-ROUTER_VERSION = "router-v3.0"
+ROUTER_VERSION = "router-v3.1"  # Optimierungen 14.05: path-hint + early-exit
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +179,15 @@ def decide(rel_path: str, abs_path: Path, file_role: str = "source") -> dict[str
     file_kind = file_kind_from_path(abs_path)
 
     if file_kind == "pdf":
-        engine, reason, heur = _decide_pdf(abs_path)
+        # Optimierung C (14.05): Pfad-Heuristik vor teurer PyMuPDF-Analyse.
+        # Bei klaren Plan-Pfaden (Plan/Plaene/Schaltplan/Zeichnung) +
+        # vernuenftiger Mindestgroesse direkt auf pdf-azure-di-hr routen.
+        # Das spart bei CAD-Plaenen die teure get_drawings()-Enumeration.
+        hint = _path_hint_plan(rel_path, abs_path)
+        if hint is not None:
+            engine, reason, heur = hint
+        else:
+            engine, reason, heur = _decide_pdf(abs_path)
     elif file_kind == "excel":
         engine, reason, heur = _decide_excel(abs_path, file_role)
     elif file_kind == "dwg":
@@ -206,16 +214,104 @@ def decide(rel_path: str, abs_path: Path, file_role: str = "source") -> dict[str
 _PLAN_FORMAT_MIN_WIDTH_PT = 1000.0
 _LARGE_IMAGE_MIN_COVERAGE = 0.60
 
+# Optimierung C (14.05): Pfad-Substrings die auf Plan/Zeichnung hindeuten.
+# Wenn der relative Pfad einen dieser Marker enthaelt UND die Datei
+# vernuenftig gross ist (>=_PATH_HINT_MIN_BYTES), routen wir ohne PyMuPDF-
+# Analyse direkt auf pdf-azure-di-hr. KKS-Labels in CAD-Exporten brauchen
+# HR — Risiko falscher Routing ist minimal, Risiko 10x langsame
+# get_drawings()-Enumeration auf Plan-Pdfs ist hoch.
+_PATH_HINT_PLAN_TERMS = (
+    "plan",          # deckt: Plan, Pläne, Schaltplan, Lageplan, Übersichtsplan
+    "zeichnung",     # deckt: Zeichnung, Zeichnungen, Werkzeichnung
+    "schemen",       # deckt: Schema, Schemen
+    "isometr",       # deckt: Isometrie, Isometrien
+)
+_PATH_HINT_MIN_BYTES = 1_500_000  # 1.5 MB — echte CAD-Plaene sind fast immer >1.5MB.
+                                  # Kleinere PDFs im Plan-Pfad sind oft Pruefberichte / Text-Doku
+                                  # → durch PyMuPDF-Analyse genauer routen (vermeidet HR-Kosten).
+
+
+def _path_hint_plan(rel_path: str, abs_path: Path) -> tuple[str, str, dict[str, Any]] | None:
+    """Pfad+Groesse-basierter Shortcut: bei Plan-Hint → direkt HR.
+
+    Returns: (engine, reason, heur) wenn Pfad-Hint greift, sonst None.
+    """
+    rel_lower = rel_path.lower()
+    matched_term = next((t for t in _PATH_HINT_PLAN_TERMS if t in rel_lower), None)
+    if not matched_term:
+        return None
+    try:
+        size = abs_path.stat().st_size
+    except OSError:
+        return None
+    if size < _PATH_HINT_MIN_BYTES:
+        return None
+    engine = "pdf-azure-di-hr"
+    reason = (
+        f"path-hint '{matched_term}' + size={size//1000} KB → vermutlich "
+        f"Plan/Zeichnung, direkt HR ohne PyMuPDF-Analyse"
+    )
+    heur = {
+        # Heuristik-Felder leer/None — wir haben kein PyMuPDF gelaufen.
+        # Marker macht klar dass via path-hint geroutet wurde.
+        "n_pages": None,
+        "kind_counts": None,
+        "n_scan_pages": None,
+        "n_vdrawing_pages": None,
+        "n_text_pages": None,
+        "n_mixed_pages": None,
+        "max_page_width_pt": None,
+        "n_large_image_pages": None,
+        "path_hint": matched_term,
+        "size_bytes": size,
+    }
+    return engine, reason, heur
+
 
 def _decide_pdf(abs_path: Path) -> tuple[str, str, dict[str, Any]]:
-    """3-Tier-Routing aus PyMuPDF-Seitenanalyse."""
+    """3-Tier-Routing aus PyMuPDF-Seitenanalyse mit Early-Exit.
+
+    Optimierung A (14.05): Loop bricht ab, sobald die Routing-Entscheidung
+    klar ist — bei langen CAD-Plaenen reichen oft 1-2 Seiten um HR zu
+    triggern. Die heuristics-Felder werden mit den bis dahin gesammelten
+    Werten gefuellt; 'analyzed_pages' markiert wieviele Seiten wirklich
+    inspiziert wurden, 'analysis_complete' ob vollstaendig oder via
+    Early-Exit beendet.
+    """
     import fitz  # PyMuPDF
 
     doc = fitz.open(abs_path)
-    stats = [analyze_page(p) for p in doc]
-    doc.close()
+    n_pages = doc.page_count
 
-    n_pages = len(stats)
+    stats: list[PageStats] = []
+    early_exit = False
+    early_exit_reason: str | None = None
+
+    try:
+        for i, page in enumerate(doc):
+            ps = analyze_page(page)
+            stats.append(ps)
+            # Early-Exit: sobald 1 vector-drawing-Seite gefunden ist die
+            # Engine-Wahl (pdf-azure-di-hr) gefallen. Restliche Seiten
+            # aendern daran nichts.
+            if ps.kind == "vector-drawing":
+                early_exit = True
+                early_exit_reason = "vector-drawing-Seite gefunden"
+                break
+            # Plan-Format ueber Seitenbreite: ebenfalls reicht 1 Treffer.
+            if ps.width_pt > _PLAN_FORMAT_MIN_WIDTH_PT:
+                early_exit = True
+                early_exit_reason = "Plan-Format-Seite gefunden"
+                break
+            # Large-Image-Seite: auch HR.
+            if ps.image_coverage > _LARGE_IMAGE_MIN_COVERAGE:
+                early_exit = True
+                early_exit_reason = "large-image-Seite gefunden"
+                break
+    finally:
+        doc.close()
+
+    n_analyzed = len(stats)
     kind_counts: dict[str, int] = {
         "empty": 0, "scan": 0, "vector-drawing": 0, "mixed": 0, "text": 0,
     }
@@ -247,6 +343,9 @@ def _decide_pdf(abs_path: Path) -> tuple[str, str, dict[str, Any]]:
         engine = "pdf-azure-di"
         reason = f"text-dominant ({n_text}t/{n_mixed}m) → azure-di"
 
+    if early_exit:
+        reason = f"early-exit: {early_exit_reason} (after {n_analyzed}/{n_pages} pages)"
+
     heur = {
         "n_pages": n_pages,
         "kind_counts": kind_counts,
@@ -256,6 +355,8 @@ def _decide_pdf(abs_path: Path) -> tuple[str, str, dict[str, Any]]:
         "n_mixed_pages": n_mixed,
         "max_page_width_pt": max_w,
         "n_large_image_pages": n_big_img,
+        "analyzed_pages": n_analyzed,
+        "analysis_complete": not early_exit,
     }
     return engine, reason, heur
 
