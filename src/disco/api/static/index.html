@@ -3106,6 +3106,13 @@ state._viewerOpenFile = null;   // {path, name} oder null
 state._viewerOpenTable = null;  // table-name oder null
 
 async function openFileInViewer(path, name) {
+  // User will jetzt eine Datei sehen — Flow-Run-Polling stoppen, sonst
+  // ueberschreibt der naechste Poll-Tick (alle 2.5s) den Viewer wieder
+  // mit den Run-Details. Polling kann ueber den Flow-Streifen jederzeit
+  // wieder per Klick auf den Run gestartet werden.
+  if (typeof _stopFlowPoll === 'function') _stopFlowPoll();
+  state._flowView = null;
+  state._flowViewRunId = null;
   if (!state.activeProjectSlug) return;
   state._viewerOpenFile = {path, name};
   state._viewerOpenTable = null;

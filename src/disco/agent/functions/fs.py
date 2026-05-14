@@ -37,7 +37,7 @@ MAX_LIST_LIMIT = 5000
 # darueber wuerde, koennen wir vorzeitig abbrechen.
 MAX_LIST_BYTES = 8000             # ~2000 Token — passt in einen normalen Tool-Result
 
-DEFAULT_READ_BYTES = 30_000       # 30 KB ≈ 7,5 k Tokens — Sockel-schonend
+DEFAULT_READ_BYTES = 12_000       # 12 KB ≈ 3 k Tokens — Sockel-schonend (Audit 14.05)
 MAX_READ_BYTES = 2_000_000        # 2 MB Text — harte Obergrenze gegen Kontext-Explosion
 MAX_READ_BYTES_BINARY = 5_000_000 # 5 MB Binaer (base64-Output ist ~33% groesser)
 # Hinweis fuer Disco: bei truncated=True kann er mit max_bytes=N gezielt
@@ -206,12 +206,16 @@ def _fs_list(
 @register(
     name="fs_read",
     description=(
-        "Liest eine Textdatei unter data/. Fuer PDFs bitte pdf_markdown_read "
-        "verwenden (ueber Flow `pdf_to_markdown` vorher befuellt). "
-        "Default-Limit ist 30 KB — fuer grosse Reports/Skripte erst mal "
-        "den Kopf lesen, bei Bedarf gezielt mit max_bytes=<N> oder einem "
-        "Search-/Inspect-Tool nachladen statt blind alles zu ziehen. "
-        "Bei truncated=true verraet size_bytes die Original-Groesse. "
+        "Liest eine Textdatei unter data/. Fuer PDFs bitte doc_markdown_read "
+        "verwenden (extrahierter Markdown). "
+        "Default-Limit ist 12 KB (~3k Tokens) — Sockel-schonend. "
+        "WICHTIG: Wenn truncated=true im Response, ist die Datei groesser "
+        "als das Default-Limit. Du kannst dann ohne Qualitaetsverlust einen "
+        "zweiten Call mit hoeherem max_bytes machen (z.B. max_bytes=50000 "
+        "oder den vollen size_bytes-Wert aus der ersten Response), wenn der "
+        "Inhalt fuer die Aufgabe wirklich relevant ist. Du verlierst keinen "
+        "Kontext durch das Default — nur Tokens, falls Du den Rest nicht "
+        "brauchst. size_bytes im Response verraet die Original-Groesse. "
         "Kein Zugriff ausserhalb von data/."
     ),
     parameters={
@@ -223,7 +227,11 @@ def _fs_list(
             },
             "max_bytes": {
                 "type": "integer",
-                "description": f"Max. Bytes, die gelesen werden (Default {DEFAULT_READ_BYTES}, Max {MAX_READ_BYTES}).",
+                "description": (
+                    f"Max. Bytes, die gelesen werden (Default {DEFAULT_READ_BYTES}, "
+                    f"Max {MAX_READ_BYTES}). Bei truncated=true ohne Qualitaetsverlust "
+                    f"einen zweiten Call mit hoeherem Wert machen."
+                ),
             },
             "encoding": {
                 "type": "string",
