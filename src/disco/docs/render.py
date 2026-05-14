@@ -157,7 +157,10 @@ def dwg_to_png(
         import matplotlib.pyplot as plt
 
         try:
-            doc = ezdxf.readfile(tmp_dxf)
+            # `recover.readfile` ist robuster bei libredwg-Quirks im DXF —
+            # `ezdxf.readfile` strict, `recover` auditiert + repariert.
+            from ezdxf import recover
+            doc, _audit = recover.readfile(str(tmp_dxf))
         except Exception as exc:
             raise RuntimeError(f"DXF nicht lesbar nach DWG-Konvertierung: {exc}") from exc
 
