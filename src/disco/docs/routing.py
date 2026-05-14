@@ -17,7 +17,7 @@ from . import file_kind_from_path
 
 logger = logging.getLogger(__name__)
 
-ROUTER_VERSION = "router-v3.1"  # Optimierungen 14.05: path-hint + early-exit
+ROUTER_VERSION = "router-v3.2"  # Optimierungen 14.05: path-hint + early-exit + width-precheck
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +282,46 @@ def _decide_pdf(abs_path: Path) -> tuple[str, str, dict[str, Any]]:
 
     doc = fitz.open(abs_path)
     n_pages = doc.page_count
+
+    # WIDTH-PRECHECK (router-v3.2, 14.05): page.rect.width ist O(1) (PDF-Header-
+    # Lookup, kein get_drawings). Wenn irgendeine Seite Plan-Format-Width hat,
+    # ist die Engine-Entscheidung (pdf-azure-di-hr) bereits gefallen — wir muessen
+    # gar nicht erst analyze_page() laufen lassen (das ist auf CAD-Plaenen der
+    # eigentliche Killer, weil get_drawings() Tausende Vector-Paths enumeriert).
+    # Beobachtung Prod 14.05: 1-Page-Plan-PDFs mit 2384pt-Width dauerten 160s
+    # durch analyze_page(); mit Width-Precheck < 10ms.
+    try:
+        max_w_pre = 0.0
+        for p in doc:
+            w = float(p.rect.width) if p.rect.width else 0.0
+            if w > max_w_pre:
+                max_w_pre = w
+            if w > _PLAN_FORMAT_MIN_WIDTH_PT:
+                # Ein einziger Plan-Page-Treffer reicht — Engine ist klar.
+                break
+    except Exception:
+        max_w_pre = 0.0
+
+    if max_w_pre > _PLAN_FORMAT_MIN_WIDTH_PT:
+        doc.close()
+        return (
+            "pdf-azure-di-hr",
+            f"plan-format width-precheck max_w={max_w_pre:.0f}pt "
+            f"(>{_PLAN_FORMAT_MIN_WIDTH_PT:.0f}) — analyze_page skipped",
+            {
+                "n_pages": n_pages,
+                "kind_counts": None,
+                "n_scan_pages": None,
+                "n_vdrawing_pages": None,
+                "n_text_pages": None,
+                "n_mixed_pages": None,
+                "max_page_width_pt": max_w_pre,
+                "n_large_image_pages": None,
+                "analyzed_pages": 0,
+                "analysis_complete": False,
+                "precheck_method": "width-only",
+            },
+        )
 
     stats: list[PageStats] = []
     early_exit = False
