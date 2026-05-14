@@ -32,12 +32,17 @@ from typing import Any, Callable
 # Pipeline-Version — bei strukturellen Aenderungen am Output-Format hochzaehlen
 EXTRACTION_PIPELINE_VERSION = "extraction-v3.0"
 
-# file_kind aus Datei-Extension ableiten
+# file_kind aus Datei-Extension ableiten — WHITELIST: nur Extensions die
+# wir aktiv extrahieren koennen kommen hier rein. Alles andere wird als
+# 'other' → engine='skip' im Routing markiert (User-Feedback #44, 14.05).
+#
+# WICHTIG: ".xls" (legacy Excel) wurde bewusst entfernt — scheiterte an
+# openpyxl, das nur .xlsx/.xlsm liest. Falls jemand .xls braucht:
+# erst zu .xlsx konvertieren.
 _KIND_BY_EXT: dict[str, str] = {
     "pdf": "pdf",
     "xlsx": "excel",
     "xlsm": "excel",
-    "xls": "excel",
     "dwg": "dwg",
     "dxf": "dwg",
     "jpg": "image",

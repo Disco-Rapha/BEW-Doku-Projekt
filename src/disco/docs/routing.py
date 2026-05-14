@@ -17,7 +17,7 @@ from . import file_kind_from_path
 
 logger = logging.getLogger(__name__)
 
-ROUTER_VERSION = "router-v3.2"  # Optimierungen 14.05: path-hint + early-exit + width-precheck
+ROUTER_VERSION = "router-v3.3"  # 14.05: not_supported whitelist + width-precheck + path-hint
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,18 @@ def decide(rel_path: str, abs_path: Path, file_role: str = "source") -> dict[str
     elif file_kind == "image":
         engine, reason, heur = _decide_image(abs_path)
     else:
-        engine, reason, heur = "skip", f"unsupported file_kind={file_kind}", {}
+        # not_supported — file_kind='other' weil Extension nicht in
+        # _KIND_BY_EXT-Whitelist (siehe docs/__init__.py). User-Feedback
+        # #44, 14.05: jede unbekannte/nicht-extrahierbare Extension wird
+        # sofort uebersprungen, statt sie an einen Engine-Fail zu
+        # schicken. Pipeline-Status zeigt das als 'not_supported' an.
+        ext = abs_path.suffix.lower().lstrip(".") or "(none)"
+        engine = "skip"
+        reason = (
+            f"not_supported: Extension '.{ext}' nicht in Pipeline-Whitelist. "
+            f"Erlaubt: pdf, xlsx, xlsm, dwg, dxf, jpg/jpeg, png, tif/tiff, webp, bmp, gif."
+        )
+        heur = {"extension": ext, "reason": "extension_not_in_whitelist"}
 
     return {
         "file_kind": file_kind,
