@@ -31,8 +31,11 @@ logger = logging.getLogger(__name__)
 # Konstanten
 # ---------------------------------------------------------------------------
 
-DEFAULT_LIST_LIMIT = 500
+DEFAULT_LIST_LIMIT = 200          # bewusst klein — gegen Context-Bloat (Feedback 14.05)
 MAX_LIST_LIMIT = 5000
+# Output-Byte-Cap zusaetzlich zum Item-Cap. Wenn die JSON-Repraesentation
+# darueber wuerde, koennen wir vorzeitig abbrechen.
+MAX_LIST_BYTES = 8000             # ~2000 Token — passt in einen normalen Tool-Result
 
 DEFAULT_READ_BYTES = 30_000       # 30 KB ≈ 7,5 k Tokens — Sockel-schonend
 MAX_READ_BYTES = 2_000_000        # 2 MB Text — harte Obergrenze gegen Kontext-Explosion
@@ -72,6 +75,8 @@ BINARY_SUFFIXES = {
         "Listet Dateien und Unterordner unter einem Pfad relativ zu data/. "
         "Nutze leeren Pfad oder '.' fuer das Wurzel-data-Verzeichnis. "
         "Optional rekursiv und mit Glob-Pattern (z.B. '*.pdf'). "
+        "Output ist BEWUSST kompakt (max ~200 items, ~8KB) — bei groesseren "
+        "Verzeichnissen filter via pattern oder recursive=false. "
         "Kein Zugriff ausserhalb von data/."
     ),
     parameters={
@@ -93,10 +98,18 @@ BINARY_SUFFIXES = {
                 "type": "integer",
                 "description": f"Max. Eintraege (Default {DEFAULT_LIST_LIMIT}, Max {MAX_LIST_LIMIT}).",
             },
+            "include_canonical_path": {
+                "type": "boolean",
+                "description": (
+                    "Wenn true, wird pro Entry zusaetzlich canonical_path (NFC + '/') "
+                    "geliefert. Default: false (rel_path reicht meistens; ein "
+                    "canonical_path-Lookup geht via sqlite_query auf agent_sources)."
+                ),
+            },
         },
         "required": [],
     },
-    returns="{root, path, entries: [{name, type, size, modified, rel_path}], total, truncated}",
+    returns="{root, path, entries: [{name, type, size, modified, rel_path[, canonical_path]}], total, truncated, truncation_reason}",
 )
 def _fs_list(
     *,
@@ -104,6 +117,7 @@ def _fs_list(
     recursive: bool = False,
     pattern: str | None = None,
     limit: int = DEFAULT_LIST_LIMIT,
+    include_canonical_path: bool = False,
 ) -> dict[str, Any]:
     root = _data_root()
     target = _resolve_under_data(path or ".")
@@ -123,10 +137,23 @@ def _fs_list(
 
     entries: list[dict[str, Any]] = []
     total_seen = 0
+    bytes_running = 100  # grobe Initial-Schaetzung fuer JSON-Wrapper
+    truncation_reason: str | None = None
+
+    # Resolver einmalig holen (statt pro Entry)
+    from disco.fs.path_resolver import get_resolver
+    resolver = get_resolver()
+
     for p in it:
         total_seen += 1
         if len(entries) >= effective_limit:
-            continue  # weiterzaehlen fuer total, aber nicht mehr sammeln
+            if truncation_reason is None:
+                truncation_reason = f"item_limit={effective_limit}"
+            continue
+        if bytes_running >= MAX_LIST_BYTES:
+            if truncation_reason is None:
+                truncation_reason = f"byte_limit={MAX_LIST_BYTES}"
+            continue
 
         # Symlink-Schutz: aufloesen und pruefen, dass das Ziel unter data_dir bleibt
         try:
@@ -141,21 +168,22 @@ def _fs_list(
         except OSError:
             continue
 
-        # rel_path = FS-actual (mit Mac-Quirks); canonical_path = NFC + '/'
-        # — Disco soll mit canonical arbeiten, rel_path bleibt fuer
-        # Backward-Compat im Output.
-        from disco.fs.path_resolver import get_resolver
+        # rel_path = FS-actual (mit Mac-Quirks); canonical_path nur on-demand.
+        # Default-Output bewusst schlank — Disco kann fuer canonical-Form
+        # gezielt sqlite_query auf agent_sources nutzen.
         fs_rel = str(p.relative_to(root))
-        entries.append(
-            {
-                "name": get_resolver().to_canonical(p.name),
-                "type": "dir" if p.is_dir() else "file",
-                "size": stat.st_size if p.is_file() else None,
-                "modified": _fmt_mtime(stat.st_mtime),
-                "rel_path": fs_rel,                                # FS-Form (Backward-Compat)
-                "canonical_path": get_resolver().to_canonical(fs_rel),  # NFC + '/' — bevorzugen
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": resolver.to_canonical(p.name),
+            "type": "dir" if p.is_dir() else "file",
+            "size": stat.st_size if p.is_file() else None,
+            "modified": _fmt_mtime(stat.st_mtime),
+            "rel_path": fs_rel,
+        }
+        if include_canonical_path:
+            entry["canonical_path"] = resolver.to_canonical(fs_rel)
+        entries.append(entry)
+        # Approx-Byte-Tracking: name + rel_path + JSON-Wrapper-Overhead
+        bytes_running += len(entry["name"]) + len(fs_rel) + 80
 
     # Sort: Ordner zuerst, dann alphabetisch
     entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
@@ -166,6 +194,7 @@ def _fs_list(
         "entries": entries,
         "total": total_seen,
         "truncated": total_seen > len(entries),
+        "truncation_reason": truncation_reason,
     }
 
 

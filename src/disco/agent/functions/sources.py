@@ -944,7 +944,9 @@ def _sources_attach_metadata(
         "alle anderen erhalten eine 'duplicate-of'-Relation, die auf den "
         "Kanonischen zeigt. Confidence: 1.0 (Hash-Gleichheit ist eindeutig). "
         "Idempotent: Re-Runs ergaenzen nur neue Duplikate, bestehende Relationen "
-        "werden nicht dupliziert (unique index)."
+        "werden nicht dupliziert (unique index). "
+        "Output ist BEWUSST kompakt (nur Summary + Top-5-Gruppen) — Voll-Liste "
+        "via verbose=true ODER sqlite_query auf agent_source_relations."
     ),
     parameters={
         "type": "object",
@@ -963,18 +965,27 @@ def _sources_attach_metadata(
                     "Auch Dateien mit status='deleted' einbeziehen (Default false)."
                 ),
             },
+            "verbose": {
+                "type": "boolean",
+                "description": (
+                    "Wenn true, werden bis zu 50 Duplikat-Gruppen mit jeweils max "
+                    "10 Kopien pro Gruppe zurueckgegeben. Default false = nur "
+                    "Summary + Top-5-Gruppen mit max 3 Kopien pro Gruppe."
+                ),
+            },
         },
         "required": [],
     },
     returns=(
-        "{scanned, groups_found, new_relations, duplicate_sets: "
-        "[{sha256, canonical: {id, rel_path}, copies: [{id, rel_path}]}]}"
+        "{scanned, groups_found, new_relations, non_canonical_total, "
+        "top_duplicate_sets: [{sha256, size_in_set, canonical, sample_copies}]}"
     ),
 )
 def _sources_detect_duplicates(
     *,
     min_group_size: int = 2,
     include_deleted: bool = False,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     min_group_size = max(2, int(min_group_size))
     status_clause = "" if include_deleted else " AND status = 'active'"
@@ -1059,14 +1070,32 @@ def _sources_detect_duplicates(
     finally:
         conn.close()
 
+    # Output kompakt halten: bei verbose=false max 5 Gruppen, je max 3 Kopien;
+    # bei verbose=true max 50 Gruppen, je max 10 Kopien. Voll-Detail-Lookup
+    # via sqlite_query auf agent_source_relations (Hint in der Antwort).
+    max_groups = 50 if verbose else 5
+    max_copies = 10 if verbose else 3
+    compact_sets = []
+    for s in duplicate_sets[:max_groups]:
+        copies = s["copies"]
+        compact_sets.append({
+            "sha256": s["sha256"][:16] + "...",
+            "size_in_set": s["size_in_set"],
+            "canonical": s["canonical"],
+            "sample_copies": copies[:max_copies],
+            "copies_total": len(copies),
+            "copies_truncated": len(copies) > max_copies,
+        })
+
     return {
         "scanned": scanned,
         "groups_found": len(duplicate_sets),
         "new_relations": new_relations,
         "non_canonical_total": dup_count,
-        "duplicate_sets": duplicate_sets[:20],
+        "top_duplicate_sets": compact_sets,
         "duplicate_sets_total": len(duplicate_sets),
-        "truncated": len(duplicate_sets) > 20,
+        "truncated": len(duplicate_sets) > max_groups,
+        "verbose": verbose,
         "hint": (
             "Non-canonical Dateien koennen bei Bedarf gesichtet werden: "
             "SELECT s.rel_path AS kopie, c.rel_path AS kanonisch "
