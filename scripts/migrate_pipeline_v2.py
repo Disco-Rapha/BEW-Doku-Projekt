@@ -145,6 +145,15 @@ def find_source_id_columns(conn: sqlite3.Connection, schema: str = "main") -> li
     candidates = (
         "source_id", "file_id",
         "original_source_id", "canonical_source_id",
+        # Erweiterte Liste — gelernt aus Prod-Migration 2026-05-16
+        # (0-dcc-prediction-trainer + metadaten-prediction-opt hatten weitere
+        # Source-ID-Spalten-Varianten, die beim ersten Pass nicht erkannt
+        # wurden und nachträglich per fix_workspace_backfill_pipeline_v2.py
+        # gemapped werden mussten).
+        "current_source_id", "current_file_id",
+        "foreign_source_id", "foreign_file_id",
+        "source_export_file_id", "source_file_id",
+        "col_source_id", "markdown_file_id",
     )
     out = []
     for tbl in tables:
