@@ -250,6 +250,7 @@ def migrate_datastore(ds_path: Path, dry_run: bool) -> None:
     # isolation_level=None → expliziter manueller Transaktions-Modus,
     # damit executescript NICHT implizit commitet.
     conn = sqlite3.connect(ds_path, isolation_level=None)
+    conn.row_factory = sqlite3.Row  # für r["spalten_name"]-Zugriff
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
         conn.execute("BEGIN")
