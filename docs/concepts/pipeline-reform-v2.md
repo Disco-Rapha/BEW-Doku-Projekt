@@ -429,3 +429,77 @@ Pro Projekt: Backup → Migration → 24h beobachten → nächstes Projekt.
 | bew-rsd-parkplaetze | 347 | 344 | 3 | 339 |
 | vgb-referenzlisten | 113 | 113 | 0 | 1 |
 | bew-rsd-infrastruktur | 0 | 0 | 0 | 0 |
+
+---
+
+## Prod-Rollout 2026-05-16 — Bilanz
+
+Alle 8 Projekte sauber migriert (klein → groß), alle Konsistenz-Checks
+grün. Hash-Reform-Hebel besonders sichtbar bei:
+
+- **bew-rsd-rea-denox**: 6.018 → 1.907 (68% Duplikat-Anteil)
+- **0-dcc-prediction-trainer**: 13.280 → 8.276 (38%)
+- **bew-rsd-campus-reuter**: 5.770 → 5.014 (13%)
+
+Migrations-Runtime: 3-6 Sekunden pro Projekt.
+
+Foundry-Portal-Agent: `disco-prod-agent` v91 mit 43 Tools (inkl. dem
+neuen `verify_workspace_validity`).
+
+---
+
+## Cleanup-Roadmap (~30 Tage nach Rollout)
+
+Nach 30 Tagen stabilem Betrieb können folgende Reste entfernt werden:
+
+### Migrations-Reste in den DBs (pro Projekt)
+```sql
+DROP TABLE IF EXISTS agent_sources_pre_migration;
+DROP TABLE IF EXISTS _migration_source_id_map;
+VACUUM;
+```
+→ ca. 20-30 MB über alle 8 Projekte freigegeben.
+
+### Backups (~3.2 GB)
+- `~/Disco-backup-pre-prod-migration-20260516_231244/` (1.6 GB)
+- `~/Disco-backup-pipeline-v2-rollout/` (1.6 GB)
+
+### Alt-Schema-Code (Hygiene)
+Sind defensive Fallbacks für nicht-migrierte Projekte — gibt es nach
+Cleanup-Frist nicht mehr.
+
+- `src/disco/agent/functions/sources.py`:
+  - `_scan_one_scope` (alte Variante)
+  - `_sync_pdf_inventory` (alte Variante)
+  - `is_v2`-Dispatch-Logik in `_sources_register`
+- `src/disco/agent/functions/fs.py`:
+  - `has_locations`-Schema-Detection im canonical_path-Lookup
+
+### Optional — regular migration für frische Projekte
+Neue Projekte via `disco project init` starten aktuell mit dem alten
+Schema (Migrationen 001-012). Bis das per regulärer Migration
+`013_pipeline_v2.sql` abgedeckt ist, müsste man bei frischen Projekten
+manuell `scripts/migrate_to_pipeline_v2.sh` aufrufen. In der Praxis
+gerade unkritisch (keine neuen Projekte), aber Hygiene-Punkt.
+
+### Optional — Pipeline-Runner Pin-Schreibung
+Die Pipeline-Flows (`extraction_routing_decision` + `extraction`)
+schreiben `source_sha256_pinned` und `evaluated_at` aktuell NICHT mit.
+Neue `work_extraction_routing`-Einträge haben `no_pin`. Kein
+funktionales Problem — die Pin-Konvention ist primär für vom Agent
+geschriebene Auswertungen gedacht. Für Konsistenz wäre es sauber, die
+Runner anzupassen (2-3 Zeilen pro Runner).
+
+### Reihenfolge
+1. Tag 30: Check ob Pipeline-Reform-v2 noch offene Probleme hat
+2. DROP-Statements + VACUUM pro Projekt
+3. Backups löschen (3.2 GB)
+4. Alt-Schema-Code raus
+5. Optional: 013_pipeline_v2.sql für künftige Projekte
+6. Optional: Runner-Pin-Schreibung
+7. Pipeline-Reform-v2-Hauptitem auf Done setzen
+
+### Risiko
+- DROP-Statements: harmlos, aber Rollback ab dann nicht mehr möglich
+- Backup-Löschen: irreversibel
+- Code-Cleanup: rein Hygiene, kein Funktions-Risiko

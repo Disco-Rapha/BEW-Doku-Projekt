@@ -56,7 +56,12 @@ DDL_NEW_AGENT_SOURCES_INDEXES = [
 DDL_LOCATIONS = """
 CREATE TABLE agent_source_locations (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_id         INTEGER NOT NULL REFERENCES agent_sources(id),
+    -- FK zeigt zu Migrations-Zeit auf agent_sources_new — nach RENAME
+    -- agent_sources_new → agent_sources wird SQLite die Referenz
+    -- automatisch mit umschreiben. So vermeiden wir den FK-Bug, dass
+    -- die Referenz beim RENAME agent_sources → agent_sources_pre_migration
+    -- "mitwandert" und am falschen Ziel hängen bleibt.
+    source_id         INTEGER NOT NULL REFERENCES agent_sources_new(id),
     rel_path          TEXT NOT NULL,
     logical_path      TEXT,
     origin            TEXT NOT NULL DEFAULT 'local-folder',
