@@ -173,3 +173,4 @@ from . import sources   # noqa: E402,F401 — sources_register, attach_metadata,
 from . import executor  # noqa: E402,F401 — run_python
 from . import search         # noqa: E402,F401 — build_search_index, search_index
 from . import pipeline       # noqa: E402,F401 — pipeline_file_status
+from . import workspace_validity  # noqa: E402,F401 — verify_workspace_validity (Pipeline-Reform v2)

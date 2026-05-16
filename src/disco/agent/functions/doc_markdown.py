@@ -192,12 +192,28 @@ def _doc_markdown_read(
                 (int(file_id),),
             ).fetchone()
         else:
+            # Im Hash-zentrierten Modell (Pipeline-Reform v2) lebt rel_path
+            # in agent_source_locations. Wir gehen über die Location, finden
+            # die source_id, holen Markdown via file_id (= source_id).
+            # Fallback: alte rel_path-Spalte in agent_doc_markdown (Bestand).
+            rel_str = str(rel_path)
             row = conn.execute(
-                "SELECT file_id, rel_path, file_kind, engine, md_content, "
-                "       char_count, n_units, created_at, extractor_version "
-                "FROM agent_doc_markdown WHERE rel_path = ?",
-                (str(rel_path),),
+                "SELECT m.file_id, m.rel_path, m.file_kind, m.engine, m.md_content, "
+                "       m.char_count, m.n_units, m.created_at, m.extractor_version "
+                "FROM agent_source_locations l "
+                "JOIN agent_doc_markdown m ON m.file_id = l.source_id "
+                "WHERE l.rel_path = ? "
+                "ORDER BY CASE WHEN l.status='active' THEN 0 ELSE 1 END LIMIT 1",
+                (rel_str,),
             ).fetchone()
+            if row is None:
+                # Fallback für Bestands-Markdown ohne migrierte Location
+                row = conn.execute(
+                    "SELECT file_id, rel_path, file_kind, engine, md_content, "
+                    "       char_count, n_units, created_at, extractor_version "
+                    "FROM agent_doc_markdown WHERE rel_path = ?",
+                    (rel_str,),
+                ).fetchone()
 
         if row is None:
             ident = (

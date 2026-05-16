@@ -582,18 +582,11 @@ def _resolve_under_data(path: str) -> Path:
     # Wenn der direkte Pfad nicht existiert, ist er evtl. in der falschen
     # Encoding-Form (Disco gibt canonical NFC, FS speichert NFD auf macOS)
     # oder hat einen OneDrive-Folder-Slash-Quirk. Strategie:
-    # 1. Schau in agent_sources nach, ob canonical_path → rel_path mapping
-    #    da ist (die Wahrheit aus dem Source-Scan).
-    # 2. Falls (1) nicht hilft (kein DB-Eintrag, neuer Pfad): PathResolver
-    #    versucht NFC/NFD-Varianten.
-    # Bei Schreib-Operationen ist beides harmlos: existiert der Pfad nicht,
-    # findet auch der Fallback nichts und gibt den Original-Pfad zurueck.
+    # 1. Schau in agent_source_locations nach (Hash-zentriertes Modell,
+    #    Pipeline-Reform v2): canonical_path → rel_path mapping.
+    # 2. Falls (1) nicht hilft: PathResolver versucht NFC/NFD-Varianten.
     if not resolved.exists() and not p.is_absolute():
-        # 1. DB-basierter Mapping-Lookup (agent_sources.canonical_path → rel_path)
-        #    agent_sources.canonical_path ist OHNE 'sources/'- oder
-        #    'context/'-Prefix gespeichert (analog rel_path). Wenn der
-        #    User-Pfad einen solchen Prefix hat, abziehen vor dem Lookup.
-        #    Bei Match: project-relativen FS-Pfad zusammenbauen.
+        # 1. DB-basierter Mapping-Lookup
         scope_prefix = ""
         relative_part = path
         for prefix in ("sources/", "context/"):
@@ -605,18 +598,34 @@ def _resolve_under_data(path: str) -> Path:
             from .data import _connect as db_connect
             conn = db_connect()
             try:
-                cols = [c[1] for c in conn.execute("PRAGMA table_info(agent_sources)").fetchall()]
-                if "canonical_path" in cols and relative_part:
+                # Erst neues Modell: agent_source_locations
+                has_locations = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='agent_source_locations'"
+                ).fetchone() is not None
+                if has_locations and relative_part:
                     row = conn.execute(
-                        "SELECT rel_path FROM agent_sources "
+                        "SELECT rel_path FROM agent_source_locations "
                         "WHERE canonical_path = ? AND status = 'active' LIMIT 1",
                         (relative_part,),
                     ).fetchone()
                     if row and row[0]:
-                        # rel_path ist die FS-actual Form (NFD + ' : ' auf macOS)
                         mapped = (root / scope_prefix / row[0]).resolve(strict=False)
                         if mapped.exists() and _is_under(mapped, root):
                             return mapped
+                # Fallback (alte Bestandsdaten ohne Migration)
+                if not has_locations:
+                    cols = [c[1] for c in conn.execute("PRAGMA table_info(agent_sources)").fetchall()]
+                    if "canonical_path" in cols and relative_part:
+                        row = conn.execute(
+                            "SELECT rel_path FROM agent_sources "
+                            "WHERE canonical_path = ? AND status = 'active' LIMIT 1",
+                            (relative_part,),
+                        ).fetchone()
+                        if row and row[0]:
+                            mapped = (root / scope_prefix / row[0]).resolve(strict=False)
+                            if mapped.exists() and _is_under(mapped, root):
+                                return mapped
             finally:
                 conn.close()
         except Exception:

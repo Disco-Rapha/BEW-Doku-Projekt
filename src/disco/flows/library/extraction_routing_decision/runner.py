@@ -51,22 +51,34 @@ def load_items(
         wenn sie schon geroutet sind (Per-File-Trigger fuer Disco's
         Reparatur-Workflows)
     """
-    canonical_filter = (
-        "AND NOT EXISTS ("
-        "  SELECT 1 FROM ds.agent_source_relations r "
-        "  WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'"
-        ")"
+    # Hash-zentriertes Datastore-Modell (Pipeline-Reform v2):
+    # - rel_path / extension leben in agent_source_locations
+    # - Kanonik ist trivial (agent_sources hat 1 Zeile pro Hash)
+    # - Pro Source nehmen wir eine "repräsentative" aktive Location für
+    #   den Pfad-/Extension-Filter und das spätere File-Open.
+    # Die Subquery `representative_location` wählt deterministisch die
+    # erste active Location pro source_id (kleinste l.id).
+    SOURCE_SELECT = (
+        "SELECT s.id AS file_id, "
+        "  (SELECT l.rel_path FROM ds.agent_source_locations l "
+        "   WHERE l.source_id = s.id AND l.status='active' "
+        "   ORDER BY l.id LIMIT 1) AS rel_path, "
+        "  s.kind AS file_role, "
+        "  (SELECT l.extension FROM ds.agent_source_locations l "
+        "   WHERE l.source_id = s.id AND l.status='active' "
+        "   ORDER BY l.id LIMIT 1) AS extension "
+        "FROM ds.agent_sources s "
     )
 
     # Per-File-Trigger: hoechste Prioritaet, ueberschreibt andere Modi
     if only_file_ids:
         placeholders = ",".join("?" * len(only_file_ids))
         sql = (
-            "SELECT s.id AS file_id, s.rel_path, s.kind AS file_role, s.extension "
-            "FROM ds.agent_sources s "
-            f"WHERE s.id IN ({placeholders}) AND s.status='active' "
-            f"{canonical_filter} "
-            "ORDER BY s.id"
+            SOURCE_SELECT
+            + f"WHERE s.id IN ({placeholders}) AND s.status='active' "
+            + "  AND EXISTS (SELECT 1 FROM ds.agent_source_locations l "
+              "             WHERE l.source_id = s.id AND l.status='active') "
+            + "ORDER BY s.id"
         )
         rows = run.db.query(sql, list(only_file_ids))
         items: List[Dict] = list(rows)
@@ -74,18 +86,18 @@ def load_items(
             items = items[:limit]
         run.log(
             f"Routing-Input (Per-File-Mode, only_file_ids={only_file_ids}): "
-            f"{len(items)} kanonische Datei(en) werden geroutet."
+            f"{len(items)} Datei(en) werden geroutet."
         )
         return items
 
     if rerun_where_engine:
         sql = (
-            "SELECT s.id AS file_id, s.rel_path, s.kind AS file_role, s.extension "
-            "FROM ds.agent_sources s "
-            "JOIN work_extraction_routing w ON w.file_id = s.id "
-            "WHERE w.engine = ? AND s.status='active' "
-            f"{canonical_filter} "
-            "ORDER BY RANDOM()"
+            SOURCE_SELECT
+            + "JOIN work_extraction_routing w ON w.file_id = s.id "
+            + "WHERE w.engine = ? AND s.status='active' "
+            + "  AND EXISTS (SELECT 1 FROM ds.agent_source_locations l "
+              "             WHERE l.source_id = s.id AND l.status='active') "
+            + "ORDER BY RANDOM()"
         )
         rows = run.db.query(sql, [rerun_where_engine])
         items = list(rows)
@@ -93,7 +105,7 @@ def load_items(
             items = items[:limit]
         run.log(
             f"Routing-Input (Rerun-Mode engine={rerun_where_engine!r}): "
-            f"{len(items)} kanonische Dateien werden neu geroutet."
+            f"{len(items)} Dateien werden neu geroutet."
         )
         return items
 
@@ -102,15 +114,17 @@ def load_items(
     processed_ids = {r["file_id"] for r in processed_rows}
 
     rows = run.db.query(
-        "SELECT s.id AS file_id, s.rel_path, s.kind AS file_role, s.extension "
-        "FROM ds.agent_sources s "
-        "WHERE s.status='active' "
-        "  AND lower(s.extension) IN ("
-        "    'pdf','xlsx','xlsm','xls','dwg','dxf',"
-        "    'jpg','jpeg','png','tif','tiff','webp','bmp','gif'"
-        "  ) "
-        f"  {canonical_filter} "
-        "ORDER BY s.id"
+        SOURCE_SELECT
+        + "WHERE s.status='active' "
+        + "  AND EXISTS ("
+          "    SELECT 1 FROM ds.agent_source_locations l "
+          "    WHERE l.source_id = s.id AND l.status='active' "
+          "      AND lower(l.extension) IN ("
+          "        'pdf','xlsx','xlsm','xls','dwg','dxf',"
+          "        'jpg','jpeg','png','tif','tiff','webp','bmp','gif'"
+          "      )"
+          "  ) "
+        + "ORDER BY s.id"
     )
 
     items = []
@@ -122,7 +136,7 @@ def load_items(
             break
 
     run.log(
-        f"Routing-Input: {len(items)} offene kanonische Dateien "
+        f"Routing-Input: {len(items)} offene Dateien "
         f"(limit={limit if limit is not None else 'none'}, "
         f"bereits geroutet={len(processed_ids)})"
     )

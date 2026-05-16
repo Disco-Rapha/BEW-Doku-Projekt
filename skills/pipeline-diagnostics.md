@@ -58,31 +58,42 @@ WHERE source_id = (SELECT id FROM ds.agent_sources WHERE rel_path = ?);
 | Keine externe Quelle existiert (kein Begleit-Excel, kein SP) | `na` — Schritt entfällt, ⚪ grau in Ampel |
 | Externe Quelle existiert, aber dieser File nicht enthalten | `pending` — `sources_attach_metadata` mit passendem Mapping aufrufen |
 
-### Schritt 3 — Kanonik
+### Schritt 3 — Kanonik (im Hash-Modell trivial)
 
-**Frage:** Hat die Datei eine `duplicate-of`-Relation als `from_source_id`?
+Seit Pipeline-Reform v2 (2026-05-16) ist Kanonik **strukturell**: pro
+Hash gibt es eine `agent_sources`-Zeile. Mehrere Ablageorte derselben
+Datei sind als `agent_source_locations`-Zeilen sichtbar, nicht als
+separate Sources.
 
 ```sql
-SELECT r.kind, r.to_source_id, s2.rel_path AS canonical_path
-FROM ds.agent_source_relations r
-JOIN ds.agent_sources s2 ON s2.id = r.to_source_id
-WHERE r.from_source_id = (SELECT id FROM ds.agent_sources WHERE rel_path = ?);
+-- Wie viele Locations hat dieser Inhalt?
+SELECT COUNT(*) AS n_locations
+FROM ds.agent_source_locations l
+WHERE l.source_id = ?
+  AND l.status = 'active';
 ```
 
 | Befund | Aktion |
 |---|---|
-| Keine Relation als from-Seite | `canonical` — Datei wird durch Pipeline gepusht |
-| `kind='duplicate-of'` | `skipped_upstream` — kanonisches Original (siehe `to_source_id`) wird verarbeitet |
-| `kind='replaces'` als from | `skipped_upstream` — durch neuere Version ersetzt |
+| n_locations = 1 | Datei einmal abgelegt — Pipeline läuft pro source einmal |
+| n_locations > 1 | Datei dupliziert — gleichgültig, Pipeline läuft trotzdem pro source einmal (Hash-Identität) |
+
+**Hinweis:** Die alte `agent_source_relations`-Tabelle mit
+`kind='duplicate-of'` / `'replaces'` ist in migrierten Projekten
+gedroppt. Falls Du Bestandsprojekte siehst, die sie noch haben:
+das ist Code aus der Zeit vor der Reform. Im neuen Modell gibt es
+weder `duplicate-of`- noch `replaces`-Relationen — neue Versionen
+sind delete + new, Duplikate sind Locations.
 
 ### Schritt 4 — Routing
 
 **Frage:** Hat `work_extraction_routing` einen Eintrag mit `engine` befüllt?
 
 ```sql
+-- file_id zeigt seit Reform v2 auf agent_sources.id (= Hash-Identität)
 SELECT engine, reason, error, retry_count
 FROM work_extraction_routing
-WHERE file_id = (SELECT id FROM ds.agent_sources WHERE rel_path = ?);
+WHERE file_id = ?;  -- source_id übergeben
 ```
 
 | Befund | Aktion |

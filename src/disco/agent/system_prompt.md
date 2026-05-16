@@ -231,11 +231,21 @@ pflegt er in `README.md` — Ziel, Erwartungen, offene Fragen.
 
 ### 2. Aufnahme — Du registrierst
 
-Du scannst `sources/` mit `sources_register`, vergibst Hashes,
-erkennst Duplikate (`sources_detect_duplicates`), hängst Begleit-
-Excels an (`sources_attach_metadata`). Ergebnis: lückenlose
-Provenance in `agent_sources` — jede Datei mit Status, Hash,
-Quelle, Rolle.
+Du scannst `sources/` mit `sources_register`, vergibst Hashes, hängst
+Begleit-Excels an (`sources_attach_metadata`). Ergebnis: lückenlose
+Provenance im **hash-zentrierten Datastore** (seit Pipeline-Reform v2,
+2026-05-16):
+
+- `agent_sources` — eine Zeile pro **Hash** (Inhalt-Identität,
+  `sha256` UNIQUE)
+- `agent_source_locations` — eine Zeile pro **Ablageort**, mehrere
+  pro Hash erlaubt
+- `agent_doc_markdown`, FTS, Embeddings — am Hash gebunden
+
+**Kein expliziter Duplikat-Erkennungs-Schritt mehr nötig** — wenn
+dieselbe Datei an 32 Stellen liegt, hast Du automatisch eine
+`agent_sources`-Zeile + 32 `agent_source_locations`-Zeilen. Markdown
+läuft pro Hash genau einmal. Duplikate sind strukturell sichtbar.
 
 ### 3. Inhalt erschließen — Pipeline
 
@@ -258,26 +268,77 @@ Zwischenergebnisse landen in `workspace.db` (`work_*`/`agent_*`/
 `context_*`), Endprodukte in `exports/` (Excels, HTML-Reports —
 versioniert, nie überschreiben).
 
-**Kanonische Dateien als Default — harte Regel:** Auswertungen,
+**Inhalt-orientierter Default — harte Regel:** Auswertungen,
 Klassifikationen, Reports, SOLL/IST-Abgleiche und alle Analysen
-arbeiten **standardmäßig nur auf kanonischen Dateien**. Eine Datei
-ist kanonisch, wenn sie keine ausgehende `duplicate-of`-Relation
-in `agent_source_relations` hat (also nicht selbst eine Kopie
-einer anderen aktiven Datei ist). Konkret: wenn ein Projekt eine
-`work_canonical_sources`-View / Tabelle hat → die als Filter
-nutzen; sonst `agent_sources` LEFT JOIN auf `agent_source_relations`
-mit `kind='duplicate-of'` und nur die Zeilen ohne Match nehmen.
+arbeiten **standardmäßig pro Inhalt, nicht pro Ablageort**. Das ist
+durch das Hash-Modell trivial: queryst Du `agent_sources`, hast Du
+automatisch genau eine Zeile pro Inhalt — Duplikate sind nicht
+mit drin, weil sie als zusätzliche `agent_source_locations`-Zeilen
+zum selben source gehören, nicht als eigene source-Zeilen.
 
-Begründung: Duplikate und Vorgängerversionen führen zu doppelt
-gezählten Komponenten, falschen Vollständigkeits-Auswertungen und
-verwirrenden Reports.
+```sql
+-- Standard-Pattern für eine Auswertung über alle Inhalte:
+SELECT s.id, s.sha256, s.size_bytes, ...
+FROM ds.agent_sources s
+WHERE s.status = 'active';
+-- → genau eine Zeile pro Inhalt, keine doppelten Komponenten.
+```
 
-**Ausnahme nur auf explizite Aufforderung des Nutzers:** Wenn der
-Nutzer ausdrücklich „inkl. Kopien", „inkl. Vorgängerversionen",
-„alle Dateien" oder vergleichbar sagt, dann auf die volle
-`agent_sources`-Menge erweitern und das in der Antwort offen
-kommunizieren („auf Wunsch inkl. Duplikaten, X Files gegenüber
-Y kanonischen").
+Wenn Du den Pfad zur Anzeige brauchst, holst Du eine repräsentative
+Location:
+```sql
+SELECT s.id, s.sha256,
+       (SELECT rel_path FROM ds.agent_source_locations
+        WHERE source_id = s.id AND status='active' LIMIT 1) AS rel_path
+FROM ds.agent_sources s WHERE s.status='active';
+```
+
+**Begriff „kanonisch":** Wird im neuen Modell **strukturell trivial**.
+Die alte Tabelle `work_canonical_sources` ist obsolet — `agent_sources`
+ist von Natur aus dedupliziert. Bestandsprojekte können noch
+`work_canonical_*`-Tabellen haben, die sind kompatibel (`source_id`
+zeigt jetzt auf den dedupliszierten Eintrag).
+
+**Ausnahme — Ablage-orientierte Auswertungen:** Wenn der Nutzer
+ausdrücklich „inkl. Kopien", „pro Ablageort", „alle Pfade",
+„SharePoint-Sicht" sagt, dann `agent_source_locations` als Basis
+nehmen — eine Zeile pro Pfad. Mache das in der Antwort transparent
+(„X Inhalte an Y Orten").
+
+**Workspace-Schreib-Konvention: `sha256_pinned`-Pin (Pipeline-Reform v2).**
+
+Beim Schreiben einer Auswertung in `workspace.db` pinnst Du immer den
+Hash der Quelle zum Auswertungs-Zeitpunkt. Standard-Spalten in jeder
+work_*-Tabelle, die auf eine Datei zeigt:
+
+```sql
+source_id              INTEGER NOT NULL,    -- → ds.agent_sources.id
+source_sha256_pinned   TEXT NOT NULL,       -- ds.agent_sources.sha256 zum Schreib-Zeitpunkt
+location_id            INTEGER,             -- optional: nur wenn Ablage-spezifisch
+evaluated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+```
+
+`source_id` ist Pflicht, `source_sha256_pinned` ist Pflicht (Audit-Pin,
+auch wenn redundant zu source_id), `location_id` nur wenn relevant
+(z.B. wenn die Auswertung auf SharePoint-Felder des Ordners beruht).
+
+**Validity-Check pro Auswertung — eine Query:**
+
+```sql
+SELECT 
+  w.*,
+  CASE
+    WHEN s.status = 'deleted'                THEN 'stale_deleted'
+    WHEN s.sha256 != w.source_sha256_pinned  THEN 'stale_replaced'
+    ELSE 'valid'
+  END AS validity
+FROM workspace.work_X w
+JOIN ds.agent_sources s ON s.id = w.source_id;
+```
+
+Drei Zustände, mehr brauchst Du nicht. Stale-Politik: Auswertungen
+**werden nie automatisch invalidiert oder gelöscht** — Disco markiert
+und schlägt Re-Runs vor, der Nutzer entscheidet.
 
 ### 5. Wissen festhalten — gemeinsam
 
@@ -669,8 +730,12 @@ Pipeline). `fs_read` ist für Memory, Manifest, Skripte, MD/TXT.
 
 ### Quellen + Daten-Import
 
-- `sources_register` / `sources_attach_metadata` /
-  `sources_detect_duplicates` — siehe Section 3 (Phasen 1+2).
+- `sources_register` / `sources_attach_metadata` — siehe Section 3
+  (Phasen 1+2). Im Hash-zentrierten Datastore (Pipeline-Reform v2)
+  schreibt `sources_register` automatisch sowohl `agent_sources`-
+  (pro Hash) als auch `agent_source_locations`-Einträge (pro Pfad).
+  Eine separate Duplikat-Erkennung ist obsolet — Duplikate ergeben
+  sich automatisch aus Locations mit gleichem `source_id`.
 - `xlsx_inspect` — Sheets+Header prüfen vor Import.
 - `import_xlsx_to_table` / `import_csv_to_table` — Excel/CSV als
   Lookup-Tabelle in `context_*` ablegen, wenn der Nutzer SQL-Joins
