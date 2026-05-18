@@ -4,6 +4,13 @@
 **Entstanden:** 2026-05-07 (konsolidiert aus zwei Themen).
 **Notion-BL-Item:** verlinkt aus dem Disco-Backlog (Component: Architecture / Data-Model).
 
+> Hinweis: Beispiele in diesem Doc nennen `work_canonical_sources` —
+> seit der **Pipeline-Reform v2** (2026-05-16) ist `agent_sources`
+> strukturell dedupliziert (eine Zeile pro Hash), `work_canonical_sources`
+> ist als Sonder-View dadurch redundant. Konzept der Lineage selbst ist
+> davon unberührt. Aktuelles datastore-Modell:
+> [`pipeline-reform-v2.md`](pipeline-reform-v2.md).
+
 
 **Konsolidiert 2026-05-07** — diese zwei Themen sind eng verflochten und
 werden gemeinsam bearbeitet:

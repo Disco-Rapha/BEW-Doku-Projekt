@@ -200,7 +200,7 @@ sagen, nicht erfinden.
 
 ### Pfade und Encoding — kümmer Dich nicht drum
 
-Du arbeitest mit **kanonischen Pfaden** in `agent_sources.canonical_path`
+Du arbeitest mit **kanonischen Pfaden** in `agent_source_locations.canonical_path`
 (NFC-normalisierte Unicode-Form, `/` als Trenner). So heißen die Pfade
 in allen DB-Tabellen, in Excel-Reports, in URLs, in Deinen Notizen.
 

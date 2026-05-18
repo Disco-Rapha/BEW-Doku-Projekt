@@ -1,6 +1,18 @@
 # ★ EXTRACTION-PIPELINE OVERHAUL — Konsolidiertes Konzept
 
-**Status:** Phase 1+2 in Umsetzung 2026-04-30, Phase 6 (Failed vs Pending) offen.
+> ⚠️ **HISTORISCH (Stand bis 2026-05-15).** Dieses Dokument beschreibt die
+> Pipeline aus Sicht des **pfad-zentrierten** Datastore-Modells mit
+> `agent_source_relations` + `duplicate-of`-Relations. Seit der
+> **Pipeline-Reform v2 vom 2026-05-16** ist das Datastore-Modell hash-
+> zentriert: eine `agent_sources`-Zeile pro Hash, separate
+> `agent_source_locations`-Tabelle für Ablageorte, keine
+> `agent_source_relations` mehr. Aktueller Stand:
+> [`docs/concepts/pipeline-reform-v2.md`](pipeline-reform-v2.md).
+>
+> Diese Doku bleibt als Audit-Spur zur Pipeline-Entwicklung vor v2 — bitte
+> nicht mehr als operative Referenz nutzen.
+
+**Status:** Phase 1+2 abgeschlossen, Phase 6 (Failed vs Pending) durch v2 teilweise gegenstandslos.
 **Notion-BL-Item:** verlinkt aus dem Disco-Backlog (Component: Pipeline / Extraction).
 
 

@@ -296,6 +296,8 @@ Siehe `src/disco/flows/README.md` für das Entwickler-Howto.
 - [x] **Sources-Registry**: `sources_register` (Hash-basierte
       Delta-Detection, default scope `both`),
       `sources_attach_metadata`, `sources_detect_duplicates`
+      (Read-Only-Stub seit Pipeline-Reform v2 — Duplikate sind
+      strukturell in `agent_source_locations` sichtbar)
 - [x] **Pipeline**: `pipeline_file_status` (Routing/Markdown-Stand
       pro Datei)
 - [x] **Dokument-Markdown**: `doc_markdown_read` (liest
