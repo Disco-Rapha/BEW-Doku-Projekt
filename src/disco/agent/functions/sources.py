@@ -1152,18 +1152,41 @@ def _sources_attach_metadata(
             f"Vorhandene Spalten: {header_cols}"
         )
 
-    # agent_sources-Indexe aufbauen fuer schnelles Matching
+    # Indexe aufbauen fuer schnelles Matching.
+    # Pipeline-Reform v2 (2026-05-16): rel_path und filename leben jetzt in
+    # agent_source_locations (n:1 zu agent_sources). Eine source kann mehrere
+    # locations haben — fuers Matching ist jeder location-Pfad ein potentieller
+    # Key, der auf dieselbe source_id verweist.
     conn = _connect_datastore_rw()
     try:
-        src_rows = conn.execute(
-            "SELECT id, rel_path, filename FROM agent_sources WHERE status = 'active'"
-        ).fetchall()
+        is_v2 = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='agent_source_locations'"
+        ).fetchone() is not None
+        if is_v2:
+            src_rows = conn.execute(
+                "SELECT l.source_id AS id, l.rel_path, l.filename "
+                "FROM agent_source_locations l "
+                "JOIN agent_sources s ON s.id = l.source_id "
+                "WHERE s.status = 'active' AND l.status = 'active'"
+            ).fetchall()
+        else:
+            # Pre-Pipeline-v2-Fallback (alte Projekte, die noch nicht migriert sind)
+            src_rows = conn.execute(
+                "SELECT id, rel_path, filename FROM agent_sources WHERE status = 'active'"
+            ).fetchall()
     finally:
         conn.close()
+    # Achtung: bei mehreren locations pro source kann derselbe rel_path nur
+    # einmal vorkommen (UNIQUE-Eigenschaft pro location), aber derselbe
+    # filename ggf. mehrfach pro source — deshalb pro source dedup.
     index_by_rel: dict[str, int] = {r["rel_path"]: r["id"] for r in src_rows}
     index_by_filename: dict[str, list[int]] = {}
     for r in src_rows:
-        index_by_filename.setdefault(r["filename"], []).append(r["id"])
+        sid = r["id"]
+        bucket = index_by_filename.setdefault(r["filename"], [])
+        if sid not in bucket:
+            bucket.append(sid)
 
     # Zeilenweise matchen (erst Report bauen)
     matched_exact = 0
