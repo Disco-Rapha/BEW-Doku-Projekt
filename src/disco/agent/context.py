@@ -49,6 +49,17 @@ _is_system_triggered: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "disco_is_system_triggered", default=False
 )
 
+# Chat-Mode pro Nachricht: 'build' | 'plan' | 'research'.
+#   build (Default): Disco fuehrt aus, schreibt, ruft Tools — wie heute.
+#   plan:    nur Read-only Tools, Output ist ein ausfuehrbarer Plan.
+#   research: nur Read-only Tools, Output ist eine Antwort mit Quellen.
+# Wird vom WebSocket-Handler pro Turn gesetzt. Tools, die schreiben,
+# pruefen das per chat_mode() und liefern bei plan/research einen
+# Simulations-Output statt der echten Aktion.
+_chat_mode: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "disco_chat_mode", default="build"
+)
+
 
 def get_current_project_slug() -> str | None:
     """Gibt den Slug des aktiven Projekts zurueck, oder None."""
@@ -58,6 +69,29 @@ def get_current_project_slug() -> str | None:
 def is_system_triggered() -> bool:
     """True, wenn der aktive Turn vom System (nicht vom User) gestartet wurde."""
     return _is_system_triggered.get()
+
+
+def chat_mode() -> str:
+    """Aktueller Chat-Modus: 'build' (Default), 'plan', oder 'research'."""
+    return _chat_mode.get()
+
+
+def is_read_only_mode() -> bool:
+    """True wenn der aktive Turn schreib-Tools NICHT ausfuehren soll
+    (Plan- oder Research-Modus)."""
+    return _chat_mode.get() in ("plan", "research")
+
+
+@contextmanager
+def use_chat_mode(mode: str) -> Iterator[None]:
+    """Context-Manager: setzt den Chat-Mode fuer die Dauer eines Blocks."""
+    if mode not in ("build", "plan", "research"):
+        mode = "build"
+    token = _chat_mode.set(mode)
+    try:
+        yield
+    finally:
+        _chat_mode.reset(token)
 
 
 def get_project_root() -> Path | None:

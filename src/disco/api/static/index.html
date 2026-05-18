@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<title>Disco</title>
+<title>Disco — Discoverse</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 
 <!-- Markdown + Code-Highlight + XSS-Sanitizer (CDN, kein Build) -->
@@ -33,15 +33,19 @@
 
 <style>
 :root {
-  --bg:        #1a1a1a;
-  --panel:    #232323;
-  --panel2:   #2c2c2c;
-  --border:   #3a3a3a;
-  --text:     #e0e0e0;
-  --text-dim: #888;
+  /* Discoverse-Branding (Mai 2026): dunkles, neutrales Grundgeruest mit
+     Discoverse-Akzenten. Hintergruende bleiben bewusst neutral dunkel
+     (kein flaechiges Lila), damit Akzentfarben markant wirken. Status-Farben
+     (green/yellow/red) bleiben semantisch fuer Flows/Klassifikation/Cell-Color. */
+  --bg:        #0b0720;  /* navy-900 — Hauptflaeche, fast schwarz mit Lila-Hauch */
+  --panel:    #0e0a26;  /* zwischen navy-800 und navy-900 — Sidebar dunkler, mit klarem Lila-Stich */
+  --panel2:   #221a52;  /* navy-700 — Hover/active, eine Stufe heller */
+  --border:   #221a52;  /* navy-700 — Trenner */
+  --text:     #e5e5e5;
+  --text-dim: #a3a3a3;
   --text-bright: #ffffff;
-  --accent:   #5b9aff;
-  --accent2:  #2563eb;
+  --accent:   #ffb400;  /* gold-500 — Brand-Akzent fuer Text/Borders/Links/Highlights */
+  --accent2:  #5639a8;  /* indigo-700 — Akzent-Hintergrund nur fuer User-Bubble + Active-Sidebar-Items (punktuell, nicht flaechig) */
   --green:    #4ade80;
   --yellow:   #facc15;
   --red:      #ef4444;
@@ -59,17 +63,55 @@ html, body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 13px;
 }
-button, input, select, textarea {
+input, select, textarea {
   font: inherit; color: inherit;
   background: var(--panel2);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 4px 8px;
 }
-button { cursor: pointer; }
-button:hover { background: var(--panel); }
-.btn-primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
-.btn-primary:hover { background: var(--accent); }
+/* Default-Button = Secondary-Style (Gold-Outline, schwarzer BG, weisser Text).
+   Fuer Action-CTAs (Stats, Komprimieren, Context-Trigger etc.). */
+button {
+  font: inherit;
+  background: #000;
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+button:hover {
+  background: rgba(255, 180, 0, 0.12);
+  color: #fff;
+}
+/* Selects (Reasoning, Project-Picker etc.) optisch konsistent zum Button. */
+select {
+  background: #000;
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+/* Icon-Buttons (+/−, Refresh, X, Toggle-Pfeile, Attach) — outline-los,
+   nur Symbol in Gold. Hover: dezente Hintergrund-Schimmern. */
+button.icon-btn,
+button.btn-attach,
+button.panel-toggle {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  padding: 4px 8px;
+}
+button.icon-btn:hover,
+button.btn-attach:hover,
+button.panel-toggle:hover {
+  background: rgba(255, 180, 0, 0.12);
+  color: var(--accent);
+}
+/* Primary-Button im Discoverse-Brand-Style: Gold-Hintergrund, dunkler Text.
+   Nur fuer "Senden" — alle anderen CTAs nutzen den Secondary-Style. */
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #171717; font-weight: 600; }
+.btn-primary:hover { background: #e89f00; border-color: #e89f00; color: #171717; }
 .btn-stop { background: var(--red); border-color: var(--red); color: #fff; font-size: 12px; padding: 4px 12px; }
 .btn-stop:hover { background: #dc2626; }
 a { color: var(--accent); text-decoration: none; }
@@ -99,11 +141,45 @@ a:hover { text-decoration: underline; }
   display: flex; flex-direction: column;
   overflow-y: auto;  /* eine gemeinsame Scroll-Achse fuer alle Sections */
 }
+
+/* ============= Brand-Header (Sidebar oben) =============
+   Discoverse-Wordmark B1 — Logo + "Discoverse" kompakt.
+   Logo-PNG ist die Original-Brand-Datei (weiße Variante mit Alpha-Channel).
+   Auf dunklem Sidebar-BG erscheint sie direkt weiß; bei Bedarf kann ueber
+   CSS-Filter Gold/Indigo eingefaerbt werden (siehe Discoverse-DS-v3). */
+.brand-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.brand-logo {
+  width: 36px; height: 36px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: block;
+}
+.brand-name {
+  /* Inter-Bold-Look — System-Sans auf macOS (SF Pro Display) sieht praktisch
+     identisch zu Inter Bold aus, ohne Google-Fonts-Egress. */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--text-bright);
+  letter-spacing: -0.4px;
+  line-height: 1;
+}
+
 .sb-section {
   border-bottom: 1px solid var(--border);
   padding: 8px 10px;
   flex-shrink: 0;
 }
+/* Pipeline-Status + Datastore.db gehören gedanklich zusammen —
+   keine Trennlinie zwischen ihnen. */
+#pipeline-status-section { border-bottom: none; }
 /* Collapsible sections via <details>: Padding nur fuer Body, nicht fuer Header.
    .sb-section.collapsible ist ein <details>-Element. */
 .sb-section.collapsible { padding: 0; }
@@ -201,6 +277,53 @@ a:hover { text-decoration: underline; }
 }
 .icon-btn:hover { color: var(--text-bright); background: var(--panel2); }
 
+/* Panel-Toggle-Buttons (Sidebar/Viewer ein/aus) — Doppel-Pfeil, identischer
+   Style, dreht sich je nach Panel-Zustand. Default-Symbol ist «; auf der
+   rechten Seite per CSS rotate(180deg) zu », gleiche Logik fuer collapsed.
+   Erbt Default-Button-Style (gold-outline, schwarzer BG). */
+.panel-toggle {
+  width: 28px; height: 28px;
+  padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1;
+  transition: transform 0.2s ease, background 0.15s ease;
+  flex-shrink: 0;
+}
+/* Default-Richtung: linker Pfeil zeigt nach links (Sidebar offen → einklappen),
+   rechter Pfeil zeigt nach rechts (Viewer offen → einklappen). */
+.panel-toggle-right { transform: rotate(180deg); }
+/* Wenn das Panel collapsed ist, dreht sich der Pfeil — zeigt "öffne mich". */
+#app.sidebar-collapsed .panel-toggle-left { transform: rotate(180deg); }
+#app.viewer-collapsed .panel-toggle-right { transform: rotate(0deg); }
+
+/* Project-Picker im Chat-Header — gross, mittig, klickbar. Erbt Button-
+   Default-Style (gold-outline, schwarzer BG, gold-Text); zusaetzlich
+   groesserer Font + Chevron-Dropdown-Pfeil. */
+.project-picker {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  padding: 6px 14px;
+  cursor: pointer;
+  /* Nativer Browser-Dropdown-Pfeil — wie bei Reasoning + Mode unten. */
+  min-width: 200px;
+  letter-spacing: 0.2px;
+}
+.project-picker:hover { background-color: rgba(255, 180, 0, 0.12); }
+.project-picker:focus { outline: none; }
+.project-picker option { background: var(--panel); color: var(--text); }
+
+/* Context-Counter — kein eigenes Element mehr, sondern ein klickbarer
+   Button im chat-actions-Bereich, der die Komprimieren-Funktion oeffnet. */
+.context-trigger {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.context-trigger.warn { border-color: var(--yellow); color: #fff; }
+.context-trigger.critical { border-color: var(--red); color: #fff; }
+
 /* ============= Chat (Mitte) ============= */
 #chat-pane {
   display: flex; flex-direction: column;
@@ -216,28 +339,25 @@ a:hover { text-decoration: underline; }
   flex: 1; font-weight: 600; color: var(--text-bright);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-#chat-project-tag {
-  font-size: 11px; color: var(--text-dim);
-  padding: 2px 6px; background: var(--panel2);
-  border: 1px solid var(--border); border-radius: 3px;
-}
 #chat-token-counter {
   font-family: var(--mono); font-size: 11px;
-  padding: 2px 8px; border-radius: 3px;
-  background: var(--panel2); border: 1px solid var(--border);
+  padding: 0 10px; border-radius: 4px;
   color: var(--text-dim);
   white-space: nowrap;
-  cursor: help;
+  cursor: pointer;
+  height: 26px;
+  box-sizing: border-box;
+  display: inline-flex; align-items: center;
 }
 #chat-token-counter.warn {
   background: rgba(250,204,21,0.15);
   border-color: rgba(250,204,21,0.5);
-  color: var(--yellow);
+  color: #fff;
 }
 #chat-token-counter.critical {
   background: rgba(239,68,68,0.15);
   border-color: rgba(239,68,68,0.5);
-  color: var(--red);
+  color: #fff;
   font-weight: 600;
   animation: pulse-critical 2s infinite;
 }
@@ -245,17 +365,8 @@ a:hover { text-decoration: underline; }
   0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.0); }
   50%      { box-shadow: 0 0 0 4px rgba(239,68,68,0.25); }
 }
-#btn-compact {
-  font-size: 11px; padding: 3px 10px;
-  background: var(--panel2); border: 1px solid var(--border);
-}
-#btn-compact:hover {
-  background: var(--accent2); border-color: var(--accent2); color: #fff;
-}
-#btn-compact.urgent {
-  background: var(--yellow); border-color: var(--yellow); color: #000;
-}
-#btn-compact.urgent:hover { background: #eab308; border-color: #eab308; }
+/* (btn-compact entfernt — der Counter selbst ist jetzt der Komprimieren-
+   Trigger; die alte "urgent"-Animation lebt in .context-trigger.critical) */
 
 /* ============= Run-Streifen (aktive + beendete Flow-Runs) ============= */
 #run-strip {
@@ -473,7 +584,11 @@ a:hover { text-decoration: underline; }
   line-height: 1.55;
   word-wrap: break-word;
 }
-.msg.user .bubble { background: var(--accent2); color: #fff; }
+/* Disco-Antworten ohne Bubble-Hintergrund — fliessen direkt im Chat-BG.
+   Horizontales Padding bleibt subtil fuer Lesbarkeit, vertikales kompakter. */
+.msg.agent .bubble { background: transparent; padding: 4px 2px; }
+/* User-Prompt im Brand-Style: dunkelgrauer Hintergrund mit Gold-Outline. */
+.msg.user .bubble { background: var(--panel2); color: var(--text); border: 1px solid var(--accent); }
 .msg.system .bubble {
   background: transparent; color: var(--text-dim);
   font-size: 11px; font-style: italic; padding: 4px 0;
@@ -482,10 +597,15 @@ a:hover { text-decoration: underline; }
 /* Markdown-Rendering im Chat */
 .bubble p { margin: 0 0 8px 0; }
 .bubble p:last-child { margin-bottom: 0; }
+/* Headlines im Discoverse-Style: Mono-Schrift (System-Mono ~= IBM Plex Mono
+   ohne Google-Fonts-Egress). Body bleibt Sans. Klare visuelle Trennung
+   zwischen technischer Headline und lesbarem Fliesstext. */
 .bubble h1, .bubble h2, .bubble h3, .bubble h4 {
-  margin: 12px 0 6px 0;
+  margin: 14px 0 6px 0;
   color: var(--text-bright);
-  font-weight: 600;
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: -0.3px;
 }
 .bubble h1 { font-size: 18px; }
 .bubble h2 { font-size: 16px; }
@@ -515,28 +635,61 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
   width: auto; max-width: 100%;
 }
+/* Minimal-Table-Style: nur horizontale Row-Trenner (subtil), Header etwas
+   heller abgesetzt. Keine vertikalen Gitter, kein Zebra. */
 .bubble th, .bubble td {
-  border: 1px solid var(--border);
-  padding: 4px 8px; text-align: left;
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
 }
-.bubble th { background: var(--panel); font-weight: 600; }
-.bubble tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.bubble th {
+  background: rgba(255,255,255,0.06);  /* Header etwas heller als Body-Rows */
+  font-weight: 600;
+}
+.bubble tr:last-child td { border-bottom: none; }  /* keine Trennlinie nach letzter Row */
 .bubble blockquote {
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--accent);  /* Brand-Akzent — Zitate als Hinweis-Signal */
   margin: 8px 0; padding: 4px 12px;
   color: var(--text-dim);
+  position: relative;  /* fuer den Copy-Button (absolute Position) */
 }
+/* Code-Blocks brauchen position:relative damit der absolute Copy-Button greift. */
+.bubble pre { position: relative; }
+
+/* Copy-Button in Blockquotes UND Code-Blocks — zeigt sich beim Hover,
+   kopiert den Box-Inhalt in die Zwischenablage. */
+.box-copy-btn {
+  position: absolute;
+  top: 4px; right: 4px;
+  font-size: 11px;
+  padding: 1px 6px;
+  line-height: 1.4;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.bubble blockquote:hover .box-copy-btn,
+.bubble pre:hover .box-copy-btn { opacity: 0.8; }
+.box-copy-btn:hover { opacity: 1 !important; color: var(--accent); border-color: var(--accent); }
 .bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
-.bubble a { color: var(--accent); }
+.bubble a { color: var(--accent); text-underline-offset: 3px; }
+.bubble a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
 .user .bubble code,
 .user .bubble pre { background: rgba(255,255,255,0.15); }
 
-/* Tool-Call-Block — kompakt + aufklappbar */
+/* Tool-Call-Block — kompakt + aufklappbar.
+   Bewusst zurueckhaltend: schwarzer BG (nicht Brand-Lila) + neutraler grauer
+   Akzent-Strich, damit Tool-Calls die Disco-Antwort nicht ueberlagern.
+   Code-Interpreter/File-Search behalten ihre eigenen Akzent-Farben unten. */
 .tool-call {
   font-family: var(--mono); font-size: 11px;
-  background: var(--panel2);
+  background: #0a0a0a;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--yellow);
+  border-left: 3px solid var(--text-dim);
   border-radius: 4px;
   margin: 4px 0;
 }
@@ -551,7 +704,7 @@ a:hover { text-decoration: underline; }
   transition: transform 0.15s;
 }
 .tool-call[open] summary::before { transform: rotate(90deg); }
-.tool-call .tool-name { color: var(--yellow); font-weight: 600; }
+.tool-call .tool-name { color: var(--text); font-weight: 600; }
 .tool-call .tool-status { color: var(--green); font-size: 10px; margin-left: auto; }
 .tool-call .tool-status.pending { color: var(--yellow); }
 .tool-call .tool-body { padding: 0 10px 8px 10px; display: flex; flex-direction: column; gap: 4px; }
@@ -593,11 +746,15 @@ a:hover { text-decoration: underline; }
   outline-offset: -6px;
 }
 #chat-input {
-  width: 100%; min-height: 40px; max-height: 200px;
-  resize: vertical;
+  width: 100%;
+  min-height: 40px; max-height: 220px;  /* ca. 10 Zeilen, danach scrollt es */
+  resize: none;                         /* Auto-Resize via JS uebernimmt die Hoehe */
+  overflow-y: auto;
   background: var(--panel2);
   font-family: inherit; font-size: 13px;
   padding: 8px 10px;
+  line-height: 1.4;
+  box-sizing: border-box;
 }
 #chat-input:focus { outline: 1px solid var(--accent); }
 .attachments-strip {
@@ -652,17 +809,12 @@ a:hover { text-decoration: underline; }
   border-radius: 3px;
 }
 .attach-chip-remove:hover { color: #fff; background: rgba(255,255,255,0.1); }
+/* Attach-Button erbt Default-Secondary-Style; nur Groesse/Font abweichend. */
 .btn-attach {
-  background: var(--panel2);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
   padding: 4px 10px;
   font-size: 16px;
   line-height: 1;
-  border-radius: 4px;
-  cursor: pointer;
 }
-.btn-attach:hover { color: var(--accent); border-color: var(--accent); }
 /* Anhang-Bubbles in der Chat-History */
 .msg-attachments {
   display: flex; flex-wrap: wrap; gap: 6px;
@@ -732,22 +884,58 @@ a:hover { text-decoration: underline; }
 .chat-actions-right {
   display: flex; align-items: center; gap: 8px;
 }
-.chat-model-label {
-  display: flex; align-items: center; gap: 4px;
-  font-size: 11px; color: var(--text-dim);
-  cursor: help;
-}
-.chat-model-label select {
-  background: var(--panel2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 2px 6px;
+/* Reasoning + Mode-Select + Context-Counter sollen die GLEICHE Hoehe haben.
+   Native <select>-Elemente ignorieren oft padding/line-height — daher
+   explizite height + box-sizing border-box, dazu padding 0 10px (vertikale
+   Position kommt aus dem Browser-Widget). */
+#reasoning-select {
   font-size: 11px;
-  font-family: inherit;
+  padding: 0 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  height: 26px;
+  box-sizing: border-box;
+}
+
+/* Mode-Select (Build/Plan/Research) — analog kompakt. Optisch dezent
+   hervorgehoben, weil pro Nachricht zu setzen. */
+.chat-action-select {
+  font-size: 11px;
+  padding: 0 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  height: 26px;
+  box-sizing: border-box;
+}
+#mode-select[data-mode="plan"]     { color: #6aa9ff; border-color: #6aa9ff; }
+#mode-select[data-mode="research"] { color: #b48cff; border-color: #b48cff; }
+#mode-select[data-mode="build"]    { /* default — wie heute */ }
+
+/* "Plan ausfuehren"-Leiste am Ende einer Plan-Modus-Antwort. */
+.plan-execute-bar {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #6aa9ff;
+  border-radius: 6px;
+  background: rgba(106, 169, 255, 0.08);
+  display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap;
+}
+.btn-execute-plan {
+  background: #6aa9ff;
+  color: #fff;
+  border: 0;
+  padding: 6px 14px;
+  font-weight: 600;
+  font-size: 13px;
+  border-radius: 4px;
   cursor: pointer;
 }
-.chat-model-label select:hover { border-color: var(--accent); }
+.btn-execute-plan:hover { background: #5a99ef; }
+.plan-execute-hint {
+  font-size: 11px;
+  flex: 1; min-width: 200px;
+}
 
 /* ============= Viewer (rechts) ============= */
 #viewer-pane {
@@ -1065,13 +1253,10 @@ a:hover { text-decoration: underline; }
   <!-- ============ Sidebar (links) ============ -->
   <aside id="sidebar">
 
-    <div class="sb-section">
-      <div class="sb-toolbar">
-        <select id="project-select" onchange="onProjectChange()"></select>
-        <button class="icon-btn" title="Neues Projekt anlegen" onclick="createProject()">+</button>
-        <button class="icon-btn" title="Aktuelles Projekt archivieren" onclick="archiveCurrentProject()">🗄</button>
-        <button class="icon-btn" title="Sidebar einklappen" onclick="toggleSidebar()">«</button>
-      </div>
+    <!-- Discoverse-Brand-Header (Wordmark B1, kompakt ohne Tagline) -->
+    <div class="brand-header" title="Discoverse">
+      <img class="brand-logo" src="/static/lib/discoverse-logo.png" alt="Discoverse">
+      <span class="brand-name">Discoverse</span>
     </div>
 
     <details class="sb-section collapsible" id="explorer-section" data-sb-key="explorer" open>
@@ -1081,10 +1266,20 @@ a:hover { text-decoration: underline; }
       </div>
     </details>
 
+    <details class="sb-section collapsible" id="pipeline-status-section" data-sb-key="pipeline-status" open>
+      <summary>
+        <span class="sb-title">Pipeline-Status</span>
+        <button class="icon-btn" title="Status aktualisieren"
+                onclick="event.preventDefault(); event.stopPropagation(); loadPipelineStatus(state.activeProjectSlug)">↻</button>
+      </summary>
+      <div class="sb-body">
+        <div id="pipeline-status-list" class="pipeline-status-list"></div>
+      </div>
+    </details>
+
     <details class="sb-section collapsible" id="db-datastore-section" data-sb-key="db-datastore" open>
       <summary>
         <span class="sb-title">datastore.db</span>
-        <span class="sb-subtitle">Ebene 1+2 · read-only</span>
       </summary>
       <div class="sb-body">
         <div id="db-tables-datastore" class="tree"></div>
@@ -1094,7 +1289,6 @@ a:hover { text-decoration: underline; }
     <details class="sb-section collapsible" id="db-workspace-section" data-sb-key="db-workspace" open>
       <summary>
         <span class="sb-title">workspace.db</span>
-        <span class="sb-subtitle">Ebene 3 · read/write</span>
       </summary>
       <div class="sb-body">
         <div id="db-tables-workspace" class="tree"></div>
@@ -1112,23 +1306,13 @@ a:hover { text-decoration: underline; }
       </div>
     </details>
 
-    <details class="sb-section collapsible" id="pipeline-status-section" data-sb-key="pipeline-status" open>
-      <summary>
-        <span class="sb-title">Pipeline-Status</span>
-        <button class="icon-btn" title="Status aktualisieren"
-                onclick="event.preventDefault(); event.stopPropagation(); loadPipelineStatus(state.activeProjectSlug)">↻</button>
-      </summary>
-      <div class="sb-body">
-        <div id="pipeline-status-list" class="pipeline-status-list"></div>
-      </div>
-    </details>
-
     <div class="sb-section">
       <div class="sb-title">Einstellungen</div>
-      <div class="muted" style="font-size:11px">
+      <div class="muted" style="font-size:11px; margin-bottom: 8px;">
         Workspace: <code id="settings-workspace">~/Disco</code><br>
         Model: <code id="settings-model">gpt-5</code>
       </div>
+      <button id="btn-stats" style="font-size: 11px; padding: 3px 10px;" title="Agent-Stats: Tool-Usage, Fehler, Feedback" onclick="openStatsModal()">📊 Stats</button>
     </div>
 
   </aside>
@@ -1140,15 +1324,14 @@ a:hover { text-decoration: underline; }
   <main id="chat-pane">
 
     <div id="chat-header">
-      <button class="icon-btn" title="Sidebar ein-/ausblenden" onclick="toggleSidebar()">☰</button>
+      <button class="panel-toggle panel-toggle-left" title="Sidebar ein-/ausblenden" onclick="toggleSidebar()">«</button>
       <span id="env-badge" class="env-badge" title="Umgebung dieses Disco-Servers"></span>
-      <span id="chat-title">Disco</span>
-      <span id="chat-project-tag">(kein Projekt)</span>
       <span class="spacer" style="flex:1"></span>
-      <span id="chat-token-counter" title="Aktueller Chat-Fuellstand. Warnung bei 70 %, kritisch bei 90 %.">0 / 180k · 0 %</span>
-      <button id="btn-compact" title="Chat komprimieren — wichtige Erkenntnisse in NOTES.md / DISCO.md schreiben, dann Verlauf einklappen" onclick="openCompactModal()">🗜 Komprimieren</button>
-      <button id="btn-stats" title="Agent-Stats: Tool-Usage, Fehler, Feedback" onclick="openStatsModal()">📊 Stats</button>
-      <button class="icon-btn" title="Viewer ein-/ausblenden" onclick="toggleViewer()">▭</button>
+      <select id="project-select" class="project-picker" onchange="onProjectChange()" title="Projekt wechseln"></select>
+      <button class="icon-btn" id="btn-project-add" title="Neues Projekt anlegen" onclick="createProject()">+</button>
+      <button class="icon-btn" id="btn-project-remove" title="Aktuelles Projekt archivieren" onclick="archiveCurrentProject()">−</button>
+      <span class="spacer" style="flex:1"></span>
+      <button class="panel-toggle panel-toggle-right" title="Viewer ein-/ausblenden" onclick="toggleViewer()">«</button>
     </div>
 
     <!-- Run-Streifen: zeigt aktive Flow-Runs projekt-uebergreifend. JS fuellt dynamisch. -->
@@ -1167,18 +1350,21 @@ a:hover { text-decoration: underline; }
       <div class="chat-actions">
         <span id="chat-status" class="muted">Bereit</span>
         <span class="chat-actions-right">
-          <button id="btn-attach" class="btn-attach" title="Datei anhaengen (Bilder, Text-Files)" onclick="document.getElementById('attachment-file-input').click()">+</button>
-          <label class="chat-model-label" title="Reasoning-Effort fuer Disco (gpt-5.4-Stufen). Hoeher = tieferes Nachdenken, langsamer + teurer. Aenderung pusht eine neue Agent-Version ins Foundry-Portal (~3s).">
-            Reasoning:
-            <select id="reasoning-select" onchange="onReasoningChange()" disabled>
-              <option value="none">none</option>
-              <option value="low">low</option>
-              <option value="medium" selected>medium</option>
-              <option value="high">high</option>
-              <option value="xhigh">xhigh</option>
-            </select>
-          </label>
+          <button id="chat-token-counter" class="context-trigger" title="Chat-Fuellstand. Klick: Komprimieren (Erkenntnisse sichern + Verlauf einklappen)." onclick="openCompactModal()">~0 %</button>
+          <select id="reasoning-select" class="chat-action-select" onchange="onReasoningChange()" title="Reasoning-Effort — hoeher = tieferes Nachdenken, langsamer + teurer" disabled>
+            <option value="none" title="kein Reasoning, schnellste Antworten">none</option>
+            <option value="low" title="kurz nachdenken, geringe Kosten">low</option>
+            <option value="medium" selected title="ausgewogen — Default">medium</option>
+            <option value="high" title="tieferes Nachdenken">high</option>
+            <option value="xhigh" title="maximal — sehr langsam, teuer">xhigh</option>
+          </select>
+          <select id="mode-select" class="chat-action-select mode-select" title="Mode pro Nachricht — Build (Default), Plan (Plan vor Ausführung), Research (nur Q&amp;A mit Quellen)">
+            <option value="build" selected title="Build — Disco fuehrt aus, schreibt, ruft Tools (wie heute)">🛠 Build</option>
+            <option value="plan" title="Plan — Disco erstellt einen ausfuehrbaren Plan, schreibt nicht, am Ende 'Plan ausfuehren'-Button">🧭 Plan</option>
+            <option value="research" title="Research — Disco beantwortet inhaltliche Fragen mit Quellen, schreibt nichts, fuehrt nichts aus">🔍 Research</option>
+          </select>
           <button id="btn-stop" class="btn-stop hidden" onclick="stopResponse()">■ Stopp</button>
+          <button id="btn-attach" class="btn-attach" title="Datei anhaengen (Bilder, Text-Files)" onclick="document.getElementById('attachment-file-input').click()">+</button>
           <button id="btn-send" class="btn-primary" onclick="sendMessage()">Senden ▶</button>
         </span>
       </div>
@@ -1241,7 +1427,12 @@ const LS_KEY_PROJECT   = 'disco.active.project';
 // =========================================================================
 function initMarkdown() {
   state.md = window.markdownit({
-    html: false,
+    // html: true → Roh-HTML aus dem Markdown wird durchgereicht. Azure
+    // Document Intelligence produziert IMMER <table>-HTML statt
+    // GitHub-Pipe-Tables, und <figure>/<figcaption> fuer Bilder.
+    // Ohne html: true wuerden Disco-Extrakte ohne Tabellen rendern.
+    // Sicherheit: DOMPurify-Sanitize unten begrenzt Tags + Attrs strikt.
+    html: true,
     linkify: true,
     typographer: false,
     breaks: true,
@@ -1282,8 +1473,9 @@ function renderMarkdown(text) {
   const html = state.md.render(text);
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ['p','br','strong','em','code','pre','ul','ol','li','a','h1','h2','h3','h4','h5','h6',
-                   'blockquote','hr','table','thead','tbody','tr','th','td','span','del','sub','sup','img'],
-    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt'],
+                   'blockquote','hr','table','thead','tbody','tr','th','td','caption','span','del','sub','sup','img',
+                   'figure','figcaption','section','article'],
+    ALLOWED_ATTR: ['href','target','rel','class','title','src','alt','colspan','rowspan'],
     // Erlaube zusaetzlich disco-file:// und disco-table:// als URI-Schemas.
     // DOMPurify-Default whitelistet nur http/https/mailto/tel/data:image/etc.
     ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp|xxx|disco-file|disco-table):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
@@ -1360,8 +1552,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   initMarkdown();
   initSplitters();
   initChatInput();
+  initBoxCopyObserver();
   initSidebarSections();
   initReasoningSelect();
+  initModeSelect();
 
   // Projekt-Liste laden
   try {
@@ -1503,8 +1697,6 @@ async function archiveCurrentProject() {
     if (state.projects.length > 0) {
       await switchProject(state.projects[0].slug);
     } else {
-      document.getElementById('chat-title').textContent = 'Disco';
-      document.getElementById('chat-project-tag').textContent = '(kein Projekt)';
       document.getElementById('chat-messages').innerHTML = '';
       setSystemMessage('Kein Projekt vorhanden. Mit <b>+</b> oben ein neues anlegen.');
     }
@@ -1516,12 +1708,9 @@ async function archiveCurrentProject() {
 async function switchProject(slug) {
   state.activeProjectSlug = slug;
   localStorage.setItem(LS_KEY_PROJECT, slug);
+  // Project-Picker (<select>) zeigt jetzt zentral oben das aktive Projekt
+  // — die alten chat-title / chat-project-tag-Elemente sind weg.
   document.getElementById('project-select').value = slug;
-
-  // Projektname im Chat-Header
-  const proj = state.projects.find(p => p.slug === slug);
-  document.getElementById('chat-title').textContent = proj ? proj.name : 'Disco';
-  document.getElementById('chat-project-tag').textContent = slug ? slug : '(kein Projekt)';
 
   // Chat schliessen, warning-state zuruecksetzen
   if (state.ws) { try { state.ws.close(); } catch(e) {} state.ws = null; }
@@ -1564,27 +1753,27 @@ async function loadChatState(slug) {
 
 function updateTokenCounter(s) {
   const el = document.getElementById('chat-token-counter');
-  const btn = document.getElementById('btn-compact');
   if (!el) return;
+  // Der Counter ist gleichzeitig der "Komprimieren"-Trigger — Klick
+  // oeffnet das Compact-Modal. Style-Klassen warn/critical sitzen auf
+  // dem Counter-Button selbst.
+  el.classList.remove('warn', 'critical');
   if (!s) {
-    el.textContent = '– / 180k · 0 %';
-    el.className = '';
-    btn.classList.remove('urgent');
+    el.textContent = '– %';
+    el.title = 'Chat-Fuellstand. Klick: Komprimieren.';
     return;
   }
-  const tok = s.token_estimate || 0;
-  const budget = s.token_budget || 180000;
   const pct = Math.round((s.percent || 0) * 100);
-  el.textContent = `${_fmtTokens(tok)} / ${_fmtTokens(budget)} · ${pct} %`;
-  el.className = '';
-  btn.classList.remove('urgent');
+  const isEstimate = s.token_estimate_source === 'estimate';
+  const prefix = isEstimate ? '~' : '';
+  el.textContent = `${prefix}${pct} %`;
+  el.title = isEstimate
+    ? `Chat-Fuellstand: geschaetzte ${pct}%. Klick: Komprimieren.`
+    : `Chat-Fuellstand: Azure-Ground-Truth ${pct}%. Klick: Komprimieren.`;
   if (s.warn_level === 'warn') {
     el.classList.add('warn');
   } else if (s.warn_level === 'critical') {
     el.classList.add('critical');
-    btn.classList.add('urgent');
-    // Einmaliger Hinweis-Toast (kein Modal, kein Tanz). Auto-Compact
-    // greift ohnehin beim naechsten Turn.
     if (!state._criticalWarningShown) {
       state._criticalWarningShown = true;
       setTimeout(() => openCompactModal(true), 400);
@@ -1637,29 +1826,79 @@ function _pickCompactionMessage(pool) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// openCompactModal bleibt nur als Auto-Hinweis-Toast bei kritischem Stand
-// — das eigentliche Komprimieren passiert direkt ueber den Button.
+// Modal mit Erklaerung dessen, was Komprimieren tut, plus Action-Button.
+// auto=true: nur einmaliger System-Message-Hinweis bei kritischer Fuellung,
+// kein Modal-Tanz (Auto-Compact greift eh beim naechsten Turn).
 function openCompactModal(auto) {
-  // Bei Auto-Aufruf (90 %): kurzer Hinweis ohne Modal-Tanz. Wenn der
-  // User weitertippt, greift Auto-Compact eh beim naechsten Turn.
   if (auto) {
     setSystemMessage('🗜 Kontext fast voll — beim naechsten Turn '
       + 'komprimiert Disco automatisch. Du kannst auch jetzt manuell '
-      + 'auf <b>🗜 Komprimieren</b> klicken.');
+      + 'auf <b>Context: …%</b> klicken und komprimieren.');
     return;
   }
-  // Bei manuellem Klick: direkt loslegen.
-  runCompaction();
+  // Wenn schon offen: nicht doppelt aufbauen.
+  if (document.getElementById('compact-modal-backdrop')) return;
+
+  // Aktuelle %-Anzeige aus dem Counter holen (fuer den Hinweis im Modal)
+  const counterEl = document.getElementById('chat-token-counter');
+  const counterText = counterEl ? counterEl.textContent : 'Context: – %';
+
+  const backdrop = document.createElement('div');
+  backdrop.id = 'compact-modal-backdrop';
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-labelledby="cmpt-title" style="max-width: 540px;">
+      <h3 id="cmpt-title">🗜 Chat komprimieren</h3>
+      <p><b>${counterText}</b></p>
+      <p>Disco speichert die wichtigsten Erkenntnisse aus dem bisherigen
+         Verlauf <b>persistent</b> ab und klappt den Chat-Verlauf danach ein.
+         Du verlierst dabei nichts an Wissen — Disco merkt sich was zaehlt.</p>
+      <p class="muted">Konkret passiert:</p>
+      <ul class="muted" style="margin: 4px 0 8px 18px; padding: 0;">
+        <li>Disco destilliert wichtige Erkenntnisse in <code>NOTES.md</code>
+            und <code>DISCO.md</code> (Memory-Reform-Modell).</li>
+        <li>Tabellen-Doku wird in <code>agent_table_docs</code> gespeichert.</li>
+        <li>Ein Handover-Brief landet als naechste System-Message, sodass
+            Disco nach der Kompression nahtlos weiterarbeiten kann.</li>
+        <li>Der bisherige Chat-Verlauf bleibt in der DB sichtbar, wird aber
+            nicht mehr an Foundry gesendet → der Kontext-Fuellstand sinkt.</li>
+      </ul>
+      <p class="muted">Dauert je nach Verlaufslaenge 5–15 Sekunden
+         (zwei LLM-Calls). Danach ist Disco wieder fit fuer langen
+         Reasoning.</p>
+      <div class="modal-actions">
+        <button id="cmpt-cancel" class="icon-btn">Abbrechen</button>
+        <button id="cmpt-go" class="btn-primary">🗜 Jetzt komprimieren</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+
+  const close = () => backdrop.remove();
+  backdrop.querySelector('#cmpt-cancel').addEventListener('click', close);
+  backdrop.querySelector('#cmpt-go').addEventListener('click', () => {
+    close();
+    runCompaction();
+  });
+  // Click auf Backdrop (ausserhalb der Karte) schliesst auch.
+  backdrop.addEventListener('click', (ev) => {
+    if (ev.target === backdrop) close();
+  });
+  // ESC schliesst.
+  const onKey = (ev) => {
+    if (ev.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
+  };
+  document.addEventListener('keydown', onKey);
 }
 
 function closeCompactModal() {
-  const el = document.getElementById('compact-modal');
+  const el = document.getElementById('compact-modal-backdrop');
   if (el) el.remove();
 }
 
 async function runCompaction() {
   if (!state.activeProjectSlug) return;
-  const btn = document.getElementById('btn-compact');
+  // Counter-Button ist gleichzeitig der Komprimieren-Trigger.
+  const btn = document.getElementById('chat-token-counter');
   if (btn && btn.disabled) return;  // Schon laeuft
   if (btn) btn.disabled = true;
 
@@ -2031,11 +2270,107 @@ let currentBubble = null;
 let currentText = '';
 let typingEl = null;
 
+// Clipboard-Helper mit zwei Fallbacks:
+//   1. navigator.clipboard.writeText (moderne API, braucht secure context +
+//      bei iframes 'clipboard-write'-Allow-Flag)
+//   2. document.execCommand('copy') via temporaeres Textarea — funktioniert
+//      auch in restriktiveren iframe-Sandboxes (z.B. Preview-Umgebungen).
+function _copyToClipboard(text) {
+  // Pfad 1: moderne Clipboard-API
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text)
+      .then(() => true)
+      .catch(() => _copyToClipboardFallback(text));
+  }
+  // Pfad 2: Fallback direkt
+  return Promise.resolve(_copyToClipboardFallback(text));
+}
+
+function _copyToClipboardFallback(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    // Versteckt aber selektierbar
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Copy-Buttons fuer "Boxen" in Disco-Antworten:
+//   - Blockquotes (Markdown > text)
+//   - Code-Blocks (```...```)
+// Wird per MutationObserver an neue Boxes angeklippt — funktioniert auch
+// waehrend des Streamings.
+function attachBoxCopyButtons(rootEl) {
+  if (!rootEl) return;
+  // blockquote UND pre — beide bekommen denselben Copy-Button
+  rootEl.querySelectorAll('.bubble blockquote:not([data-copy-attached]), .bubble pre:not([data-copy-attached])').forEach(box => {
+    box.dataset.copyAttached = '1';
+    const btn = document.createElement('button');
+    btn.className = 'box-copy-btn';
+    btn.type = 'button';
+    btn.title = 'Inhalt in die Zwischenablage kopieren';
+    btn.textContent = '📋';
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      // Bei <pre><code> den Code-Text greifen (innerText preserved Newlines);
+      // bei blockquote alle Kind-Nodes ausser dem Button selbst sammeln.
+      let text;
+      if (box.tagName === 'PRE') {
+        const codeEl = box.querySelector('code') || box;
+        text = codeEl.innerText || codeEl.textContent || '';
+      } else {
+        text = Array.from(box.childNodes)
+          .filter(n => n !== btn)
+          .map(n => (n.textContent || ''))
+          .join('').trim();
+      }
+      _copyToClipboard(text).then((ok) => {
+        btn.textContent = ok ? '✓' : '✗';
+        setTimeout(() => { btn.textContent = '📋'; }, 1200);
+      });
+    });
+    box.appendChild(btn);
+  });
+}
+
+function initBoxCopyObserver() {
+  const msgs = document.getElementById('chat-messages');
+  if (!msgs) return;
+  const obs = new MutationObserver(() => attachBoxCopyButtons(msgs));
+  obs.observe(msgs, { childList: true, subtree: true });
+  attachBoxCopyButtons(msgs);  // Initial-Scan
+}
+
 function initChatInput() {
   const input = document.getElementById('chat-input');
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
+
+  // Auto-Resize: Hoehe waechst mit dem Inhalt bis max-height aus dem CSS.
+  // Wenn der Inhalt darueber hinaus geht, scrollt das Textarea intern.
+  const autoResize = () => {
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+  };
+  input.addEventListener('input', autoResize);
+  // Initial sicherstellen + nach sendMessage (Reset auf min-height)
+  autoResize();
+  // Globaler Hook, damit sendMessage() nach Clear auf Min-Hoehe zurueckkann
+  window._chatInputAutoResize = autoResize;
 
   // Globaler Click-Handler fuer disco-file:// und disco-table://-Links
   // (event delegation ueber #chat-messages — funktioniert auch fuer
@@ -2269,16 +2604,24 @@ function sendMessage() {
     return;
   }
   if (!text && !ready.length) return;
+  // Mode pro Nachricht: build (default), plan, research.
+  const modeSel = document.getElementById('mode-select');
+  const mode = modeSel ? modeSel.value : 'build';
+  // Mode mitschreiben — der done-Handler haengt nach Plan-Mode-Antworten
+  // einen "Plan ausfuehren"-Button an die letzte Assistant-Bubble.
+  state.lastSentMode = mode;
   // Nur die Server-Refs senden, keine thumbDataUrl
   const payload = {
     text,
+    mode,
     attachments: ready.map(a => ({
       id: a.id, filename: a.filename, mime_type: a.mime_type,
       size: a.size, kind: a.kind, rel_path: a.rel_path,
     })),
   };
   input.value = '';
-  input.style.height = '';
+  // Textarea-Hoehe auf min-height zurueck (auto-resize-Helper aus initChatInput)
+  if (window._chatInputAutoResize) window._chatInputAutoResize();
   appendMessage('user', text, undefined, ready);
   clearAttachments();
   typingEl = appendTyping();
@@ -2287,6 +2630,64 @@ function sendMessage() {
   state._isStreaming = true;
   showStopButton(true);
   setStatus('Disco denkt …');
+}
+
+// Mode-Selector (Build/Plan/Research) — pro Nachricht, kein Server-Setup.
+// Nur visuelles Tinting + data-mode-Attribut. Beim Senden wird mode in
+// sendMessage() ausgelesen und ins WebSocket-Payload gehaengt.
+function initModeSelect() {
+  const sel = document.getElementById('mode-select');
+  if (!sel) return;
+  const updateTint = () => {
+    sel.setAttribute('data-mode', sel.value);
+  };
+  sel.addEventListener('change', updateTint);
+  updateTint();
+}
+
+// Plan-Modus-Followup: nach einer Plan-Antwort einen Button rendern,
+// der den Plan in einem Build-Turn ausfuehrt.
+function attachExecutePlanButton() {
+  const msgs = document.getElementById('chat-messages');
+  if (!msgs) return;
+  // Letzte Assistant-Bubble suchen — die Antwort kann mehrere Bubbles
+  // haben (Text, Tool-Block, Text); wir wollen das letzte agent-Element.
+  const allAgent = msgs.querySelectorAll('.msg.agent');
+  if (!allAgent.length) return;
+  const last = allAgent[allAgent.length - 1];
+  // Nicht doppelt anhaengen, wenn schon ein Button drinhaengt.
+  if (last.querySelector('.plan-execute-bar')) return;
+  const bar = document.createElement('div');
+  bar.className = 'plan-execute-bar';
+  bar.innerHTML = `
+    <button class="btn-execute-plan" onclick="executePlan()">
+      ▶ Plan ausfuehren
+    </button>
+    <span class="plan-execute-hint muted">
+      Wechselt in den Build-Modus und fordert Disco auf, den oben skizzierten Plan auszufuehren.
+    </span>
+  `;
+  last.appendChild(bar);
+  scrollChat();
+}
+
+// "Plan ausfuehren"-Button: Mode-Select auf Build setzen, fixe
+// Nachricht senden, die Disco auf den oben stehenden Plan referenziert.
+function executePlan() {
+  // Mode-Select auf Build wechseln (visuell + state).
+  const modeSel = document.getElementById('mode-select');
+  if (modeSel) {
+    modeSel.value = 'build';
+    modeSel.setAttribute('data-mode', 'build');
+  }
+  // Den Button entfernen — er soll nicht ein zweites Mal klickbar sein.
+  const bars = document.querySelectorAll('.plan-execute-bar');
+  bars.forEach(b => b.remove());
+  // Fixe Anweisung in den Chat-Input schreiben und senden.
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  input.value = 'Bitte fuehre den oben skizzierten Plan jetzt aus. Falls einzelne Schritte beim Ausfuehren neue Informationen liefern, justiere flexibel — aber bleib im Geist des Plans.';
+  sendMessage();
 }
 
 // Reasoning-Effort-Selector: Aenderung triggert ein Live-Setup
@@ -2450,6 +2851,12 @@ function handleEvent(ev) {
         // Letzte Assistant-Bubble mit Feedback-Leiste versehen.
         attachFeedbackToLastAssistantBubble(state.activeProjectSlug);
       }
+      // Plan-Modus: nach der Antwort einen "Plan ausfuehren"-Button anhaengen.
+      // Beim Klick wird ein Build-Turn mit fester Aufforderung gestartet.
+      if (state.lastSentMode === 'plan') {
+        attachExecutePlanButton();
+      }
+      state.lastSentMode = null;
       break;
   }
 }
@@ -2818,6 +3225,13 @@ state._viewerOpenFile = null;   // {path, name} oder null
 state._viewerOpenTable = null;  // table-name oder null
 
 async function openFileInViewer(path, name) {
+  // User will jetzt eine Datei sehen — Flow-Run-Polling stoppen, sonst
+  // ueberschreibt der naechste Poll-Tick (alle 2.5s) den Viewer wieder
+  // mit den Run-Details. Polling kann ueber den Flow-Streifen jederzeit
+  // wieder per Klick auf den Run gestartet werden.
+  if (typeof _stopFlowPoll === 'function') _stopFlowPoll();
+  state._flowView = null;
+  state._flowViewRunId = null;
   if (!state.activeProjectSlug) return;
   state._viewerOpenFile = {path, name};
   state._viewerOpenTable = null;
@@ -3416,6 +3830,22 @@ function initSplitters() {
 function setupSplitter(id, cssVar, lsKey, side) {
   const el = document.getElementById(id);
   let dragging = false; let startX = 0; let startW = 0;
+
+  // Iframes (Viewer-HTML-Sandbox) abschalten waehrend des Drags — sonst
+  // stehlen sie das mouseup-Event und der Splitter haengt an der Maus.
+  const disableIframePointer = () => {
+    document.querySelectorAll('iframe').forEach(f => {
+      f.dataset.prevPointer = f.style.pointerEvents || '';
+      f.style.pointerEvents = 'none';
+    });
+  };
+  const restoreIframePointer = () => {
+    document.querySelectorAll('iframe').forEach(f => {
+      f.style.pointerEvents = f.dataset.prevPointer || '';
+      delete f.dataset.prevPointer;
+    });
+  };
+
   el.addEventListener('mousedown', (e) => {
     e.preventDefault();
     dragging = true;
@@ -3423,6 +3853,7 @@ function setupSplitter(id, cssVar, lsKey, side) {
     startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
+    disableIframePointer();
   });
   document.addEventListener('mousemove', (e) => {
     if (!dragging) return;
@@ -3438,8 +3869,19 @@ function setupSplitter(id, cssVar, lsKey, side) {
       dragging = false;
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
+      restoreIframePointer();
       const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
       localStorage.setItem(lsKey, String(w));
+    }
+  });
+  // Falls die Maus das Fenster verlaesst (z.B. ueberlappendes OS-Element),
+  // den Drag auch sauber abschliessen — sonst bleibt restoreIframePointer aus.
+  window.addEventListener('mouseleave', () => {
+    if (dragging) {
+      dragging = false;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      restoreIframePointer();
     }
   });
 }

@@ -143,42 +143,73 @@ wiederholte Commits ueberschreiben bestehende Werte, dupliziert nichts.
 ### Abfrage spaeter
 
 ```sql
-SELECT s.rel_path, m.key, m.value
+-- Metadaten zu einer Source (Inhalt-orientiert, alle Locations zusammen):
+SELECT m.key, m.value, m.source_of_truth
+FROM agent_source_metadata m
+WHERE m.source_id = ? AND m.key = 'gewerk';
+
+-- Mit Pfad-Anzeige (eine repräsentative Location):
+SELECT 
+  (SELECT rel_path FROM agent_source_locations 
+   WHERE source_id = s.id AND status='active' LIMIT 1) AS rel_path,
+  m.key, m.value
 FROM agent_source_metadata m
 JOIN agent_sources s ON s.id = m.source_id
-WHERE m.source_of_truth = 'begleit-excel'
-  AND m.key = 'gewerk'
+WHERE m.source_of_truth = 'begleit-excel' AND m.key = 'gewerk';
 ```
 
-## Anschluss-Schritt 2: Duplikate erkennen
+## Anschluss-Schritt 2: Duplikate sind strukturell sichtbar
 
-Nach dem Scan bietet sich fast immer an:
-
-```text
-sources_detect_duplicates({})
-```
-
-Das Tool gruppiert alle aktiven Dateien per sha256-Hash und legt pro
-Duplikat-Set `duplicate-of`-Relationen an: der aelteste Eintrag
-(ueber `first_seen_at`) wird **kanonisch**, die anderen zeigen auf ihn.
-
-Rueckmeldung an den Benutzer:
-- Wenn `groups_found == 0`: "Keine Duplikate gefunden."
-- Wenn `groups_found > 0`: nenn die Zahl, und liste **bis zu 5**
-  Beispiel-Sets (je 1 Zeile: `sha256[:8]...  kanonisch ← N Kopien`).
-  Biete an: *"Wenn Du willst, kann ich die nicht-kanonischen Kopien
-  auflisten damit Du entscheiden kannst, ob manche geloescht werden."*
-
-### SQL fuer Duplikat-Uebersicht
+Seit Pipeline-Reform v2 (2026-05-16) ist Duplikat-Erkennung **kein
+eigener Schritt mehr**. Im hash-zentrierten Datastore-Modell ergibt
+sich aus den Locations pro Source automatisch:
 
 ```sql
-SELECT c.rel_path AS kanonisch, s.rel_path AS kopie, r.detected_at
-FROM agent_source_relations r
-JOIN agent_sources s ON s.id = r.from_source_id
-JOIN agent_sources c ON c.id = r.to_source_id
-WHERE r.kind = 'duplicate-of'
-ORDER BY c.rel_path, s.rel_path;
+-- Wie viele Inhalte haben mehrere Ablageorte (= sind dupliziert)?
+SELECT COUNT(*) AS n_duplicated_contents
+FROM (
+  SELECT source_id, COUNT(*) AS n_locations
+  FROM agent_source_locations
+  WHERE status = 'active'
+  GROUP BY source_id
+  HAVING n_locations > 1
+);
 ```
+
+Wenn ein Inhalt an 32 Stellen liegt: eine `agent_sources`-Zeile + 32
+`agent_source_locations`-Zeilen. Markdown läuft pro Hash **genau
+einmal** — also auch keine doppelten Extraktionen, kein Aufräum-
+Aufwand.
+
+### Top-Duplikate anzeigen (wenn der Nutzer fragt)
+
+```sql
+SELECT 
+  s.id, substr(s.sha256, 1, 12) AS hash,
+  COUNT(l.id) AS n_locations,
+  GROUP_CONCAT(l.rel_path, ' | ') AS paths
+FROM agent_sources s
+JOIN agent_source_locations l ON l.source_id = s.id AND l.status = 'active'
+WHERE s.status = 'active'
+GROUP BY s.id
+HAVING n_locations >= 3
+ORDER BY n_locations DESC
+LIMIT 10;
+```
+
+Rückmeldung an den Benutzer beim Scan:
+- Wenn nach `sources_register` mehrere Locations pro source entstanden
+  sind: nenn die Top-3 mit der höchsten Anzahl Locations als Hinweis,
+  ohne dramatisch zu werden ("Schon erwartet, das Hash-Modell handhabt
+  das automatisch").
+- Wenn der Nutzer aktiv aufräumen will: Liste der nicht-active Locations
+  + Vorschlag welche physisch aus sources/ entfernt werden könnten.
+
+**Achtung:** Bestandsprojekte aus der Zeit vor der Reform haben evtl.
+noch `agent_source_relations` mit `kind='duplicate-of'`. Diese Tabelle
+ist deprecated und wird durch die Schema-Migration gedroppt. Wenn Du
+Code aus der Zeit findest, der darauf zugreift, sag dem Nutzer
+Bescheid — das ist veraltet.
 
 ## Was Du NICHT tun sollst
 

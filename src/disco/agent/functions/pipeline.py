@@ -54,11 +54,11 @@ def _connect_for_pipeline_status() -> sqlite3.Connection:
             "rel_path": {
                 "type": "string",
                 "description": (
-                    "Relativ-Pfad zur Datei. Akzeptiert beide Konventionen: "
-                    "(a) relativ zum Rollen-Wurzelordner, also wie in "
-                    "agent_sources.rel_path (z.B. 'Elektro/foo.pdf'); "
-                    "(b) relativ zum Projekt-Root mit sources/-/context/-Praefix "
-                    "(z.B. 'sources/Elektro/foo.pdf'). Tool versucht beide."
+                    "Relativ-Pfad zur Datei. Im Hash-zentrierten Modell "
+                    "(Pipeline-Reform v2) wird über agent_source_locations "
+                    "gesucht. Akzeptiert: (a) relativ zum Rollen-Wurzelordner "
+                    "(z.B. 'Elektro/foo.pdf'), (b) mit sources/-/context/-"
+                    "Praefix. Tool versucht beide."
                 ),
             },
         },
@@ -89,17 +89,28 @@ def _pipeline_file_status(*, rel_path: str) -> dict[str, Any]:
 
     conn = _connect_for_pipeline_status()
     try:
-        # 1. agent_sources-Eintrag finden
-        # Versuche zuerst exakter Match, dann mit Praefix-Variante.
+        # 1. Source via Location finden (Hash-zentriertes Modell):
+        #    rel_path lebt in agent_source_locations, source-Identität
+        #    in agent_sources.
         row = conn.execute(
-            "SELECT id, kind, rel_path, status, sha256, size_bytes "
-            "FROM ds.agent_sources WHERE rel_path = ?",
+            "SELECT s.id, s.kind, l.rel_path AS loc_rel_path, "
+            "       s.status AS source_status, l.status AS loc_status, "
+            "       s.sha256, s.size_bytes "
+            "FROM ds.agent_source_locations l "
+            "JOIN ds.agent_sources s ON s.id = l.source_id "
+            "WHERE l.rel_path = ? "
+            "ORDER BY CASE WHEN l.status='active' THEN 0 ELSE 1 END LIMIT 1",
             (sources_rel,),
         ).fetchone()
         if row is None and rel_path != sources_rel:
             row = conn.execute(
-                "SELECT id, kind, rel_path, status, sha256, size_bytes "
-                "FROM ds.agent_sources WHERE rel_path = ?",
+                "SELECT s.id, s.kind, l.rel_path AS loc_rel_path, "
+                "       s.status AS source_status, l.status AS loc_status, "
+                "       s.sha256, s.size_bytes "
+                "FROM ds.agent_source_locations l "
+                "JOIN ds.agent_sources s ON s.id = l.source_id "
+                "WHERE l.rel_path = ? "
+                "ORDER BY CASE WHEN l.status='active' THEN 0 ELSE 1 END LIMIT 1",
                 (rel_path,),
             ).fetchone()
 
@@ -111,7 +122,7 @@ def _pipeline_file_status(*, rel_path: str) -> dict[str, Any]:
                 "step_1_registered": {
                     "status": "pending",
                     "reason": (
-                        f"Kein Eintrag in agent_sources fuer rel_path={rel_path!r}. "
+                        f"Keine agent_source_locations fuer rel_path={rel_path!r}. "
                         f"Datei ist nicht registriert. Ggf. sources_register laufen lassen."
                     ),
                 },
@@ -119,11 +130,15 @@ def _pipeline_file_status(*, rel_path: str) -> dict[str, Any]:
 
         file_id = int(row["id"])
         kind = row["kind"]
-        active = row["status"] == "active"
-        sources_rel_actual = row["rel_path"]
+        active = row["source_status"] == "active" and row["loc_status"] == "active"
+        sources_rel_actual = row["loc_rel_path"]
         # Projekt-relativer Pfad (mit sources/- oder context/-Praefix)
         role_prefix = "context" if kind == "context" else "sources"
-        project_rel = f"{role_prefix}/{sources_rel_actual}"
+        # Falls die Location schon den Präfix enthält (Bestandsdaten):
+        if sources_rel_actual.startswith(f"{role_prefix}/"):
+            project_rel = sources_rel_actual
+        else:
+            project_rel = f"{role_prefix}/{sources_rel_actual}"
 
         result: dict[str, Any] = {
             "rel_path": project_rel,
@@ -158,38 +173,21 @@ def _pipeline_file_status(*, rel_path: str) -> dict[str, Any]:
             "metadata_rows": meta_count,
         }
 
-        # Schritt 3 — Kanonik
-        rel_row = conn.execute(
-            "SELECT kind, to_source_id FROM ds.agent_source_relations "
-            "WHERE from_source_id = ? "
-            "AND kind IN ('duplicate-of', 'replaces', 'format-conversion-of') "
-            "LIMIT 1",
+        # Schritt 3 — Kanonik (im Hash-Modell strukturell trivial)
+        # Jede agent_sources-Zeile IST kanonisch — sie repräsentiert genau
+        # einen Inhalt. Mehrere Pfade derselben Datei sind als zusätzliche
+        # Locations sichtbar, nicht als Duplikate.
+        n_locations = conn.execute(
+            "SELECT COUNT(*) AS c FROM ds.agent_source_locations "
+            "WHERE source_id = ? AND status = 'active'",
             (file_id,),
-        ).fetchone()
-        if rel_row is None:
-            result["step_3_canonical"] = {"status": "done", "is_canonical": True}
-            is_canonical = True
-        else:
-            canon_path_row = conn.execute(
-                "SELECT rel_path, kind FROM ds.agent_sources WHERE id = ?",
-                (rel_row["to_source_id"],),
-            ).fetchone()
-            canon_path = (
-                f"{'context' if canon_path_row['kind'] == 'context' else 'sources'}/"
-                f"{canon_path_row['rel_path']}"
-                if canon_path_row else f"<id={rel_row['to_source_id']}>"
-            )
-            result["step_3_canonical"] = {
-                "status": "skipped_upstream",
-                "is_canonical": False,
-                "relation_kind": rel_row["kind"],
-                "canonical_path": canon_path,
-                "reason": (
-                    f"Datei ist '{rel_row['kind']}' von {canon_path}. "
-                    f"Pipeline arbeitet auf der kanonischen Version."
-                ),
-            }
-            is_canonical = False
+        ).fetchone()["c"]
+        result["step_3_canonical"] = {
+            "status": "done",
+            "is_canonical": True,
+            "n_active_locations": n_locations,
+        }
+        is_canonical = True  # Im Hash-Modell immer True
 
         # Schritt 4 — Routing
         if not is_canonical:

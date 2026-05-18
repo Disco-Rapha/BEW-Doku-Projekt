@@ -525,106 +525,96 @@ async def api_pipeline_status(slug: str):
                    for part in rel.parts):
                 continue
             n_fs += 1
-    # Defensiver SQL-Filter (1): Pfade mit '_' oder '.' als Prefix in irgendeinem
-    # Pfad-Part gelten als intern (Konvention, siehe sources.py _is_ignored).
-    # Bestandsdaten aus alten Code-Versionen koennen solche Eintraege noch als
-    # 'active' fuehren — beim naechsten regulaeren sources_register-Lauf werden
-    # sie automatisch auf status='deleted' gesetzt. Bis dahin haelt dieser
-    # Filter den Pipeline-Status konsistent zum FS-Counter (n_fs oben), der
-    # dieselbe Konvention anwendet.
+    # Pipeline-Status im Hash-zentrierten Modell (Pipeline-Reform v2):
+    # - rel_path / extension leben in agent_source_locations
+    # - "Kanonik" ist strukturell: agent_sources ist von Natur aus
+    #   dedupliziert (eine Zeile pro sha256). Kein Duplikat-Filter mehr.
+    # - "Indexable" = source hat mindestens eine aktive Location mit
+    #   indexable Extension (gleiche Konvention wie der FS-Counter).
+
+    # Defensiver SQL-Filter: Pfade mit '_' oder '.' Prefix gelten als
+    # intern (Konvention, siehe sources.py _is_ignored).
     NOT_INTERNAL = (
         "(('/' || {col}) NOT LIKE '%/\\_%' ESCAPE '\\' "
         "AND ('/' || {col}) NOT LIKE '%/.%')"
     )
-    AS_F = NOT_INTERNAL.format(col="s.rel_path")    # agent_sources alias 's'
-    WR_F = NOT_INTERNAL.format(col="w.rel_path")    # work_extraction_routing alias 'w'
+    LOC_NOT_INTERNAL = NOT_INTERNAL.format(col="l.rel_path")
+    WR_F = NOT_INTERNAL.format(col="w.rel_path")    # work_extraction_routing
     DM_F = NOT_INTERNAL.format(col="rel_path")      # agent_doc_markdown
     SD_F = NOT_INTERNAL.format(col="rel_path")      # agent_search_docs
 
-    # Defensiver SQL-Filter (2): Symmetrie zum FS-Counter — nur Files mit
-    # indexierbarer Extension zaehlen. Walker (sources_register) registriert
-    # bewusst breiter (alles ausser '_'/'.'/Suffix-Patterns), damit auch
-    # .res/.job/.zip/etc. fuer den Bestandsbericht erfasst sind. Aber die
-    # Pipeline (Routing/Extraction/Suchindex) verarbeitet nur INDEXABLE_EXT,
-    # also zaehlt sie auch nur dort. Ohne diesen Filter waere n_done > n_total
-    # in Bestandsprojekten mit gemischten Extensions.
     EXT_LIST = ",".join(f"'{e.lstrip('.')}'" for e in sorted(INDEXABLE_EXT))
-    EXT_AS = f"LOWER(s.extension) IN ({EXT_LIST})"
-    # Fuer agent_pdf_inventory/doc_markdown/search_docs ist der Extension-
-    # Filter nicht noetig: agent_pdf_inventory enthaelt nur PDFs (immer
-    # indexable), agent_doc_markdown nur Dokumente, die schon extrahiert
-    # wurden (per Definition indexable), agent_search_docs nur indizierte
-    # Dokumente. → Extension-Filter nur auf agent_sources noetig.
+    LOC_EXT_INDEXABLE = f"LOWER(l.extension) IN ({EXT_LIST})"
     ROUTABLE_LIST = ",".join(f"'{e.lstrip('.')}'" for e in sorted(ROUTABLE_EXT))
-    EXT_ROUTABLE_AS = f"LOWER(s.extension) IN ({ROUTABLE_LIST})"
+    LOC_EXT_ROUTABLE = f"LOWER(l.extension) IN ({ROUTABLE_LIST})"
 
+    # Helper: "source s ist registriert + indexable" als SQL-Snippet.
+    # Ein source qualifiziert sich, wenn er mindestens eine aktive
+    # Location mit indexable Extension hat (= mind. ein Pfad zeigt
+    # auf eine Datei, die die Pipeline verarbeiten würde).
+    def _source_has_active_location(ext_filter: str) -> str:
+        return (
+            "EXISTS ("
+            "  SELECT 1 FROM ds.agent_source_locations l "
+            "  WHERE l.source_id = s.id "
+            "    AND l.status = 'active' "
+            f"    AND {LOC_NOT_INTERNAL} "
+            f"    AND {ext_filter} "
+            ")"
+        )
+
+    SOURCE_INDEXABLE = _source_has_active_location(LOC_EXT_INDEXABLE)
+    SOURCE_ROUTABLE = _source_has_active_location(LOC_EXT_ROUTABLE)
+
+    # Schritt 1 — Registrierung: Counter über LOCATIONS (=physische Files),
+    # damit n_fs (FS-Count) vergleichbar ist. Im Hash-Modell kann eine
+    # Source mehrere Locations haben — wir zählen die einzelnen Ablageorte,
+    # nicht die Inhalte. Damit ist Schritt 1 ehrlich gegenüber dem User
+    # ("X von Y physischen Files sind registriert").
     n_registered = _count(
+        f"SELECT COUNT(*) FROM ds.agent_source_locations l "
+        f"WHERE l.status='active' AND {LOC_NOT_INTERNAL} AND {LOC_EXT_INDEXABLE}"
+    )
+    # Anzahl unique Sources (Inhalte) mit mindestens einer aktiven indexable
+    # Location — Bezugsgröße für Schritte 2-6 (Pipeline arbeitet pro Hash).
+    n_indexable_sources = _count(
         f"SELECT COUNT(*) FROM ds.agent_sources s "
-        f"WHERE s.status='active' AND {AS_F} AND {EXT_AS}"
+        f"WHERE s.status='active' AND {SOURCE_INDEXABLE}"
     )
 
-    # Schritt 2 — Externe Anreicherung: Files mit Eintrag in
-    # agent_source_metadata. Soll-Menge = kanonische Files (Duplikate
-    # brauchen keine separate Anreicherung, sie zeigen ueber
-    # duplicate-of auf das kanonische Original).
-    has_sp = 0  # SharePoint-Connector ist 2026-05-08 entfernt — Feld
-                # bleibt als 0 fuer Kompatibilitaet zum API-Response.
-    canonical_filter_for_enrich = (
-        "AND NOT EXISTS ("
-        "  SELECT 1 FROM ds.agent_source_relations r "
-        "  WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'"
-        ")"
-    )
+    # Schritt 2 — Externe Anreicherung: wieviele Inhalte haben Metadata?
+    has_sp = 0  # SharePoint-Connector ist 2026-05-08 entfernt
     has_meta = _count(f"""
         SELECT COUNT(DISTINCT s.id)
         FROM ds.agent_sources s
         JOIN ds.agent_source_metadata m ON m.source_id = s.id
-        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
-        {canonical_filter_for_enrich}
+        WHERE s.status='active' AND {SOURCE_INDEXABLE}
     """)
-    n_enriched = _count(f"""
-            SELECT COUNT(DISTINCT s.id) FROM ds.agent_sources s
-            WHERE s.status='active' AND {AS_F} AND {EXT_AS}
-            {canonical_filter_for_enrich}
-            AND EXISTS (
-                SELECT 1 FROM ds.agent_source_metadata m WHERE m.source_id = s.id
-            )
-        """)
+    n_enriched = has_meta
     has_any_external = (has_meta + has_sp) > 0
 
-    # Schritt 3 — Kanonik: Files OHNE duplicate-of-Relation als from-Seite.
-    # Schema-Spalte ist `from_source_id`, NICHT `source_id` (frueherer Bug:
-    # SQLite warf OperationalError, _count fing ihn ab und lieferte 0 →
-    # n_canonical immer 0 → Maßstab fuer Schritte 4-6 fiel auf n_registered
-    # zurueck, was Duplikate mitzaehlte).
-    CANONICAL_SUBQUERY = f"""
-        SELECT s.id FROM ds.agent_sources s
-        WHERE s.status='active' AND {AS_F} AND {EXT_AS}
-        AND NOT EXISTS (
-            SELECT 1 FROM ds.agent_source_relations r
-            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
-        )
-    """
-    n_canonical = _count(f"SELECT COUNT(*) FROM ({CANONICAL_SUBQUERY}) c")
+    # Schritt 3 — Kanonik trivial im Hash-Modell: n_canonical = n_indexable_sources
+    # (jeder eindeutige Inhalt ist per Definition kanonisch).
+    n_canonical = n_indexable_sources
 
-    # Schmalere Subquery: nur kanonische Files mit Extension, die das
-    # Routing-Modul tatsaechlich versteht. Files ausserhalb (z.B. DOCX,
-    # PPTX, MD, TXT) zaehlen separat als 'unsupported'.
-    CANONICAL_ROUTABLE_SUBQUERY = f"""
-        SELECT s.id FROM ds.agent_sources s
-        WHERE s.status='active' AND {AS_F} AND {EXT_ROUTABLE_AS}
-        AND NOT EXISTS (
-            SELECT 1 FROM ds.agent_source_relations r
-            WHERE r.from_source_id = s.id AND r.kind = 'duplicate-of'
-        )
-    """
+    # Schmalere Variante: nur Sources mit ROUTABLE-Extension (PDF/Excel/
+    # DWG/Bilder). Sources mit nur DOCX/PPTX/MD/TXT-Locations zaehlen
+    # nicht — sie werden vom Routing nie angefasst.
     n_canonical_routable = _count(
-        f"SELECT COUNT(*) FROM ({CANONICAL_ROUTABLE_SUBQUERY}) c"
+        f"SELECT COUNT(*) FROM ds.agent_sources s "
+        f"WHERE s.status='active' AND {SOURCE_ROUTABLE}"
     )
-    # Implizit unsupported: kanonisch UND Extension nicht in ROUTABLE.
-    # Diese Files werden vom Routing-Flow nie angefasst — der Schritt
-    # darf sie NICHT als pending fuehren.
     n_routed_unsupported_by_ext = max(0, n_canonical - n_canonical_routable)
+
+    # SQL-Snippet "ID-Liste indexable Sources" für JOINs in Schritten 4-6.
+    INDEXABLE_SOURCE_IDS = (
+        "SELECT s.id FROM ds.agent_sources s "
+        f"WHERE s.status='active' AND {SOURCE_INDEXABLE}"
+    )
+    ROUTABLE_SOURCE_IDS = (
+        "SELECT s.id FROM ds.agent_sources s "
+        f"WHERE s.status='active' AND {SOURCE_ROUTABLE}"
+    )
 
     # Schritte 4-6 — neuer Maßstab pro Schritt:
     #   Schritt 4 Routing:    Soll-Menge = kanonische Files
@@ -652,14 +642,14 @@ async def api_pipeline_status(slug: str):
         FROM work_extraction_routing w
         WHERE w.engine IS NOT NULL AND w.engine != ''
         AND w.error IS NULL
-        AND w.file_id IN ({CANONICAL_SUBQUERY})
+        AND w.file_id IN ({ROUTABLE_SOURCE_IDS})
     """)
     n_routed_unsupported_explicit = _count(f"""
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
         WHERE (w.engine IS NULL OR w.engine = '')
         AND w.error IS NULL
-        AND w.file_id IN ({CANONICAL_SUBQUERY})
+        AND w.file_id IN ({ROUTABLE_SOURCE_IDS})
     """)
     # Gesamt-unsupported = explizit (Routing-Flow hat Eintrag mit engine='' angelegt)
     # PLUS implizit (Extension nicht routable, Routing-Flow ignoriert die Datei).
@@ -670,7 +660,7 @@ async def api_pipeline_status(slug: str):
         SELECT COUNT(DISTINCT w.file_id)
         FROM work_extraction_routing w
         WHERE w.error IS NOT NULL
-        AND w.file_id IN ({CANONICAL_SUBQUERY})
+        AND w.file_id IN ({ROUTABLE_SOURCE_IDS})
     """)
     # Pending Routing = kanonisch-routable − bereits bewertet. Die
     # implizit unsupported Files (Extension nicht routable) zaehlen NICHT
@@ -690,19 +680,19 @@ async def api_pipeline_status(slug: str):
         SELECT COUNT(DISTINCT d.file_id)
         FROM ds.agent_doc_markdown d
         WHERE d.error IS NULL AND d.char_count > 0
-        AND d.file_id IN ({CANONICAL_SUBQUERY})
+        AND d.file_id IN ({INDEXABLE_SOURCE_IDS})
     """)
     n_extracted_failed = _count(f"""
         SELECT COUNT(DISTINCT d.file_id)
         FROM ds.agent_doc_markdown d
         WHERE d.error IS NOT NULL
-        AND d.file_id IN ({CANONICAL_SUBQUERY})
+        AND d.file_id IN ({INDEXABLE_SOURCE_IDS})
     """)
     n_extracted_empty = _count(f"""
         SELECT COUNT(DISTINCT d.file_id)
         FROM ds.agent_doc_markdown d
         WHERE d.error IS NULL AND COALESCE(d.char_count, 0) = 0
-        AND d.file_id IN ({CANONICAL_SUBQUERY})
+        AND d.file_id IN ({INDEXABLE_SOURCE_IDS})
     """)
     # Soll-Menge fuer Extraction = kanonisch-routable abzueglich der
     # Files, die das Routing als unsupported (kein Engine-Mapping) oder
@@ -731,7 +721,7 @@ async def api_pipeline_status(slug: str):
     #     vor unserer Failure-Aware-Filterung lief).
     OK_EXTRACTED_REL_PATHS = f"""
         SELECT d.rel_path FROM ds.agent_doc_markdown d
-        WHERE d.file_id IN ({CANONICAL_SUBQUERY})
+        WHERE d.file_id IN ({INDEXABLE_SOURCE_IDS})
         AND d.error IS NULL AND d.char_count > 0
     """
     n_indexed_canonical = _count(f"""
@@ -2125,6 +2115,9 @@ async def ws_chat(
             payload = json.loads(data)
             user_text = (payload.get("text") or "").strip()
             attachments = payload.get("attachments") or []
+            chat_mode = (payload.get("mode") or "build").strip().lower()
+            if chat_mode not in ("build", "plan", "research"):
+                chat_mode = "build"
             # Sanity-Cap: nie mehr als CHAT_ATTACH_MAX_PER_MESSAGE durchlassen.
             if isinstance(attachments, list) and len(attachments) > CHAT_ATTACH_MAX_PER_MESSAGE:
                 attachments = attachments[:CHAT_ATTACH_MAX_PER_MESSAGE]
@@ -2146,11 +2139,17 @@ async def ws_chat(
                 SENTINEL = object()
 
                 def _worker() -> None:
+                    # Chat-Mode pro Turn setzen — Tools koennen das per
+                    # context.chat_mode() / is_read_only_mode() lesen.
+                    from ..agent.context import use_chat_mode
                     try:
-                        for event in svc.run_turn(
-                            project_slug, user_text, attachments=attachments,
-                        ):
-                            loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
+                        with use_chat_mode(chat_mode):
+                            for event in svc.run_turn(
+                                project_slug, user_text,
+                                attachments=attachments,
+                                chat_mode=chat_mode,
+                            ):
+                                loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
                     except Exception as exc:
                         logger.exception("AgentService-Fehler")
                         loop.call_soon_threadsafe(

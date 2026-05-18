@@ -1,7 +1,18 @@
 # Disco — Architekturkonzept
 
-**Stand:** 2026-04-25, gilt für Stufe 1 (DB-Split + 4-Ebenen-Datenkonzept
-sind im Code umgesetzt).
+**Stand:** 2026-04-25, mit Update-Banner 2026-05-17 für Pipeline-Reform v2.
+
+> 📌 **Update 2026-05-16 — Pipeline-Reform v2.** Das datastore-Schema in
+> Ebene 1+2 ist seit der Reform **hash-zentriert**: eine
+> `agent_sources`-Zeile pro `sha256` (UNIQUE), eine separate Tabelle
+> `agent_source_locations` für Ablageorte. `agent_source_relations` gibt
+> es nicht mehr — Duplikate sind strukturell als mehrere Locations pro
+> Source sichtbar. Dieses Dokument ist im Großteil weiter korrekt
+> (Ebenen-Aufteilung, Tools-/Pipeline-Trennung, Konventionen), aber die
+> Tabellen-Listen unten erwähnen teils noch `agent_source_relations` und
+> `sources_detect_duplicates` — diese sind seit v2 obsolet bzw.
+> Read-Only-Stub. Vollständiges aktuelles Schema:
+> [`docs/concepts/pipeline-reform-v2.md`](concepts/pipeline-reform-v2.md).
 
 **Zielgruppe:** Mitentwicklerinnen und Mitentwickler von Disco — Nutzer,
 Claude, künftige Beiträger. Wer am System arbeitet, muss wissen, in
@@ -72,7 +83,7 @@ Drei Probleme lösen wir mit der Trennung:
 | Ebene | Name | Wo liegt das | Wer schreibt | Wer liest aus dem Chat |
 |---|---|---|---|---|
 | **0** | **Source-Connector** | Connector-Code + Sync-State (heute trivial: User legt Datei in `sources/`/`context/` ab) | Connector-Code (heute: User selbst) | indirekt — Ebene 1 spiegelt das Resultat |
-| **1** | **Provenance** | `datastore.db` (`agent_sources`, `agent_source_metadata`, `agent_source_relations`, `agent_source_scans`) | nur Registry-Tools (`sources_*`) | lesend über `ds.*`-Präfix |
+| **1** | **Provenance** | `datastore.db` (`agent_sources` pro Hash, `agent_source_locations` pro Ablageort, `agent_source_metadata`, `agent_source_scans`) | nur Registry-Tools (`sources_*`) | lesend über `ds.*`-Präfix |
 | **2** | **Content** | `datastore.db` (`agent_pdf_markdown`, `agent_pdf_page_offsets`, `agent_search_*`, später Chunks + Embeddings) | nur Pipelines/Flows (`pdf_to_markdown`, `build_search_index`) | lesend über `pdf_markdown_read`, `search_index`, `ds.*` |
 | **3** | **Knowledge / Workspace** | `workspace.db` (`work_*` / `agent_*` / `context_*`) + materialisierte Snapshots in `exports/` | Agent direkt + Flows | r/w |
 
@@ -165,9 +176,10 @@ stammen sie, welche Version ist das, gibt es Duplikate oder Vorgänger?"
 - **Begleit-Metadaten** in `agent_source_metadata` — Excel-Sidecar,
   Provider-Attribute, freie key/value-Felder. Über die stabile ID an
   die Datei angehängt.
-- **Beziehungen zwischen Dateien** in `agent_source_relations` —
-  `duplicate-of`, `replaces`, `derived-from`, `format-conversion-of`.
-  Werden von Registry-Tools gepflegt.
+- **Ablageorte / Duplikate** sind seit Pipeline-Reform v2 strukturell
+  in `agent_source_locations` abgebildet — eine Zeile pro Pfad, mehrere
+  pro `source_id` möglich. Eine separate Beziehungs-Tabelle für
+  `duplicate-of` etc. gibt es nicht mehr.
 - **Scan-Historie** in `agent_source_scans` — jeder Lauf eines
   Connectors wird protokolliert (wann, welcher Provider, was hat sich
   geändert).
@@ -177,9 +189,11 @@ stammen sie, welche Version ist das, gibt es Duplikate oder Vorgänger?"
 Weil jede Drift in der Registry sofort jede weitere Ebene verfälscht:
 falsche Zitate, falsche SOLL/IST-Berichte, verlorene Duplikate. Disco
 darf Ebene 1 lesen (über `ds.*`-Präfix) und über die kuratierten
-Registry-Tools (`sources_register`, `sources_attach_metadata`,
-`sources_detect_duplicates`) schreibend **auslösen** — aber niemals
-freie `sqlite_write`-Eingriffe.
+Registry-Tools (`sources_register`, `sources_attach_metadata`)
+schreibend **auslösen** — aber niemals freie `sqlite_write`-Eingriffe.
+(`sources_detect_duplicates` ist seit Pipeline-Reform v2 ein Read-Only-
+Stub, weil Duplikate strukturell in `agent_source_locations` sichtbar
+sind.)
 
 ### Enrichment-Provider
 
@@ -324,10 +338,9 @@ Referenzblock:
    `.jpg`. `fs_read` ist für Memory-, Manifest-, Script- und
    Textdateien.
 3. **Provenance nicht mit SQL verbiegen.** Einträge in
-   `ds.agent_sources`, `ds.agent_source_metadata`,
-   `ds.agent_source_relations` ändert der Agent **nie** direkt — nur
-   über `sources_register`, `sources_attach_metadata`,
-   `sources_detect_duplicates`.
+   `ds.agent_sources`, `ds.agent_source_locations`,
+   `ds.agent_source_metadata` ändert der Agent **nie** direkt — nur
+   über `sources_register`, `sources_attach_metadata`.
 4. **Rolle folgt dem Ordner.** Datei in `sources/` = Rolle `source`,
    in `context/` = Rolle `context`. Keine Overrides, keine
    Mischordner. Wenn der Nutzer eine Datei in beiden Rollen braucht,

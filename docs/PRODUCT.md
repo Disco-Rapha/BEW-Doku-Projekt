@@ -293,9 +293,9 @@ Cost-Tracking ist in Place.
   müsste Datums-aware werden, Fristen aus Klauseln ableiten und
   proaktiv erinnern.
 - **Cross-Document-Linkage explizit modellieren** — heute haben wir
-  `agent_source_relations` für Duplikate/Replaces. Für Claim-Trail
-  bräuchten wir reichere Relations: „antwortet auf", „bezieht sich auf
-  Klausel", „belegt Cause für".
+  Duplikate strukturell als mehrere `agent_source_locations` pro Hash.
+  Für Claim-Trail bräuchten wir reichere Relations: „antwortet auf",
+  „bezieht sich auf Klausel", „belegt Cause für".
 - **Workflow-Engine für Genehmigungs-Prozesse** — wer hat was wann
   unterschrieben, was steht aus.
 - **E-Mail-/Kommunikations-Integration** — Outlook/MS365-Anbindung für

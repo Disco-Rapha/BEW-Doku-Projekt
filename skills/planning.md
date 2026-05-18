@@ -184,8 +184,8 @@ Ergebnis: Tabelle agent_classification + Excel-Export in exports/.
 ## Notizen
 
 **2026-04-17 10:15:00** — Plan angelegt.
-**2026-04-17 11:40:00** — Schritt 1 erledigt: 493 Dateien registriert,
-12 Duplikate erkannt (alle als duplicate-of markiert).
+**2026-04-17 11:40:00** — Schritt 1 erledigt: 481 eindeutige Inhalte
+registriert (493 Files insgesamt → 12 Inhalte hatten mehrere Locations).
 **2026-04-17 14:20:00** — Schritt 2 erledigt: Stichprobe 20/20 korrekt,
 Prompt funktioniert. Starte jetzt mit Bulk.
 ```

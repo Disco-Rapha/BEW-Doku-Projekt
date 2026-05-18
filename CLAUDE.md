@@ -107,16 +107,82 @@ mit fester Struktur:
 ### 2. Quellen anbinden
 
 Quelldateien werden als Paket in `sources/` abgelegt (manuell oder
-später via SharePoint-Sync). Disco registriert sie in einer **Registry**
-(`agent_sources`): Pfad, SHA-256-Hash, Größe, Status, Begleit-Metadaten.
-Bei jedem neuen Paket erkennt er Delta (neu/geändert/gelöscht) automatisch
-über Hash-Vergleich.
+später via SharePoint-Sync). Disco registriert sie hash-zentriert in
+`datastore.db` (siehe nächster Abschnitt). Bei jedem neuen Paket
+erkennt er Delta (neu/geändert/gelöscht/verschoben) automatisch über
+Hash-Vergleich.
 
 Typische Realität: Generalunternehmer liefert kontinuierlich neue
 Dokumente. Duplikate, Revisionen, Format-Konversionen (DWG→PDF),
 kommentierte Kopien — ein Dokumenten-Chaos über Monate. Disco hält
-Ordnung über die Registry + Relations-Tabelle (`duplicate-of`,
-`replaces`, `derived-from`, etc.).
+Ordnung über das Hash-Modell: ein Inhalt = eine `agent_sources`-Zeile,
+beliebig viele Ablageorte = `agent_source_locations`-Zeilen.
+
+### 2a. Datastore-Modell (Hash-zentriert, seit 2026-05-16)
+
+Die Reform "Pipeline v2" trennt **Inhalt** und **Ablage** strukturell:
+
+```
+agent_sources           — eine Zeile pro Hash (sha256 UNIQUE)
+                          Spalten: id, sha256, size_bytes, kind, status,
+                          first_seen_at, last_seen_at, ...
+                          → Markdown, Embeddings, FTS-Indizes hängen hier dran
+
+agent_source_locations  — eine Zeile pro Ablageort (mehrere pro source erlaubt)
+                          Spalten: id, source_id, rel_path, logical_path, origin,
+                          status, filename, folder, sp_item_id, sp_web_url, ...
+
+agent_doc_markdown      — Markdown pro source_id (= pro Hash)
+agent_doc_unit_offsets  — Page-Offsets pro source_id
+agent_source_metadata   — externe Metadaten pro source_id
+```
+
+**Konventionen, die Disco kennen muss:**
+
+1. **Eine Datei = ein Inhalt (Hash) + ein/mehrere Ablageorte.** Wenn
+   derselbe Inhalt an drei Stellen liegt: eine `agent_sources`-Zeile,
+   drei `agent_source_locations`-Zeilen.
+2. **`agent_source_relations` gibt es nicht mehr.** Duplikate sind
+   strukturell sichtbar (mehrere locations pro source). Kein
+   `kind='duplicate-of'` mehr nötig — die Information ergibt sich aus
+   `COUNT(*) FROM agent_source_locations GROUP BY source_id`.
+3. **Markdown läuft genau einmal pro Hash.** Wenn ein File an 32 Stellen
+   liegt, gibt es trotzdem nur eine Markdown-Extraktion.
+4. **Standard-Queries sind inhalt-orientiert.** Auswertungen, Reports,
+   Klassifikationen joinen `agent_sources` (= ein Eintrag pro Inhalt).
+   Locations holt man nur dazu, wenn der Ablageort konkret relevant ist
+   (z.B. SharePoint-Felder, oder Reports mit Pfad-Anzeige).
+5. **Move/Rename = UPDATE auf location.rel_path** (Hash unverändert,
+   keine neue source-Zeile, kein neuer Markdown-Run).
+6. **Delete = location.status='deleted'** (Soft-Delete; wenn letzte
+   active location einer source weg ist, kann auch source.status auf
+   'deleted'). Markdown bleibt erreichbar.
+7. **Neue Version = delete + new** (alter Hash-source bleibt mit
+   `status='deleted'`, neuer Hash-source kommt frisch).
+8. **Wiederauferstehung erlaubt:** Eine gelöschte Datei, die unter
+   gleichem Pfad + Hash wieder auftaucht, wird einfach reaktiviert
+   (`status='active'`). Kein Re-Extract — Hash-Identität, alles ist da.
+
+**Workspace-Bindung — `sha256_pinned`-Konvention:**
+
+Jede Auswertung in `workspace.db` (DCC-Klassifikation, Reports,
+Annotations) pinnt beim Schreiben drei Felder:
+
+```sql
+source_id              INTEGER NOT NULL,    -- zeigt auf agent_sources.id
+source_sha256_pinned   TEXT NOT NULL,       -- Hash zum Auswertungs-Zeitpunkt
+location_id            INTEGER,             -- optional, wenn Ablage-spezifisch
+evaluated_at           TEXT NOT NULL
+```
+
+Damit lässt sich der Validity-Status einer Auswertung jederzeit per
+JOIN berechnen:
+- `valid` — agent_sources.sha256 = source_sha256_pinned, status='active'
+- `stale_replaced` — sha256 hat sich geändert (neue Version)
+- `stale_deleted` — source.status='deleted'
+
+Disco markiert stale Auswertungen in Reports, schlägt Re-Runs vor,
+löscht aber **nie** automatisch.
 
 ### 3. Kontext aufbauen
 
@@ -230,6 +296,8 @@ Siehe `src/disco/flows/README.md` für das Entwickler-Howto.
 - [x] **Sources-Registry**: `sources_register` (Hash-basierte
       Delta-Detection, default scope `both`),
       `sources_attach_metadata`, `sources_detect_duplicates`
+      (Read-Only-Stub seit Pipeline-Reform v2 — Duplikate sind
+      strukturell in `agent_source_locations` sichtbar)
 - [x] **Pipeline**: `pipeline_file_status` (Routing/Markdown-Stand
       pro Datei)
 - [x] **Dokument-Markdown**: `doc_markdown_read` (liest
@@ -360,8 +428,14 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
    Ergebnis liefern.
 5. **Nachvollziehbarkeit.** Jeder Scan → `agent_source_scans`, jedes
    Skript → `agent_script_runs`, jeder Chat → `chat_messages`.
-6. **Vor neuen Features fragen:** in welche Phase gehört das?
-7. **Prod-Migrierbarkeit (gilt ab 2026-04-24).** Seit Produktivbetrieb auf
+6. **Workspace-Pin-Konvention (Pipeline-Reform v2, 2026-05-16).** Jede
+   work_*-/agent_*-Tabelle, die auf eine Source zeigt, hat drei Pflicht-
+   Felder: `source_id` (ds.agent_sources.id), `source_sha256_pinned`
+   (Hash zum Schreib-Zeitpunkt, Audit-Pin), `evaluated_at`. Optional
+   `location_id`, wenn die Auswertung Ablage-spezifisch ist. Validity-
+   Check via JOIN — siehe Konzept-Doc `docs/concepts/pipeline-reform-v2.md`.
+7. **Vor neuen Features fragen:** in welche Phase gehört das?
+8. **Prod-Migrierbarkeit (gilt ab 2026-04-24).** Seit Produktivbetrieb auf
    `~/Disco/projects/` gelten Bestandsdaten als unveränderlich. Jede
    Änderung an Schema, Filesystem-Layout, Memory-Format, Flow-Runner-
    Contract oder Config-Schema MUSS eine Migration mitliefern, die
@@ -378,7 +452,7 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
      im Chat + dokumentiertem Export-Pfad.
    - **Vor Prod-Anwendung:** Migration gegen eine rsync-Kopie eines
      echten Prod-Projekts testen, nicht nur gegen frisch-initialisierte.
-8. **Entwicklungs-Pipeline (gilt ab 2026-04-24, Zyklus-Update 2026-04-24).**
+9. **Entwicklungs-Pipeline (gilt ab 2026-04-24, Zyklus-Update 2026-04-24).**
    Trunk-Based-Setup mit genau **zwei Branches**: `main` (Prod) und `dev`
    (Arbeit). Keine Feature-/Hotfix-Branches, **keine Pull-Requests auf
    github.com als Gate** — fuer ein Zwei-Personen-Team (User + Claude)
@@ -460,7 +534,7 @@ Kundendaten verlassen nie das Repo. `.gitignore` schützt als Sicherheitsnetz.
    realistische Tests kopieren wir bei Bedarf ein echtes Prod-Projekt
    per `scripts/mirror_prod_project.sh <slug>` ins Dev-Workspace.
 
-9. **Network-Egress strikt kontrolliert (gilt ab 2026-04-25).** Disco
+10. **Network-Egress strikt kontrolliert (gilt ab 2026-04-25).** Disco
    ist lokal-first. Externe Verbindungen gibt es ausschliesslich zu
    einer abschliessend aufgelisteten Menge (Azure Foundry / Sweden
    Central, Azure DI / Sweden Central) — siehe

@@ -31,10 +31,13 @@ logger = logging.getLogger(__name__)
 # Konstanten
 # ---------------------------------------------------------------------------
 
-DEFAULT_LIST_LIMIT = 500
+DEFAULT_LIST_LIMIT = 200          # bewusst klein — gegen Context-Bloat (Feedback 14.05)
 MAX_LIST_LIMIT = 5000
+# Output-Byte-Cap zusaetzlich zum Item-Cap. Wenn die JSON-Repraesentation
+# darueber wuerde, koennen wir vorzeitig abbrechen.
+MAX_LIST_BYTES = 8000             # ~2000 Token — passt in einen normalen Tool-Result
 
-DEFAULT_READ_BYTES = 30_000       # 30 KB ≈ 7,5 k Tokens — Sockel-schonend
+DEFAULT_READ_BYTES = 12_000       # 12 KB ≈ 3 k Tokens — Sockel-schonend (Audit 14.05)
 MAX_READ_BYTES = 2_000_000        # 2 MB Text — harte Obergrenze gegen Kontext-Explosion
 MAX_READ_BYTES_BINARY = 5_000_000 # 5 MB Binaer (base64-Output ist ~33% groesser)
 # Hinweis fuer Disco: bei truncated=True kann er mit max_bytes=N gezielt
@@ -72,6 +75,8 @@ BINARY_SUFFIXES = {
         "Listet Dateien und Unterordner unter einem Pfad relativ zu data/. "
         "Nutze leeren Pfad oder '.' fuer das Wurzel-data-Verzeichnis. "
         "Optional rekursiv und mit Glob-Pattern (z.B. '*.pdf'). "
+        "Output ist BEWUSST kompakt (max ~200 items, ~8KB) — bei groesseren "
+        "Verzeichnissen filter via pattern oder recursive=false. "
         "Kein Zugriff ausserhalb von data/."
     ),
     parameters={
@@ -93,10 +98,18 @@ BINARY_SUFFIXES = {
                 "type": "integer",
                 "description": f"Max. Eintraege (Default {DEFAULT_LIST_LIMIT}, Max {MAX_LIST_LIMIT}).",
             },
+            "include_canonical_path": {
+                "type": "boolean",
+                "description": (
+                    "Wenn true, wird pro Entry zusaetzlich canonical_path (NFC + '/') "
+                    "geliefert. Default: false (rel_path reicht meistens; ein "
+                    "canonical_path-Lookup geht via sqlite_query auf agent_sources)."
+                ),
+            },
         },
         "required": [],
     },
-    returns="{root, path, entries: [{name, type, size, modified, rel_path}], total, truncated}",
+    returns="{root, path, entries: [{name, type, size, modified, rel_path[, canonical_path]}], total, truncated, truncation_reason}",
 )
 def _fs_list(
     *,
@@ -104,6 +117,7 @@ def _fs_list(
     recursive: bool = False,
     pattern: str | None = None,
     limit: int = DEFAULT_LIST_LIMIT,
+    include_canonical_path: bool = False,
 ) -> dict[str, Any]:
     root = _data_root()
     target = _resolve_under_data(path or ".")
@@ -123,10 +137,23 @@ def _fs_list(
 
     entries: list[dict[str, Any]] = []
     total_seen = 0
+    bytes_running = 100  # grobe Initial-Schaetzung fuer JSON-Wrapper
+    truncation_reason: str | None = None
+
+    # Resolver einmalig holen (statt pro Entry)
+    from disco.fs.path_resolver import get_resolver
+    resolver = get_resolver()
+
     for p in it:
         total_seen += 1
         if len(entries) >= effective_limit:
-            continue  # weiterzaehlen fuer total, aber nicht mehr sammeln
+            if truncation_reason is None:
+                truncation_reason = f"item_limit={effective_limit}"
+            continue
+        if bytes_running >= MAX_LIST_BYTES:
+            if truncation_reason is None:
+                truncation_reason = f"byte_limit={MAX_LIST_BYTES}"
+            continue
 
         # Symlink-Schutz: aufloesen und pruefen, dass das Ziel unter data_dir bleibt
         try:
@@ -141,15 +168,22 @@ def _fs_list(
         except OSError:
             continue
 
-        entries.append(
-            {
-                "name": p.name,
-                "type": "dir" if p.is_dir() else "file",
-                "size": stat.st_size if p.is_file() else None,
-                "modified": _fmt_mtime(stat.st_mtime),
-                "rel_path": str(p.relative_to(root)),
-            }
-        )
+        # rel_path = FS-actual (mit Mac-Quirks); canonical_path nur on-demand.
+        # Default-Output bewusst schlank — Disco kann fuer canonical-Form
+        # gezielt sqlite_query auf agent_sources nutzen.
+        fs_rel = str(p.relative_to(root))
+        entry: dict[str, Any] = {
+            "name": resolver.to_canonical(p.name),
+            "type": "dir" if p.is_dir() else "file",
+            "size": stat.st_size if p.is_file() else None,
+            "modified": _fmt_mtime(stat.st_mtime),
+            "rel_path": fs_rel,
+        }
+        if include_canonical_path:
+            entry["canonical_path"] = resolver.to_canonical(fs_rel)
+        entries.append(entry)
+        # Approx-Byte-Tracking: name + rel_path + JSON-Wrapper-Overhead
+        bytes_running += len(entry["name"]) + len(fs_rel) + 80
 
     # Sort: Ordner zuerst, dann alphabetisch
     entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
@@ -160,6 +194,7 @@ def _fs_list(
         "entries": entries,
         "total": total_seen,
         "truncated": total_seen > len(entries),
+        "truncation_reason": truncation_reason,
     }
 
 
@@ -171,12 +206,16 @@ def _fs_list(
 @register(
     name="fs_read",
     description=(
-        "Liest eine Textdatei unter data/. Fuer PDFs bitte pdf_markdown_read "
-        "verwenden (ueber Flow `pdf_to_markdown` vorher befuellt). "
-        "Default-Limit ist 30 KB — fuer grosse Reports/Skripte erst mal "
-        "den Kopf lesen, bei Bedarf gezielt mit max_bytes=<N> oder einem "
-        "Search-/Inspect-Tool nachladen statt blind alles zu ziehen. "
-        "Bei truncated=true verraet size_bytes die Original-Groesse. "
+        "Liest eine Textdatei unter data/. Fuer PDFs bitte doc_markdown_read "
+        "verwenden (extrahierter Markdown). "
+        "Default-Limit ist 12 KB (~3k Tokens) — Sockel-schonend. "
+        "WICHTIG: Wenn truncated=true im Response, ist die Datei groesser "
+        "als das Default-Limit. Du kannst dann ohne Qualitaetsverlust einen "
+        "zweiten Call mit hoeherem max_bytes machen (z.B. max_bytes=50000 "
+        "oder den vollen size_bytes-Wert aus der ersten Response), wenn der "
+        "Inhalt fuer die Aufgabe wirklich relevant ist. Du verlierst keinen "
+        "Kontext durch das Default — nur Tokens, falls Du den Rest nicht "
+        "brauchst. size_bytes im Response verraet die Original-Groesse. "
         "Kein Zugriff ausserhalb von data/."
     ),
     parameters={
@@ -188,7 +227,11 @@ def _fs_list(
             },
             "max_bytes": {
                 "type": "integer",
-                "description": f"Max. Bytes, die gelesen werden (Default {DEFAULT_READ_BYTES}, Max {MAX_READ_BYTES}).",
+                "description": (
+                    f"Max. Bytes, die gelesen werden (Default {DEFAULT_READ_BYTES}, "
+                    f"Max {MAX_READ_BYTES}). Bei truncated=true ohne Qualitaetsverlust "
+                    f"einen zweiten Call mit hoeherem Wert machen."
+                ),
             },
             "encoding": {
                 "type": "string",
@@ -518,7 +561,14 @@ def _data_root() -> Path:
 
 
 def _resolve_under_data(path: str) -> Path:
-    """Resolved `path` gegen data_dir; wirft ValueError bei Traversal."""
+    """Resolved `path` gegen data_dir; wirft ValueError bei Traversal.
+
+    Mit Unicode-/Pfad-Resolver-Fallback: wenn der direkte Pfad nicht existiert
+    und der Pfad relativ ist, wird der PathResolver gefragt ob er eine
+    FS-Variante findet (NFC→NFD auf macOS, ' : '-Substitution etc.). Damit
+    kann Disco mit kanonischen Pfaden arbeiten, auch wenn das Filesystem
+    eine andere Repraesentation speichert (Mac-NFD-Quirk).
+    """
     root = _data_root()
     p = Path(path)
     candidate = p if p.is_absolute() else (root / p)
@@ -527,6 +577,68 @@ def _resolve_under_data(path: str) -> Path:
         raise ValueError(
             f"Pfad ausserhalb von data/ nicht erlaubt: {path!r}"
         )
+
+    # Unicode-/Encoding-Fallback fuer Lese-/Stat-Operationen:
+    # Wenn der direkte Pfad nicht existiert, ist er evtl. in der falschen
+    # Encoding-Form (Disco gibt canonical NFC, FS speichert NFD auf macOS)
+    # oder hat einen OneDrive-Folder-Slash-Quirk. Strategie:
+    # 1. Schau in agent_source_locations nach (Hash-zentriertes Modell,
+    #    Pipeline-Reform v2): canonical_path → rel_path mapping.
+    # 2. Falls (1) nicht hilft: PathResolver versucht NFC/NFD-Varianten.
+    if not resolved.exists() and not p.is_absolute():
+        # 1. DB-basierter Mapping-Lookup
+        scope_prefix = ""
+        relative_part = path
+        for prefix in ("sources/", "context/"):
+            if path.startswith(prefix):
+                scope_prefix = prefix
+                relative_part = path[len(prefix):]
+                break
+        try:
+            from .data import _connect as db_connect
+            conn = db_connect()
+            try:
+                # Erst neues Modell: agent_source_locations
+                has_locations = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='agent_source_locations'"
+                ).fetchone() is not None
+                if has_locations and relative_part:
+                    row = conn.execute(
+                        "SELECT rel_path FROM agent_source_locations "
+                        "WHERE canonical_path = ? AND status = 'active' LIMIT 1",
+                        (relative_part,),
+                    ).fetchone()
+                    if row and row[0]:
+                        mapped = (root / scope_prefix / row[0]).resolve(strict=False)
+                        if mapped.exists() and _is_under(mapped, root):
+                            return mapped
+                # Fallback (alte Bestandsdaten ohne Migration)
+                if not has_locations:
+                    cols = [c[1] for c in conn.execute("PRAGMA table_info(agent_sources)").fetchall()]
+                    if "canonical_path" in cols and relative_part:
+                        row = conn.execute(
+                            "SELECT rel_path FROM agent_sources "
+                            "WHERE canonical_path = ? AND status = 'active' LIMIT 1",
+                            (relative_part,),
+                        ).fetchone()
+                        if row and row[0]:
+                            mapped = (root / scope_prefix / row[0]).resolve(strict=False)
+                            if mapped.exists() and _is_under(mapped, root):
+                                return mapped
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        # 2. PathResolver-Fallback (NFC/NFD-Permutation)
+        from disco.fs.path_resolver import get_resolver
+        resolver_path = get_resolver().to_fs_resolved(path, root)
+        if resolver_path.exists():
+            resolved = resolver_path.resolve(strict=False)
+            if not _is_under(resolved, root):
+                raise ValueError(
+                    f"Pfad ausserhalb von data/ nicht erlaubt: {path!r}"
+                )
     return resolved
 
 

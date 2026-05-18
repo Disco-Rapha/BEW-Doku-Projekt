@@ -105,6 +105,57 @@ def get_tool_schemas() -> list[dict[str, Any]]:
     return [spec.schema() for spec in FUNCTIONS.values()]
 
 
+# Tools mit Side-Effects (Schreiben in DB/FS, Foundry-State-Changes, Subprocess-
+# Starts). Werden in Plan-/Research-Modus geblockt — siehe `dispatch`.
+# Pro Tool: einmal explizit eintragen. Read-only Tools (sqlite_query, fs_read,
+# doc_markdown_read, memory_read, search_index, pipeline_file_status,
+# verify_workspace_validity, list_skills, load_skill, plan_read, plan_list,
+# flow_list, flow_show, flow_runs, flow_status, flow_items, flow_logs,
+# table_doc_get, xlsx_inspect) sind nicht hier.
+WRITE_TOOLS: set[str] = {
+    # FS
+    "fs_write", "fs_mkdir", "fs_delete", "fs_write_bytes",
+    # DB
+    "sqlite_write",
+    # Sources / Pipeline-State
+    "sources_register", "sources_attach_metadata", "sources_detect_duplicates",
+    # Memory / Plans / Tabellen-Docs
+    "memory_write", "memory_append",
+    "plan_write", "plan_append_note",
+    "table_doc_set",
+    # Imports / Exports
+    "import_xlsx_to_table", "import_csv_to_table",
+    "build_xlsx_from_tables",
+    # Flows — Subprocess-Start ist Side-Effect
+    "flow_create", "flow_run", "flow_cancel",
+    # Suchindex-Build (schreibt FTS)
+    "build_search_index",
+    # Python-Sandbox kann beliebig schreiben — sicherheitshalber blockieren
+    "run_python",
+}
+
+
+def _plan_mode_block_response(name: str, kwargs: dict[str, Any]) -> str:
+    """Konstruiert die Simulations-Antwort fuer Tool-Calls, die im
+    Plan-/Research-Modus geblockt werden."""
+    from ..context import chat_mode
+    mode = chat_mode()
+    return json.dumps({
+        "blocked": True,
+        "mode": mode,
+        "tool": name,
+        "arguments_preview": {
+            k: (v if not isinstance(v, str) or len(v) <= 200 else v[:200] + "...")
+            for k, v in (kwargs or {}).items()
+        },
+        "message": (
+            f"Tool '{name}' wurde im {mode}-Modus geblockt. "
+            f"{'Im Research-Modus beantwortest Du nur — keine Aktionen.' if mode == 'research' else 'Im Plan-Modus erstellst Du einen ausfuehrbaren Plan — keine Side-Effects.'} "
+            f"Beschreibe stattdessen im Plan/in der Antwort, was passieren wuerde."
+        ),
+    }, ensure_ascii=False)
+
+
 def dispatch(name: str, arguments: dict[str, Any] | str | None) -> str:
     """Fuehrt eine registrierte Function aus und gibt JSON zurueck.
 
@@ -138,6 +189,18 @@ def dispatch(name: str, arguments: dict[str, Any] | str | None) -> str:
             )
     else:
         kwargs = dict(arguments)
+
+    # Plan-/Research-Modus: schreibende Tools blockieren (Hard-Block, kein
+    # Vertrauen auf System-Prompt). Returnt eine klare Simulations-Antwort,
+    # damit das Modell weiss "okay, das war Plan-Modus, weiter im Reasoning".
+    try:
+        from ..context import is_read_only_mode
+        if is_read_only_mode() and name in WRITE_TOOLS:
+            logger.info("Tool '%s' im read-only Modus geblockt", name)
+            return _plan_mode_block_response(name, kwargs)
+    except Exception:
+        # Context nicht verfuegbar (z.B. ausserhalb eines Turns) — kein Block
+        pass
 
     try:
         result = spec.handler(**kwargs)
@@ -173,3 +236,4 @@ from . import sources   # noqa: E402,F401 — sources_register, attach_metadata,
 from . import executor  # noqa: E402,F401 — run_python
 from . import search         # noqa: E402,F401 — build_search_index, search_index
 from . import pipeline       # noqa: E402,F401 — pipeline_file_status
+from . import workspace_validity  # noqa: E402,F401 — verify_workspace_validity (Pipeline-Reform v2)

@@ -752,7 +752,12 @@ def _flow_status(*, run_id: int) -> dict[str, Any]:
         "Zeigt einzelne Items eines Runs (input_ref, status, attempts, "
         "output_json, Fehler). Nutze das, um Test-Run-Ergebnisse zu "
         "pruefen oder bei einem Full-Run die fehlgeschlagenen Items zu "
-        "inspizieren (status='failed')."
+        "inspizieren (status='failed'). "
+        "WICHTIG: Default-Limit ist 25 Items, error-Felder werden auf 300 "
+        "Zeichen gekuerzt. Wenn Du den vollen Stack-Trace eines failed "
+        "Items brauchst, ruf noch einmal mit verbose=true auf (laesst "
+        "error voll). Wenn Du mehr Items sehen willst, setze limit hoeher "
+        "(max 500). Beide Defaults sind bewusst klein gegen Kontext-Bloat."
     ),
     parameters={
         "type": "object",
@@ -762,26 +767,45 @@ def _flow_status(*, run_id: int) -> dict[str, Any]:
                 "type": "string",
                 "description": "Nur Items mit diesem Status (pending/running/done/failed/skipped).",
             },
-            "limit": {"type": "integer", "description": "Max. Anzahl (Default 50, Max 500)."},
+            "limit": {"type": "integer", "description": "Max. Anzahl (Default 25, Max 500)."},
+            "verbose": {
+                "type": "boolean",
+                "description": (
+                    "Wenn true, werden error-Felder NICHT gekuerzt (voller "
+                    "Stack-Trace). Default false."
+                ),
+            },
         },
         "required": ["run_id"],
     },
-    returns="{items: [{id, input_ref, status, attempts, output, error, cost_eur, ...}], total}",
+    returns="{items: [{id, input_ref, status, attempts, output, error, cost_eur, ...}], total, error_truncated}",
 )
 def _flow_items(
     *,
     run_id: int,
     status: str | None = None,
-    limit: int = 50,
+    limit: int = 25,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     project_root = _active_project_root()
-    effective_limit = max(1, min(int(limit or 50), 500))
+    effective_limit = max(1, min(int(limit or 25), 500))
     items = flow_service.list_run_items(
         project_root, run_id, status=status, limit=effective_limit
     )
+    # Error-Felder kappen, wenn nicht verbose (Stack-Traces sind tokenintensiv
+    # und i.d.R. redundant — die ersten ~300 Zeichen reichen fuer die Diagnose).
+    error_truncated_count = 0
+    if not verbose:
+        ERR_CAP = 300
+        for it in items:
+            err = it.get("error")
+            if err and len(err) > ERR_CAP:
+                it["error"] = err[:ERR_CAP] + f"  […+{len(err) - ERR_CAP} chars; voll: verbose=true]"
+                error_truncated_count += 1
     return {
         "items": items,
         "total": len(items),
+        "error_truncated": error_truncated_count,
     }
 
 
