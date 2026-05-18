@@ -566,6 +566,7 @@ class AgentService:
         file_search_vector_store_ids: list[str] | None = None,
         attachments: list[dict[str, Any]] | None = None,
         _system_trigger: dict[str, Any] | None = None,
+        chat_mode: str = "build",
     ) -> Iterator[AgentEvent]:
         """Fuehrt einen kompletten Turn aus (User-Nachricht -> Assistant-Antwort).
 
@@ -743,6 +744,62 @@ class AgentService:
                 "kein vollstaendiger Deep-Dive.\n"
             )
 
+        # Chat-Mode-Annex. Der Foundry-Portal-Agent hat seinen eigenen
+        # System-Prompt, den wir pro Turn nicht editieren koennen. Damit
+        # Disco den Plan-/Research-Modus aber trotzdem erkennt, prependen
+        # wir hier eine zusaetzliche developer-Message mit den Mode-Regeln.
+        # build-Modus = Default, kein extra Block noetig.
+        mode_block = ""
+        _mode_norm = (chat_mode or "build").strip().lower()
+        if _mode_norm == "plan":
+            mode_block = (
+                "[CHAT-MODUS: PLAN]\n"
+                "Der Nutzer hat fuer diese Nachricht den PLAN-Modus gewaehlt.\n"
+                "Deine Aufgabe: Erstelle einen ausfuehrbaren Plan — KEINE "
+                "Side-Effects, KEINE Schreib-Tools.\n\n"
+                "Regeln:\n"
+                "  - Read-only Tools (sqlite_query, fs_read, doc_markdown_read, "
+                "memory_read, search_index, plan_read, flow_status, flow_logs, "
+                "flow_items, table_doc_get, xlsx_inspect, list_skills, "
+                "load_skill, pipeline_file_status, verify_workspace_validity) "
+                "darfst Du nutzen, um den Plan fundiert zu machen.\n"
+                "  - Schreib-Tools (fs_write/mkdir/delete, sqlite_write, "
+                "memory_write/append, plan_write, sources_register/attach/"
+                "duplicates, flow_create/run/cancel, run_python, build_*) "
+                "sind im Dispatch HART GEBLOCKT. Sie liefern eine "
+                "Simulations-Antwort statt der echten Aktion — beziehe das "
+                "in den Plan ein.\n"
+                "  - Format der Antwort:\n"
+                "    1. Kurze Lage-Analyse (was hast Du gesehen, was ist offen).\n"
+                "    2. Nummerierter Plan in klaren Schritten — pro Schritt: "
+                "Was, mit welchem Tool, erwartetes Ergebnis, Risiken.\n"
+                "    3. Abschluss-Zeile genau so: 'Bereit zur Ausfuehrung.'\n"
+                "  - KEINE Aktionen ausfuehren. KEIN 'Ich habe X gemacht'. "
+                "Nur 'Ich WUERDE X tun, weil Y'.\n"
+            )
+        elif _mode_norm == "research":
+            mode_block = (
+                "[CHAT-MODUS: RESEARCH]\n"
+                "Der Nutzer hat fuer diese Nachricht den RESEARCH-Modus "
+                "gewaehlt. Deine Aufgabe: Inhaltlich antworten mit Belegen aus "
+                "den Projekt-Quellen — KEINE Side-Effects, KEINE Schreib-Tools.\n\n"
+                "Regeln:\n"
+                "  - Read-only Tools (sqlite_query, fs_read, doc_markdown_read, "
+                "memory_read, search_index, plan_read, flow_status, table_doc_get, "
+                "xlsx_inspect) sind erlaubt und erwuenscht — nutze sie, um "
+                "Deine Antwort zu fundieren.\n"
+                "  - Schreib-Tools sind im Dispatch HART GEBLOCKT (siehe "
+                "Plan-Modus oben).\n"
+                "  - Format der Antwort:\n"
+                "    1. Klare, vollstaendige Antwort auf die Frage.\n"
+                "    2. Quellen-Block am Ende, Markdown:\n"
+                "       **Quellen:**\n"
+                "       - `pfad/zur/datei.pdf` (S. 12) — kurzer Bezug\n"
+                "       - `agent_doc_markdown` source_id=42 — kurzer Bezug\n"
+                "  - Wenn Du keine belastbare Quelle findest, sag das ehrlich.\n"
+                "  - KEINE Plaene, KEINE Aktionen — nur Antwort + Quellen.\n"
+            )
+
         # Developer-Kontext-Block vorbereiten. Der steht in JEDEM Turn als
         # erstes Item, damit Disco Projekt-Sandbox und ggf. System-Trigger-
         # Regeln kennt. In beiden Modi (Chain + Stateless) identisch.
@@ -782,6 +839,17 @@ class AgentService:
                 "type": "message",
                 "role": "developer",
                 "content": trigger_block.strip(),
+            })
+
+        # Mode-Annex als eigene developer-Message anhaengen (NICHT in den
+        # Projekt-Kontext-Block einbauen — der ist langlebig und cached;
+        # der Mode wechselt pro Nachricht). Im build-Modus bleibt der Block
+        # leer und wird nicht angefuegt.
+        if mode_block:
+            developer_ctx_items.append({
+                "type": "message",
+                "role": "developer",
+                "content": mode_block.strip(),
             })
 
         # Zwei Kontext-Aufbau-Modi:

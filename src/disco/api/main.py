@@ -2115,6 +2115,9 @@ async def ws_chat(
             payload = json.loads(data)
             user_text = (payload.get("text") or "").strip()
             attachments = payload.get("attachments") or []
+            chat_mode = (payload.get("mode") or "build").strip().lower()
+            if chat_mode not in ("build", "plan", "research"):
+                chat_mode = "build"
             # Sanity-Cap: nie mehr als CHAT_ATTACH_MAX_PER_MESSAGE durchlassen.
             if isinstance(attachments, list) and len(attachments) > CHAT_ATTACH_MAX_PER_MESSAGE:
                 attachments = attachments[:CHAT_ATTACH_MAX_PER_MESSAGE]
@@ -2136,11 +2139,17 @@ async def ws_chat(
                 SENTINEL = object()
 
                 def _worker() -> None:
+                    # Chat-Mode pro Turn setzen — Tools koennen das per
+                    # context.chat_mode() / is_read_only_mode() lesen.
+                    from ..agent.context import use_chat_mode
                     try:
-                        for event in svc.run_turn(
-                            project_slug, user_text, attachments=attachments,
-                        ):
-                            loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
+                        with use_chat_mode(chat_mode):
+                            for event in svc.run_turn(
+                                project_slug, user_text,
+                                attachments=attachments,
+                                chat_mode=chat_mode,
+                            ):
+                                loop.call_soon_threadsafe(queue.put_nowait, event.to_dict())
                     except Exception as exc:
                         logger.exception("AgentService-Fehler")
                         loop.call_soon_threadsafe(
